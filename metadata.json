@@ -1,0 +1,6 @@
+{
+  "name": "Sumit Tuition App",
+  "description": "An AI-powered tuition management platform to track students, attendance, fees, notes, and provide AI study tutoring, practice test generation, and automated analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

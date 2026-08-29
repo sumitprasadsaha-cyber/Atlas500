@@ -1,0 +1,106 @@
+{
+  "version": 2,
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Expires", "value": "0" },
+        { "key": "Surrogate-Control", "value": "no-store" }
+      ]
+    },
+    {
+      "source": "/index.html",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Expires", "value": "0" }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/registerSW.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/version",
+      "destination": "/api/version"
+    },
+    {
+      "source": "/api/version",
+      "destination": "/api/version"
+    },
+    {
+      "source": "/api/r2/signed-url",
+      "destination": "/api/storage?action=signed-url"
+    },
+    {
+      "source": "/api/r2/upload",
+      "destination": "/api/storage?action=upload"
+    },
+    {
+      "source": "/api/r2/download",
+      "destination": "/api/storage?action=download"
+    },
+    {
+      "source": "/api/r2/verify",
+      "destination": "/api/storage?action=verify"
+    },
+    {
+      "source": "/api/r2/delete",
+      "destination": "/api/storage?action=delete"
+    },
+    {
+      "source": "/api/r2/health",
+      "destination": "/api/health"
+    },
+    {
+      "source": "/api/r2/:action*",
+      "destination": "/api/storage?action=:action*"
+    },
+    {
+      "source": "/api/files/download",
+      "destination": "/api/storage?action=download"
+    },
+    {
+      "source": "/api/files/:path*",
+      "destination": "/api/storage"
+    },
+    {
+      "source": "/api/debug-env",
+      "destination": "/api/health?action=debug-env"
+    },
+    {
+      "source": "/debug-env",
+      "destination": "/api/health?action=debug-env"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
+

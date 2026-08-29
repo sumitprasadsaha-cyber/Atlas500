@@ -1,0 +1,214 @@
+{
+  "entities": {
+    "student": {
+      "title": "Student",
+      "description": "Student record with attendance, fee ledger, and syllabus progress details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "classGrade": { "type": "string" },
+        "phone": { "type": "string" },
+        "parentPhone": { "type": "string" },
+        "monthlyFee": { "type": "number" },
+        "feePaidThisMonth": { "type": "boolean" },
+        "registrationDate": { "type": "string" },
+        "feeMonths": { "type": "object" },
+        "feePaymentDates": { "type": "object" },
+        "feeMonthsList": { "type": "array" },
+        "enrolledSubjects": { "type": "array" },
+        "avatarUrl": { "type": "string" },
+        "avatarColor": { "type": "string" },
+        "notes": { "type": "object" },
+        "attendance": { "type": "object" }
+      },
+      "required": ["id", "name", "classGrade", "phone", "parentPhone", "monthlyFee"]
+    },
+    "user": {
+      "title": "User",
+      "description": "Authenticated user profile for Admin or Student role access",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string", "enum": ["Admin", "Student"] },
+        "studentId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "lastLoginAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] },
+        "name": { "type": "string" }
+      },
+      "required": ["uid", "phone", "role", "status"]
+    },
+    "classNote": {
+      "title": "Class Note",
+      "description": "School note document storing topic metadata and Cloudflare R2 reference",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "className": { "type": "string" },
+        "subject": { "type": "string" },
+        "chapterNumber": { "type": "number" },
+        "chapterName": { "type": "string" },
+        "topicNumber": { "type": "number" },
+        "topicName": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "pdfUrl": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileType": { "type": "string" },
+        "fileSize": { "type": "number" },
+        "mimeType": { "type": "string" },
+        "uploadedBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "className", "subject", "chapterNumber", "chapterName", "storagePath"]
+    },
+    "upscNote": {
+      "title": "UPSC Note",
+      "description": "UPSC note document storing GS Paper, Module and topic metadata and Cloudflare R2 reference",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "gsPaper": { "type": "string" },
+        "subject": { "type": "string" },
+        "moduleNumber": { "type": "number" },
+        "moduleName": { "type": "string" },
+        "topicNumber": { "type": "number" },
+        "topicName": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "pdfUrl": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileType": { "type": "string" },
+        "fileSize": { "type": "number" },
+        "mimeType": { "type": "string" },
+        "uploadedBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "gsPaper", "subject", "moduleNumber", "moduleName", "storagePath"]
+    },
+    "topicPracticeTest": {
+      "title": "Topic Practice Test",
+      "description": "Structured educational practice test questions linked to Topic Note and Syllabus",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "testId": { "type": "string" },
+        "noteId": { "type": "string" },
+        "topicNoteId": { "type": "string" },
+        "classGrade": { "type": "string" },
+        "subject": { "type": "string" },
+        "chapterNo": { "type": "number" },
+        "chapterName": { "type": "string" },
+        "topicName": { "type": "string" },
+        "questionCount": { "type": "number" },
+        "questions": { "type": "array" },
+        "rawText": { "type": "string" },
+        "hasTest": { "type": "boolean" },
+        "hasPracticeTest": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "uploadedBy": { "type": "string" }
+      },
+      "required": ["id", "classGrade", "subject", "chapterNo", "topicName", "questions"]
+    },
+    "studentTestAttempt": {
+      "title": "Student Test Attempt",
+      "description": "Student practice test submission containing score, timestamp, answers, and accuracy breakdown",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "classGrade": { "type": "string" },
+        "subject": { "type": "string" },
+        "chapterNo": { "type": "number" },
+        "chapterName": { "type": "string" },
+        "topicId": { "type": "string" },
+        "topicName": { "type": "string" },
+        "testType": { "type": "string" },
+        "score": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "percentage": { "type": "number" },
+        "attemptNumber": { "type": "number" },
+        "answers": { "type": "object" },
+        "correctAnswers": { "type": "object" },
+        "date": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "durationSeconds": { "type": "number" }
+      },
+      "required": ["id", "studentId", "subject", "chapterNo", "topicName", "score", "totalQuestions"]
+    },
+    "studentTopicScore": {
+      "title": "Student Topic Test Score Summary",
+      "description": "Persistent summary record of a student's performance on a specific topic practice test",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "subject": { "type": "string" },
+        "chapterNo": { "type": "number" },
+        "chapterName": { "type": "string" },
+        "topicId": { "type": "string" },
+        "topicName": { "type": "string" },
+        "highestScore": { "type": "number" },
+        "latestScore": { "type": "number" },
+        "totalAttempts": { "type": "number" },
+        "lastAttemptAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["studentId", "subject", "chapterNo", "topicName", "highestScore", "latestScore"]
+    },
+    "curriculumHierarchy": {
+      "title": "Curriculum Hierarchy",
+      "description": "School and UPSC curriculum hierarchy storing classes, subjects, chapters, modules",
+      "type": "object",
+      "properties": {
+        "classes": { "type": "array" },
+        "papers": { "type": "array" },
+        "subjects": { "type": "object" },
+        "chapters": { "type": "object" },
+        "modules": { "type": "object" },
+        "removedSubjects": { "type": "object" },
+        "updatedAt": { "type": "string" },
+        "version": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "/students/{studentId}": {
+      "schema": "student",
+      "description": "Tuition student profiles, progress, and financial history"
+    },
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "Role-based user records mapping auth identity to admin/student permissions"
+    },
+    "/class_notes/{noteId}": {
+      "schema": "classNote",
+      "description": "School notes metadata catalog indexed by class, subject, chapter, and topic"
+    },
+    "/upsc_notes/{noteId}": {
+      "schema": "upscNote",
+      "description": "UPSC notes metadata catalog indexed by GS Paper, subject, module, and topic"
+    },
+    "/topic_practice_tests/{testId}": {
+      "schema": "topicPracticeTest",
+      "description": "Permanent practice test question banks per topic, class, and subject"
+    },
+    "/student_test_attempts/{attemptId}": {
+      "schema": "studentTestAttempt",
+      "description": "Individual student practice test attempts, score history, and answer sheets"
+    },
+    "/student_topic_test_scores/{scoreId}": {
+      "schema": "studentTopicScore",
+      "description": "Aggregated highest and latest student test scores per topic"
+    },
+    "/curriculum_hierarchy/{docId}": {
+      "schema": "curriculumHierarchy",
+      "description": "Persistent curriculum structure definition for classes and subjects"
+    }
+  }
+}

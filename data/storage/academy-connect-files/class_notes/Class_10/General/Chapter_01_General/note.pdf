@@ -1,0 +1,30 @@
+------WebKitFormBoundaryNote789
+Content-Disposition: form-data; name="file"; filename="notes_api_test.pdf"
+Content-Type: application/pdf
+
+%PDF-1.4 notes api test file
+------WebKitFormBoundaryNote789
+Content-Disposition: form-data; name="className"
+
+Class 10
+------WebKitFormBoundaryNote789
+Content-Disposition: form-data; name="subject"
+
+Mathematics
+------WebKitFormBoundaryNote789
+Content-Disposition: form-data; name="chapterNumber"
+
+1
+------WebKitFormBoundaryNote789
+Content-Disposition: form-data; name="chapterName"
+
+Real Numbers
+------WebKitFormBoundaryNote789
+Content-Disposition: form-data; name="topicNumber"
+
+1
+------WebKitFormBoundaryNote789
+Content-Disposition: form-data; name="topicName"
+
+Introduction
+------WebKitFormBoundaryNote789--
