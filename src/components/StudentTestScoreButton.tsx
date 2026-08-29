@@ -8,6 +8,7 @@ interface StudentTestScoreButtonProps {
   hasTest: boolean;
   topicName: string;
   onOpenTest: () => void;
+  onPreload?: () => void;
   className?: string;
   size?: "sm" | "md";
   showCustomTooltip?: boolean;
@@ -18,6 +19,7 @@ export default function StudentTestScoreButton({
   hasTest,
   topicName,
   onOpenTest,
+  onPreload,
   className = "",
   size = "sm",
   showCustomTooltip = true,
@@ -52,6 +54,15 @@ export default function StudentTestScoreButton({
 
   if (!hasTest) return null;
 
+  const handleMouseEnter = () => {
+    setShowTooltip(true);
+    if (onPreload) onPreload();
+  };
+
+  const handlePointerDown = () => {
+    if (onPreload) onPreload();
+  };
+
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onOpenTest();
@@ -64,13 +75,15 @@ export default function StudentTestScoreButton({
   return (
     <div 
       className="relative inline-flex items-center" 
-      onMouseEnter={() => setShowTooltip(true)}
+      onMouseEnter={handleMouseEnter}
       onMouseLeave={() => setShowTooltip(false)}
+      onPointerDown={handlePointerDown}
     >
       <button
         ref={buttonRef}
         type="button"
         onClick={handleClick}
+        onFocus={onPreload}
         className={`inline-flex items-center gap-1.5 cursor-pointer ${btnStyles.container} ${defaultClasses} ${className}`}
         title={isAttempted && stats ? stats.tooltipText : `Take Practice Test for ${topicName}`}
         aria-label={

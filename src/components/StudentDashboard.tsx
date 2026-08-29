@@ -99,7 +99,7 @@ import StudentSchoolTree from "./StudentSchoolTree";
 import { subscribeToCurriculumHierarchy } from "../lib/curriculumService";
 import StudentPracticeTestModal from "./StudentPracticeTestModal";
 import { getTopicPracticeTest, getStudentTestAttempts, getAllTestAttempts, fetchAllPracticeTests } from "../utils/assessmentParser";
-import { getScoreButtonStyles } from "../lib/practiceTestService";
+import { getScoreButtonStyles, preloadSubjectPracticeTests } from "../lib/practiceTestService";
 import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
 
 interface StudentDashboardProps {
@@ -1740,6 +1740,11 @@ export function StudentMyTab({
   const [testBankVersion, setTestBankVersion] = useState(0);
 
   useEffect(() => {
+    if (selectedSubject) {
+      console.log(`[PracticeTest] Study Space Loaded: { subject: "${selectedSubject}", classGrade: "${localStudent.classGrade || ''}" }`);
+      preloadSubjectPracticeTests(localStudent.classGrade || "", selectedSubject, allClassNotes);
+    }
+
     fetchAllPracticeTests();
     if (student?.id) {
       fetchStudentTestAttempts(student.id, student.name);
@@ -1748,6 +1753,9 @@ export function StudentMyTab({
     const handlePracticeTestsUpdate = () => {
       // Refresh the test bank to ensure deleted tests are removed
       fetchAllPracticeTests();
+      if (selectedSubject) {
+        preloadSubjectPracticeTests(localStudent.classGrade || "", selectedSubject, allClassNotes);
+      }
       if (student?.id) {
         fetchStudentTestAttempts(student.id, student.name);
       }
@@ -1771,7 +1779,7 @@ export function StudentMyTab({
         window.removeEventListener("storage", handleOtherUpdate);
       }
     };
-  }, [selectedSubject, localStudent]);
+  }, [selectedSubject, localStudent, allClassNotes]);
 
   const handleSaveChapterProgress = async (status: string, remarks: string) => {
     if (!progressModalNote || !selectedSubject) return;

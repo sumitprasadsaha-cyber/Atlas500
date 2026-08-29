@@ -1,4 +1,4 @@
-import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote } from "../types";
+import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote, ChapterNote } from "../types";
 import { getResolvedViewUrl } from "./storageService";
 import { uploadToR2, downloadFromR2, getR2BucketName } from "./r2Client";
 import { doc, setDoc, onSnapshot, collection, deleteDoc, getDoc, getDocs, Unsubscribe } from "firebase/firestore";
@@ -25,6 +25,10 @@ const MAX_SYNC_RETRIES = 3;
 const MAX_LOCAL_STORAGE_ITEM_BYTES = 50 * 1024;
 
 let memoryTestBank: Record<string, TopicPracticeTest> = {};
+let memoryQuestionsCache: Map<string, ParsedAssessmentQuestion[]> = new Map();
+let inFlightTestFetches: Map<string, Promise<TopicPracticeTest | null>> = new Map();
+let inFlightSubjectPreloads: Set<string> = new Set();
+let preloadedImagesSet: Set<string> = new Set();
 let memorySyncQueue: SyncQueueItem[] = [];
 let activeFirestoreTestsUnsub: Unsubscribe | null = null;
 let activeFirestoreSyncUnsub: Unsubscribe | null = null;
@@ -647,6 +651,195 @@ export async function resolveQuestionImageUrls(
 }
 
 /**
+ * Preload question diagram/formula images into browser cache so they appear instantly
+ */
+export function preloadQuestionImages(questions: ParsedAssessmentQuestion[]): void {
+  if (typeof window === "undefined" || !Array.isArray(questions)) return;
+  questions.forEach((q) => {
+    if (q.imageUrl && !preloadedImagesSet.has(q.imageUrl)) {
+      preloadedImagesSet.add(q.imageUrl);
+      try {
+        const img = new Image();
+        img.src = q.imageUrl;
+      } catch {}
+    }
+  });
+}
+
+/**
+ * Warms the in-memory cache with all practice tests and preloads question images.
+ * Logs precise timing and statistics.
+ */
+export async function warmPracticeTestCache(): Promise<Record<string, TopicPracticeTest>> {
+  console.log("[PracticeTest] Cache Warm Started");
+  const startTime = performance.now();
+
+  try {
+    const bank = await fetchAllPracticeTests();
+    const tests = Object.values(bank);
+    let totalQuestions = 0;
+
+    for (const test of tests) {
+      if (Array.isArray(test.questions) && test.questions.length > 0) {
+        totalQuestions += test.questions.length;
+        console.log(`[PracticeTest] Practice Test Cached: { id: "${test.id}", questionCount: ${test.questions.length} }`);
+        // Preload diagram images
+        preloadQuestionImages(test.questions);
+      }
+    }
+
+    const durationMs = Math.round(performance.now() - startTime);
+    console.log(`[PracticeTest] Cache Warm Finished: { count: ${tests.length}, questions: ${totalQuestions}, durationMs: ${durationMs} }`);
+    return bank;
+  } catch (err) {
+    const durationMs = Math.round(performance.now() - startTime);
+    console.warn(`[PracticeTest] Cache Warm Warning after ${durationMs}ms:`, err);
+    return memoryTestBank;
+  }
+}
+
+/**
+ * Preloads all practice tests for a specific subject in the background.
+ * Never blocks the main UI.
+ */
+export async function preloadSubjectPracticeTests(
+  classGrade: string,
+  subject: string,
+  notes?: (ClassNote | ChapterNote)[]
+): Promise<void> {
+  const normClass = String(classGrade || "").toLowerCase().trim();
+  const normSubj = String(subject || "").toLowerCase().trim();
+  const preloadKey = `${normClass}__${normSubj}`;
+
+  if (inFlightSubjectPreloads.has(preloadKey)) {
+    return;
+  }
+  inFlightSubjectPreloads.add(preloadKey);
+
+  try {
+    // 1. Ensure test bank is loaded in memory
+    const bank = Object.keys(memoryTestBank).length > 0 ? memoryTestBank : await fetchAllPracticeTests();
+
+    // 2. Preload and resolve images for all tests matching this subject
+    const matchingTests = Object.values(bank).filter((test) => {
+      const matchClass = !normClass || (test.classGrade || "").toLowerCase().includes(normClass) || normClass.includes((test.classGrade || "").toLowerCase());
+      const matchSubj = isSubjectCompatible(subject, test.subject);
+      return matchClass && matchSubj;
+    });
+
+    for (const test of matchingTests) {
+      if (Array.isArray(test.questions) && test.questions.length > 0) {
+        // Resolve images and warm image cache
+        const resolved = await resolveQuestionImageUrls(test.questions);
+        test.questions = resolved;
+        memoryQuestionsCache.set(test.id, resolved);
+        preloadQuestionImages(resolved);
+        console.log(`[PracticeTest] Practice Test Cached: { id: "${test.id}", questionCount: ${resolved.length} }`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[PracticeTest] Background preload warning for subject ${subject}:`, err);
+  } finally {
+    inFlightSubjectPreloads.delete(preloadKey);
+  }
+}
+
+/**
+ * Preloads topic tests for a specific chapter in the background.
+ */
+export async function preloadChapterPracticeTests(
+  classGrade: string,
+  subject: string,
+  chapterNo: number
+): Promise<void> {
+  try {
+    const bank = Object.keys(memoryTestBank).length > 0 ? memoryTestBank : await fetchAllPracticeTests();
+    const ch = Number(chapterNo) || 1;
+
+    const matchingTests = Object.values(bank).filter((test) => {
+      const tCh = typeof test.chapterNo === "number" ? test.chapterNo : (parseInt(String(test.chapterNo || "").replace(/\D/g, ""), 10) || 1);
+      return tCh === ch && isSubjectCompatible(subject, test.subject);
+    });
+
+    for (const test of matchingTests) {
+      if (Array.isArray(test.questions) && test.questions.length > 0) {
+        const resolved = await resolveQuestionImageUrls(test.questions);
+        test.questions = resolved;
+        memoryQuestionsCache.set(test.id, resolved);
+        preloadQuestionImages(resolved);
+      }
+    }
+  } catch (err) {
+    console.warn(`[PracticeTest] Background preload warning for chapter ${chapterNo}:`, err);
+  }
+}
+
+/**
+ * Synchronously retrieves parsed assessment questions from in-memory cache without any network delay.
+ * Returns null if not in cache (calling code can then fallback to async fetch).
+ */
+export function getQuestionsSync(
+  classGradeOrTopicId: string,
+  subject?: string,
+  chapterNo?: number,
+  topicName?: string,
+  testType: "topic" | "full_chapter" = "topic",
+  options?: { publishedOnly?: boolean }
+): ParsedAssessmentQuestion[] | null {
+  let classGrade = classGradeOrTopicId;
+  if (classGradeOrTopicId && classGradeOrTopicId.includes("__") && !subject) {
+    const parts = classGradeOrTopicId.split("__");
+    classGrade = parts[0] || "";
+    subject = parts[1] || "";
+    chapterNo = parseInt((parts[2] || "").replace("ch", ""), 10) || 1;
+    topicName = parts.slice(3).join("__");
+  }
+
+  if (testType === "full_chapter") {
+    const questions = getFullChapterQuestionsSync(classGrade, subject || "", chapterNo || 1, options);
+    if (questions && questions.length > 0) {
+      let list = questions;
+      if (options?.publishedOnly) {
+        list = list.filter((q) => q.published !== false);
+      }
+      return list;
+    }
+    return null;
+  }
+
+  // Topic practice test
+  const testId = buildTopicTestId(classGrade, subject || "", chapterNo || 1, topicName || "");
+  const cachedFromMap = memoryQuestionsCache.get(testId);
+  if (cachedFromMap && cachedFromMap.length > 0) {
+    let list = cachedFromMap;
+    if (options?.publishedOnly) {
+      list = list.filter((q) => q.published !== false);
+    }
+    return list;
+  }
+
+  const topicTest = getTopicPracticeTestSync(
+    classGrade,
+    subject || "",
+    chapterNo || 1,
+    topicName || "",
+    options
+  );
+
+  if (topicTest && Array.isArray(topicTest.questions) && topicTest.questions.length > 0) {
+    let list = topicTest.questions;
+    if (options?.publishedOnly) {
+      list = list.filter((q) => q.published !== false);
+    }
+    memoryQuestionsCache.set(testId, list);
+    preloadQuestionImages(list);
+    return list;
+  }
+
+  return null;
+}
+
+/**
  * Fetches all topic practice tests directly from Firestore (single source of truth)
  * and populates the local test bank.
  */
@@ -748,10 +941,24 @@ export async function getTopicPracticeTest(
   options?: { publishedOnly?: boolean; forceFresh?: boolean }
 ): Promise<TopicPracticeTest | null> {
   const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
-  let test = (!options?.forceFresh && memoryTestBank[testId]) ? memoryTestBank[testId] : null;
+  
+  if (!options?.forceFresh && memoryTestBank[testId]) {
+    const cached = memoryTestBank[testId];
+    if (Array.isArray(cached.questions)) {
+      preloadQuestionImages(cached.questions);
+    }
+    return cached;
+  }
 
-  // Direct single-document Firestore fetch if not in memory or forceFresh requested
-  if (!test || options?.forceFresh) {
+  // Request deduplication for single test fetch
+  if (inFlightTestFetches.has(testId)) {
+    return inFlightTestFetches.get(testId)!;
+  }
+
+  const fetchPromise = (async () => {
+    let test: TopicPracticeTest | null = null;
+
+    // Direct single-document Firestore fetch if not in memory or forceFresh requested
     try {
       const db = await getFirebaseDb();
       if (db) {
@@ -773,37 +980,47 @@ export async function getTopicPracticeTest(
     } catch (err) {
       console.warn("[PracticeTestService] Error fetching single test doc from Firestore:", err);
     }
-  }
-
-  if (!test) {
-    const bank = await fetchAllPracticeTests();
-    test = bank[testId] || null;
 
     if (!test) {
-      const allTests = Object.values(bank);
-      test =
-        allTests.find((t) =>
-          isExactTopicMatch(
-            classGrade,
-            subject,
-            chapterNo,
-            topicName,
-            t.classGrade,
-            t.subject,
-            t.chapterNo,
-            t.topicName
-          )
-        ) || null;
+      const bank = await fetchAllPracticeTests();
+      test = bank[testId] || null;
+
+      if (!test) {
+        const allTests = Object.values(bank);
+        test =
+          allTests.find((t) =>
+            isExactTopicMatch(
+              classGrade,
+              subject,
+              chapterNo,
+              topicName,
+              t.classGrade,
+              t.subject,
+              t.chapterNo,
+              t.topicName
+            )
+          ) || null;
+      }
     }
+
+    if (!test) return null;
+
+    if (Array.isArray(test.questions)) {
+      test.questions = await resolveQuestionImageUrls(test.questions);
+      memoryQuestionsCache.set(test.id, test.questions);
+      preloadQuestionImages(test.questions);
+    }
+
+    return test;
+  })();
+
+  inFlightTestFetches.set(testId, fetchPromise);
+  try {
+    const result = await fetchPromise;
+    return result;
+  } finally {
+    inFlightTestFetches.delete(testId);
   }
-
-  if (!test) return null;
-
-  if (Array.isArray(test.questions)) {
-    test.questions = await resolveQuestionImageUrls(test.questions);
-  }
-
-  return test;
 }
 
 export function getTopicPracticeTestSync(
@@ -831,6 +1048,10 @@ export function getTopicPracticeTestSync(
           t.topicName
         )
       ) || null;
+  }
+
+  if (test && Array.isArray(test.questions)) {
+    preloadQuestionImages(test.questions);
   }
 
   return test;
@@ -882,7 +1103,9 @@ export async function getFullChapterQuestions(
     }
   });
 
-  return await resolveQuestionImageUrls(aggregated);
+  const resolved = await resolveQuestionImageUrls(aggregated);
+  preloadQuestionImages(resolved);
+  return resolved;
 }
 
 export function getFullChapterQuestionsSync(
@@ -929,6 +1152,7 @@ export function getFullChapterQuestionsSync(
     }
   });
 
+  preloadQuestionImages(aggregated);
   return aggregated;
 }
 
@@ -940,6 +1164,12 @@ export async function fetchQuestions(
   testType: "topic" | "full_chapter" = "topic",
   options?: { publishedOnly?: boolean }
 ): Promise<ParsedAssessmentQuestion[]> {
+  // First check synchronous in-memory cache
+  const cachedSync = getQuestionsSync(classGradeOrTopicId, subject, chapterNo, topicName, testType, options);
+  if (cachedSync && cachedSync.length > 0) {
+    return cachedSync;
+  }
+
   let classGrade = classGradeOrTopicId;
   if (classGradeOrTopicId && classGradeOrTopicId.includes("__") && !subject) {
     const parts = classGradeOrTopicId.split("__");
@@ -965,6 +1195,10 @@ export async function fetchQuestions(
   if (options?.publishedOnly) {
     list = list.filter((q) => q.published !== false);
   }
+
+  const testId = buildTopicTestId(classGrade, subject || "", chapterNo || 1, topicName || "");
+  memoryQuestionsCache.set(testId, list);
+  preloadQuestionImages(list);
 
   return list;
 }

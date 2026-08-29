@@ -27,7 +27,9 @@ import {
 } from "../utils/assessmentParser";
 import {
   buildTopicTestId,
-  fetchQuestions
+  fetchQuestions,
+  getQuestionsSync,
+  preloadQuestionImages
 } from "../lib/practiceTestService";
 import { fetchStudentScore } from "../lib/testScorePersistence";
 
@@ -104,9 +106,18 @@ export default function StudentPracticeTestModal({
     );
   }
   // Test State
-  const [isLoading, setIsLoading] = useState(true);
+  const initialQuestions = getQuestionsSync(
+    classGrade,
+    subject,
+    chapterNo,
+    topicName,
+    testType,
+    { publishedOnly: true }
+  );
+
+  const [isLoading, setIsLoading] = useState<boolean>(!initialQuestions || initialQuestions.length === 0);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [questions, setQuestions] = useState<ParsedAssessmentQuestion[]>([]);
+  const [questions, setQuestions] = useState<ParsedAssessmentQuestion[]>(initialQuestions || []);
   const [testStage, setTestStage] = useState<"intro" | "active" | "result">("intro");
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [userAnswers, setUserAnswers] = useState<Record<string, string>>({});
@@ -132,57 +143,92 @@ export default function StudentPracticeTestModal({
     }
   }, [testStage, currentQuestionIdx]);
 
-  // Fetch fresh questions and student score when modal opens
+  // Instant open & cache performance measurement
   useEffect(() => {
     if (!isOpen) return;
 
+    const openStartTime = performance.now();
+    const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
     let isMounted = true;
-    setIsLoading(true);
-    setFetchError(null);
-    setQuestions([]);
 
-    // Run simultaneous parallel fetch
-    const loadSimultaneously = async () => {
-      try {
-        const qListPromise = fetchQuestions(classGrade, subject, chapterNo, topicName, testType, { publishedOnly: true });
-        const scorePromise = studentId 
-          ? fetchStudentScore(studentId, classGrade, subject, chapterNo, topicName, testType).catch((err) => {
-              console.warn("[StudentPracticeTestModal] Non-blocking score fetch warning:", err);
-              return null;
-            })
-          : Promise.resolve(null);
+    // 1. Check synchronous in-memory cache first
+    const cached = getQuestionsSync(
+      classGrade,
+      subject,
+      chapterNo,
+      topicName,
+      testType,
+      { publishedOnly: true }
+    );
 
-        const [qList, studentScore] = await Promise.all([qListPromise, scorePromise]);
+    if (cached && cached.length > 0) {
+      const durationMs = Math.round(performance.now() - openStartTime);
+      console.log(`[PracticeTest] Cache Hit: ${testId}`);
+      console.log(`[PracticeTest] Practice Test Open Time: { testId: "${testId}", durationMs: ${durationMs}, cacheHit: true }`);
 
-        if (isMounted) {
-          setFetchError(null);
+      setQuestions(cached);
+      setIsLoading(false);
+      setFetchError(null);
+      preloadQuestionImages(cached);
+
+      // Fetch student score history in background without blocking UI
+      if (studentId) {
+        fetchStudentScore(studentId, classGrade, subject, chapterNo, topicName, testType)
+          .then((studentScore) => {
+            if (isMounted && studentScore && testStageRef.current !== "result") {
+              setLastAttemptRecord(studentScore);
+            }
+          })
+          .catch(() => {});
+      }
+    } else {
+      // 2. Cache Miss (rare): Fetch in background
+      console.log(`[PracticeTest] Cache Miss: ${testId}`);
+      setIsLoading(true);
+      setFetchError(null);
+
+      fetchQuestions(classGrade, subject, chapterNo, topicName, testType, { publishedOnly: true })
+        .then((qList) => {
+          if (!isMounted) return;
+          const durationMs = Math.round(performance.now() - openStartTime);
+          console.log(`[PracticeTest] Practice Test Open Time: { testId: "${testId}", durationMs: ${durationMs}, cacheHit: false }`);
+
           if (Array.isArray(qList) && qList.length > 0) {
             setQuestions(qList);
+            preloadQuestionImages(qList);
+            setFetchError(null);
           } else {
             setQuestions([]);
+            setFetchError("No practice questions found for this topic yet.");
           }
-          if (studentScore && testStageRef.current !== "result") {
-            setLastAttemptRecord(studentScore);
-          }
-        }
-      } catch (err: any) {
-        console.warn("[StudentPracticeTestModal] Notice loading test data:", err?.message || err);
-        if (isMounted) {
-          setFetchError("Unable to load Practice Test. Please try again.");
-          setQuestions([]);
-        }
-      } finally {
-        if (isMounted) {
           setIsLoading(false);
-        }
-      }
-    };
+        })
+        .catch((err) => {
+          if (!isMounted) return;
+          console.warn("[StudentPracticeTestModal] Error loading test questions on cache miss:", err);
+          setFetchError("Unable to load Practice Test. Please try again.");
+          setIsLoading(false);
+        });
 
-    loadSimultaneously();
+      // Also fetch score
+      if (studentId) {
+        fetchStudentScore(studentId, classGrade, subject, chapterNo, topicName, testType)
+          .then((studentScore) => {
+            if (isMounted && studentScore && testStageRef.current !== "result") {
+              setLastAttemptRecord(studentScore);
+            }
+          })
+          .catch(() => {});
+      }
+    }
 
     const handleRealtimeUpdate = () => {
       if (testStageRef.current !== "result") {
-        loadSimultaneously();
+        const fresh = getQuestionsSync(classGrade, subject, chapterNo, topicName, testType, { publishedOnly: true });
+        if (fresh && fresh.length > 0 && isMounted) {
+          setQuestions(fresh);
+          preloadQuestionImages(fresh);
+        }
       }
     };
     window.addEventListener("practice-tests-updated", handleRealtimeUpdate);

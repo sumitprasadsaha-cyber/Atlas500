@@ -11,7 +11,12 @@ import {
 } from "lucide-react";
 import { Student, ClassNote, ChapterNote } from "../types";
 import { StudentSchoolSubject, StudentSchoolModule } from "../utils/studentSchoolHierarchyHelper";
-import { getTopicPracticeTestSync, subscribeToPracticeTests } from "../lib/practiceTestService";
+import { 
+  getTopicPracticeTestSync, 
+  subscribeToPracticeTests, 
+  preloadChapterPracticeTests,
+  getTopicPracticeTest
+} from "../lib/practiceTestService";
 import { getAllTestAttempts } from "../utils/assessmentParser";
 import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
 import { getTopicTestStats } from "../utils/testStatsHelper";
@@ -311,6 +316,9 @@ export default function StudentSchoolTree({
                                     stats={stats}
                                     hasTest={hasTest}
                                     topicName={topic.topicName}
+                                    onPreload={() => {
+                                      getTopicPracticeTest(targetClass, targetSubj, mod.moduleNo, topic.topicName);
+                                    }}
                                     onOpenTest={() => {
                                       onOpenPracticeTest?.({
                                         classGrade: targetClass,

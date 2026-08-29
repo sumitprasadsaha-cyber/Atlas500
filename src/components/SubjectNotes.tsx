@@ -40,7 +40,15 @@ import { groupUPSCNotesHierarchy } from "../utils/upscHierarchyHelper";
 import { normalizeClassGrade, inferGSPaperFromSubject } from "../utils/classNoteHelper";
 import StudentPracticeTestModal from "./StudentPracticeTestModal";
 import AdminPracticeTestModal from "./AdminPracticeTestModal";
-import { getFullChapterQuestions, getTopicPracticeTestSync, deleteTopicPracticeTest, fetchAllPracticeTests, getScoreButtonStyles } from "../lib/practiceTestService";
+import { 
+  getFullChapterQuestions, 
+  getTopicPracticeTestSync, 
+  deleteTopicPracticeTest, 
+  fetchAllPracticeTests, 
+  getScoreButtonStyles,
+  preloadSubjectPracticeTests,
+  getTopicPracticeTest
+} from "../lib/practiceTestService";
 import { getAllTestAttempts } from "../utils/assessmentParser";
 import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
 import { recordNoteOpenedOrDownloaded } from "../utils/chapterProgressHelper";
@@ -253,12 +261,20 @@ export default function SubjectNotes({
   } | null>(null);
 
   useEffect(() => {
+    if (subject) {
+      console.log(`[PracticeTest] Subject Notes Space Loaded: { subject: "${subject}", classGrade: "${classGrade || ''}" }`);
+      preloadSubjectPracticeTests(classGrade || "", subject, notes);
+    }
+
     fetchAllPracticeTests();
     if (studentId) {
       fetchStudentTestAttempts(studentId, studentName);
     }
 
     const handleUpdate = () => {
+      if (subject) {
+        preloadSubjectPracticeTests(classGrade || "", subject, notes);
+      }
       if (studentId) {
         fetchStudentTestAttempts(studentId, studentName);
       }
@@ -272,7 +288,7 @@ export default function SubjectNotes({
       window.removeEventListener("practice-tests-updated", handleUpdate);
       window.removeEventListener("storage", handleUpdate);
     };
-  }, [subject, classGrade, studentId]);
+  }, [subject, classGrade, studentId, notes]);
 
   const allAttempts = useMemo(() => {
     return getAllTestAttempts();
@@ -905,6 +921,12 @@ export default function SubjectNotes({
                                                 {(hasTest || isAdmin) && (
                                                   <button
                                                     type="button"
+                                                    onMouseEnter={() => {
+                                                      getTopicPracticeTest("UPSC", subject, chGroup.chapterNo, topicLabel);
+                                                    }}
+                                                    onPointerDown={() => {
+                                                      getTopicPracticeTest("UPSC", subject, chGroup.chapterNo, topicLabel);
+                                                    }}
                                                     onClick={(e) => {
                                                       e.stopPropagation();
                                                       if (isAdmin) {
@@ -1123,6 +1145,12 @@ export default function SubjectNotes({
                               {(hasTest || isAdmin) && (
                                 <button
                                   type="button"
+                                  onMouseEnter={() => {
+                                    getTopicPracticeTest(noteClass, subject, group.chapterNo, topicLabel);
+                                  }}
+                                  onPointerDown={() => {
+                                    getTopicPracticeTest(noteClass, subject, group.chapterNo, topicLabel);
+                                  }}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     if (isAdmin) {

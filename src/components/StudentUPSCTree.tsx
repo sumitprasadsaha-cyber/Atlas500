@@ -11,7 +11,11 @@ import {
 } from "lucide-react";
 import { Student, ClassNote, ChapterNote } from "../types";
 import { StudentUPSCGSPaper, StudentUPSCSubject, StudentUPSCModule } from "../utils/studentUPSCHierarchyHelper";
-import { getTopicPracticeTestSync, subscribeToPracticeTests } from "../lib/practiceTestService";
+import { 
+  getTopicPracticeTestSync, 
+  subscribeToPracticeTests,
+  getTopicPracticeTest
+} from "../lib/practiceTestService";
 import { getAllTestAttempts } from "../utils/assessmentParser";
 import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
 import { getTopicTestStats } from "../utils/testStatsHelper";
@@ -320,6 +324,9 @@ export default function StudentUPSCTree({
                                     stats={stats}
                                     hasTest={hasTest}
                                     topicName={topic.topicName}
+                                    onPreload={() => {
+                                      getTopicPracticeTest(targetClass, targetSubj, mod.moduleNo, topic.topicName);
+                                    }}
                                     onOpenTest={() => {
                                       onOpenPracticeTest?.({
                                         classGrade: targetClass,
