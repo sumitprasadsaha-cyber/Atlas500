@@ -1035,29 +1035,14 @@ export async function uploadQuestionImageToStorage(
   // Compress image before upload to keep payload small and crisp
   const compressed = await compressImageForStorage(blob, 1000, 0.85);
 
-  try {
-    const metadata = await uploadFileToR2(
-      bucket,
-      storagePath,
-      compressed.blob,
-      cleanName,
-      "Admin"
-    );
-    return metadata;
-  } catch (err: any) {
-    console.warn("[StorageService] Cloudflare R2 upload error, using compressed Data URL fallback:", err);
-    return {
-      storageProvider: "r2",
-      bucket,
-      storagePath: storagePath,
-      fileName: cleanName,
-      fileSize: compressed.blob.size,
-      mimeType: "image/jpeg",
-      uploadedAt: new Date().toISOString(),
-      uploadedBy: "Admin",
-      downloadUrl: compressed.dataUrl,
-    };
-  }
+  const metadata = await uploadFileToR2(
+    bucket,
+    storagePath,
+    compressed.blob,
+    cleanName,
+    "Admin"
+  );
+  return metadata;
 }
 
 /**

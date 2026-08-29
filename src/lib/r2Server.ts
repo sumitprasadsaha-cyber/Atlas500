@@ -1,3 +1,4 @@
+import "dotenv/config";
 import {
   S3Client,
   PutObjectCommand,
@@ -12,8 +13,6 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "stream";
-import fs from "fs";
-import path from "path";
 
 export interface R2Config {
   accountId: string;
@@ -26,50 +25,6 @@ export interface R2Config {
 
 let s3ClientInstance: S3Client | null = null;
 let lastS3Endpoint: string = "";
-
-/**
- * Finds a local file path in the workspace storage directory if it exists.
- */
-function findLocalFilePath(bucketName: string, cleanKey: string): string | null {
-  try {
-    const candidates = generateCandidateKeys(cleanKey);
-    const candidateBases = [
-      path.join(process.cwd(), "data", "storage", bucketName),
-      path.join(process.cwd(), "data", "storage"),
-      path.join(process.cwd(), "data"),
-      path.join(process.cwd(), "public"),
-    ];
-
-    for (const base of candidateBases) {
-      for (const k of candidates) {
-        const p = path.join(base, k);
-        if (fs.existsSync(p) && fs.statSync(p).isFile()) {
-          return p;
-        }
-      }
-    }
-
-    // Additional check: search by filename in the target directory
-    const fileName = path.basename(cleanKey);
-    const dirPart = path.dirname(cleanKey);
-    if (fileName && dirPart && dirPart !== ".") {
-      for (const base of candidateBases) {
-        const targetDir = path.join(base, dirPart);
-        if (fs.existsSync(targetDir) && fs.statSync(targetDir).isDirectory()) {
-          const files = fs.readdirSync(targetDir);
-          const match = files.find((f) => f.toLowerCase() === fileName.toLowerCase() || f.includes(fileName) || fileName.includes(f));
-          if (match) {
-            const p = path.join(targetDir, match);
-            if (fs.existsSync(p) && fs.statSync(p).isFile()) {
-              return p;
-            }
-          }
-        }
-      }
-    }
-  } catch {}
-  return null;
-}
 
 /**
  * Cleans an environment variable string, stripping whitespace, quotes, carriage returns, and extra slashes.
@@ -285,7 +240,8 @@ export function getR2S3Client(): S3Client {
 }
 
 /**
- * Uploads an object directly to Cloudflare R2 bucket and/or local filesystem.
+ * Uploads an object directly to Cloudflare R2 bucket with mandatory verification.
+ * Does NOT mask failures or use fake local fallbacks.
  */
 export async function uploadObjectToR2(params: {
   bucket?: string;
@@ -294,7 +250,7 @@ export async function uploadObjectToR2(params: {
   contentType?: string;
   cacheControl?: string;
   metadata?: Record<string, string>;
-}): Promise<{ bucket: string; key: string; etag?: string }> {
+}): Promise<{ bucket: string; key: string; etag: string; size: number; contentType: string }> {
   const config = getR2ServerConfig();
   const bucketName = (params.bucket || config.bucket || "academy-connect-files").trim();
   const cleanKey = params.key.replace(/^\/+/, "");
@@ -318,62 +274,75 @@ export async function uploadObjectToR2(params: {
     bodyBuffer = Buffer.alloc(0);
   }
 
-  // Always write to local storage as durable backup / local cache
+  const startTime = Date.now();
+  console.log(`[R2Server-Operation] PutObjectCommand START:`, {
+    bucket: bucketName,
+    key: cleanKey,
+    sizeBytes: bodyBuffer.length,
+    contentType,
+  });
+
+  const client = getR2S3Client();
+  const input: PutObjectCommandInput = {
+    Bucket: bucketName,
+    Key: cleanKey,
+    Body: bodyBuffer,
+    ContentType: contentType,
+    CacheControl: cacheControl,
+    Metadata: params.metadata,
+  };
+
+  const command = new PutObjectCommand(input);
+  const putResponse = await client.send(command);
+  const durationMs = Date.now() - startTime;
+
+  console.log(`[R2Server-Operation] PutObjectCommand PUT completed in ${durationMs}ms:`, {
+    bucket: bucketName,
+    key: cleanKey,
+    etag: putResponse.ETag,
+    httpStatusCode: putResponse.$metadata?.httpStatusCode || 200,
+  });
+
+  // MANDATORY POST-UPLOAD VERIFICATION: HEAD Object directly against R2
+  console.log(`[R2Server-Operation] Verifying upload via HeadObjectCommand for key="${cleanKey}" in bucket="${bucketName}"...`);
+  const headCommand = new HeadObjectCommand({
+    Bucket: bucketName,
+    Key: cleanKey,
+  });
+  
+  let headResponse;
   try {
-    const localTarget = path.join(process.cwd(), "data", "storage", bucketName, cleanKey);
-    fs.mkdirSync(path.dirname(localTarget), { recursive: true });
-    fs.writeFileSync(localTarget, bodyBuffer);
-  } catch (fsWriteErr) {
-    console.warn(`[R2Server-Operation] Local storage write notice:`, fsWriteErr);
+    headResponse = await client.send(headCommand);
+  } catch (headErr: any) {
+    console.error(`[R2Server-Operation] HeadObject verification FAILED for key="${cleanKey}":`, headErr?.message || headErr);
+    throw new Error(
+      `Cloudflare R2 upload verification failed: Object was not confirmed in bucket "${bucketName}" for key "${cleanKey}". Root cause: ${headErr?.message || headErr}`
+    );
   }
 
-  // If R2 is configured, also upload to R2
-  if (isR2Configured()) {
-    try {
-      const client = getR2S3Client();
-      const input: PutObjectCommandInput = {
-        Bucket: bucketName,
-        Key: cleanKey,
-        Body: bodyBuffer,
-        ContentType: contentType,
-        CacheControl: cacheControl,
-        Metadata: params.metadata,
-      };
-      const command = new PutObjectCommand(input);
-      const response = await client.send(command);
+  const verifiedEtag = headResponse.ETag || putResponse.ETag || "";
+  const verifiedSize = headResponse.ContentLength ?? bodyBuffer.length;
 
-      console.log(`[R2Server-Operation] PutObject SUCCESS:`, {
-        bucket: bucketName,
-        key: cleanKey,
-        etag: response.ETag,
-        httpStatusCode: response.$metadata?.httpStatusCode || 200,
-      });
+  console.log(`[R2Server-Operation] Cloudflare R2 Upload & Verification SUCCESS:`, {
+    bucket: bucketName,
+    key: cleanKey,
+    etag: verifiedEtag,
+    sizeBytes: verifiedSize,
+    contentType: headResponse.ContentType || contentType,
+    lastModified: headResponse.LastModified,
+  });
 
-      return {
-        bucket: bucketName,
-        key: cleanKey,
-        etag: response.ETag,
-      };
-    } catch (err: any) {
-      console.warn(`[R2Server-Operation] PutObject to R2 remote failed, using local storage:`, err?.message || err);
-      return {
-        bucket: bucketName,
-        key: cleanKey,
-        etag: `local-${Date.now()}`,
-      };
-    }
-  }
-
-  console.log(`[R2Server-Operation] PutObject local save SUCCESS: key="${cleanKey}", size=${bodyBuffer.length}`);
   return {
     bucket: bucketName,
     key: cleanKey,
-    etag: `local-${Date.now()}`,
+    etag: verifiedEtag,
+    size: verifiedSize,
+    contentType: headResponse.ContentType || contentType,
   };
 }
 
 /**
- * Checks metadata / existence of an object in Cloudflare R2 bucket or local filesystem.
+ * Checks metadata / existence of an object in Cloudflare R2 bucket.
  */
 export async function headObjectFromR2(params: {
   bucket?: string;
@@ -396,85 +365,50 @@ export async function headObjectFromR2(params: {
     return { exists: false };
   }
 
-  // 1. Try AWS S3 Client HeadObject if R2 is configured
-  if (isR2Configured()) {
-    try {
-      const client = getR2S3Client();
-      const command = new HeadObjectCommand({
-        Bucket: bucketName,
-        Key: cleanKey,
-      });
-      const response = await client.send(command);
+  // 1. Direct AWS S3 Client HeadObject
+  try {
+    const client = getR2S3Client();
+    const command = new HeadObjectCommand({
+      Bucket: bucketName,
+      Key: cleanKey,
+    });
+    const response = await client.send(command);
 
+    return {
+      exists: true,
+      contentLength: response.ContentLength,
+      contentType: response.ContentType || getMimeTypeFromKey(cleanKey),
+      lastModified: response.LastModified,
+      etag: response.ETag,
+      metadata: response.Metadata,
+      resolvedKey: cleanKey,
+    };
+  } catch (err: any) {
+    const isNotFound =
+      err?.name === "NoSuchKey" ||
+      err?.name === "NotFound" ||
+      err?.$metadata?.httpStatusCode === 404 ||
+      err?.code === "NoSuchKey" ||
+      err?.code === "NotFound";
+
+    if (isNotFound) {
       return {
-        exists: true,
-        contentLength: response.ContentLength,
-        contentType: response.ContentType || getMimeTypeFromKey(cleanKey),
-        lastModified: response.LastModified,
-        etag: response.ETag,
-        metadata: response.Metadata,
+        exists: false,
         resolvedKey: cleanKey,
       };
-    } catch (err: any) {
-      const isNotFound =
-        err?.name === "NoSuchKey" ||
-        err?.name === "NotFound" ||
-        err?.$metadata?.httpStatusCode === 404 ||
-        err?.code === "NoSuchKey" ||
-        err?.code === "NotFound";
-
-      if (!isNotFound) {
-        // Log S3 error notice only if it's an unexpected error
-      }
     }
-  }
 
-  // 2. If publicUrl is configured, check via HEAD request
-  if (config.publicUrl) {
-    try {
-      const publicCheckUrl = `${config.publicUrl}/${cleanKey}`;
-      const headRes = await fetch(publicCheckUrl, { method: "HEAD" });
-      if (headRes.ok || headRes.status === 200 || headRes.status === 206) {
-        const len = Number(headRes.headers.get("content-length")) || undefined;
-        const ct = headRes.headers.get("content-type") || getMimeTypeFromKey(cleanKey);
-        const etag = headRes.headers.get("etag") || undefined;
-        const lastMod = headRes.headers.get("last-modified");
-        return {
-          exists: true,
-          contentLength: len,
-          contentType: ct,
-          etag,
-          lastModified: lastMod ? new Date(lastMod) : undefined,
-          resolvedKey: cleanKey,
-        };
-      }
-    } catch {}
+    console.warn(`[R2Server-Operation] HeadObject notice for key="${cleanKey}":`, err?.message || err);
+    return {
+      exists: false,
+      resolvedKey: cleanKey,
+      error: err?.message || String(err),
+    };
   }
-
-  // 3. Check local filesystem storage
-  const localPath = findLocalFilePath(bucketName, cleanKey);
-  if (localPath) {
-    try {
-      const stats = fs.statSync(localPath);
-      return {
-        exists: true,
-        contentLength: stats.size,
-        contentType: getMimeTypeFromKey(cleanKey),
-        lastModified: stats.mtime,
-        etag: `local-${stats.mtimeMs}`,
-        resolvedKey: cleanKey,
-      };
-    } catch {}
-  }
-
-  return {
-    exists: false,
-    resolvedKey: cleanKey,
-  };
 }
 
 /**
- * Downloads an object stream from Cloudflare R2 bucket or local filesystem.
+ * Downloads an object stream from Cloudflare R2 bucket.
  */
 export async function getObjectFromR2(params: {
   bucket?: string;
@@ -498,120 +432,87 @@ export async function getObjectFromR2(params: {
     return { body: null, resolvedKey: "" };
   }
 
-  // 1. Try direct S3 Client GetObject if R2 is configured
-  if (isR2Configured()) {
-    try {
-      const client = getR2S3Client();
-      const input: GetObjectCommandInput = {
-        Bucket: bucketName,
-        Key: cleanKey,
-        Range: params.range,
-      };
-      const command = new GetObjectCommand(input);
-      const response = await client.send(command);
+  console.log(`[R2Server-Operation] GetObjectCommand for bucket="${bucketName}", key="${cleanKey}"`);
 
-      return {
-        body: (response.Body as unknown as Readable) || null,
-        contentType: response.ContentType || getMimeTypeFromKey(cleanKey),
-        contentLength: response.ContentLength,
-        contentRange: response.ContentRange,
-        lastModified: response.LastModified,
-        etag: response.ETag,
-        metadata: response.Metadata,
-        resolvedKey: cleanKey,
-      };
-    } catch (err: any) {
-      const isNotFound =
-        err?.name === "NoSuchKey" ||
-        err?.name === "NotFound" ||
-        err?.$metadata?.httpStatusCode === 404 ||
-        err?.code === "NoSuchKey" ||
-        err?.code === "NotFound";
+  // 1. Try direct S3 Client GetObject
+  try {
+    const client = getR2S3Client();
+    const input: GetObjectCommandInput = {
+      Bucket: bucketName,
+      Key: cleanKey,
+      Range: params.range,
+    };
+    const command = new GetObjectCommand(input);
+    const response = await client.send(command);
 
-      if (!isNotFound) {
-        // continue to fallbacks
-      }
+    return {
+      body: (response.Body as unknown as Readable) || null,
+      contentType: response.ContentType || getMimeTypeFromKey(cleanKey),
+      contentLength: response.ContentLength,
+      contentRange: response.ContentRange,
+      lastModified: response.LastModified,
+      etag: response.ETag,
+      metadata: response.Metadata,
+      resolvedKey: cleanKey,
+    };
+  } catch (err: any) {
+    const isNotFound =
+      err?.name === "NoSuchKey" ||
+      err?.name === "NotFound" ||
+      err?.$metadata?.httpStatusCode === 404 ||
+      err?.code === "NoSuchKey" ||
+      err?.code === "NotFound";
+
+    if (isNotFound) {
+      console.warn(`[R2Server-Operation] GetObject NOT FOUND in R2: key="${cleanKey}"`);
+      return { body: null, resolvedKey: cleanKey };
     }
-  }
 
-  // 2. If S3 API returned Unauthorized / error, attempt public URL stream if configured
-  if (config.publicUrl) {
-    try {
-      const publicFetchUrl = `${config.publicUrl}/${cleanKey}`;
-      const fetchHeaders: Record<string, string> = {};
-      if (params.range) {
-        fetchHeaders["Range"] = params.range;
-      }
-      const pubRes = await fetch(publicFetchUrl, { headers: fetchHeaders });
-      if (pubRes.ok || pubRes.status === 200 || pubRes.status === 206) {
-        const ct = pubRes.headers.get("content-type") || getMimeTypeFromKey(cleanKey);
-        const len = Number(pubRes.headers.get("content-length")) || undefined;
-        const cr = pubRes.headers.get("content-range") || undefined;
-        const etag = pubRes.headers.get("etag") || undefined;
-        const lastMod = pubRes.headers.get("last-modified");
+    console.error(`[R2Server-Operation] GetObject S3 error for key="${cleanKey}":`, err?.message || err);
 
-        let bodyStream: Readable | null = null;
-        if (pubRes.body) {
-          if (typeof Readable.fromWeb === "function") {
-            bodyStream = Readable.fromWeb(pubRes.body as any);
-          } else {
-            const arrayBuf = await pubRes.arrayBuffer();
-            bodyStream = Readable.from(Buffer.from(arrayBuf));
-          }
+    // 2. If S3 API returned error, attempt public URL stream if configured
+    if (config.publicUrl) {
+      try {
+        const publicFetchUrl = `${config.publicUrl}/${cleanKey}`;
+        const fetchHeaders: Record<string, string> = {};
+        if (params.range) {
+          fetchHeaders["Range"] = params.range;
         }
+        const pubRes = await fetch(publicFetchUrl, { headers: fetchHeaders });
+        if (pubRes.ok || pubRes.status === 200 || pubRes.status === 206) {
+          const ct = pubRes.headers.get("content-type") || getMimeTypeFromKey(cleanKey);
+          const len = Number(pubRes.headers.get("content-length")) || undefined;
+          const cr = pubRes.headers.get("content-range") || undefined;
+          const etag = pubRes.headers.get("etag") || undefined;
+          const lastMod = pubRes.headers.get("last-modified");
 
-        return {
-          body: bodyStream,
-          contentType: ct,
-          contentLength: len,
-          contentRange: cr,
-          etag,
-          lastModified: lastMod ? new Date(lastMod) : undefined,
-          resolvedKey: cleanKey,
-        };
+          let bodyStream: Readable | null = null;
+          if (pubRes.body) {
+            if (typeof Readable.fromWeb === "function") {
+              bodyStream = Readable.fromWeb(pubRes.body as any);
+            } else {
+              const arrayBuf = await pubRes.arrayBuffer();
+              bodyStream = Readable.from(Buffer.from(arrayBuf));
+            }
+          }
+
+          return {
+            body: bodyStream,
+            contentType: ct,
+            contentLength: len,
+            contentRange: cr,
+            etag,
+            lastModified: lastMod ? new Date(lastMod) : undefined,
+            resolvedKey: cleanKey,
+          };
+        }
+      } catch (pubFetchErr) {
+        console.warn(`[R2Server-Operation] Public URL fetch fallback error:`, pubFetchErr);
       }
-    } catch (pubFetchErr) {
-      // Continue to local filesystem fallback
     }
-  }
 
-  // 3. Try local filesystem storage
-  const localPath = findLocalFilePath(bucketName, cleanKey);
-  if (localPath) {
-    try {
-      const stats = fs.statSync(localPath);
-      let stream: Readable;
-      if (params.range) {
-        const parts = params.range.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
-        stream = fs.createReadStream(localPath, { start, end });
-        return {
-          body: stream,
-          contentType: getMimeTypeFromKey(cleanKey),
-          contentLength: end - start + 1,
-          contentRange: `bytes ${start}-${end}/${stats.size}`,
-          lastModified: stats.mtime,
-          etag: `local-${stats.mtimeMs}`,
-          resolvedKey: cleanKey,
-        };
-      } else {
-        stream = fs.createReadStream(localPath);
-        return {
-          body: stream,
-          contentType: getMimeTypeFromKey(cleanKey),
-          contentLength: stats.size,
-          lastModified: stats.mtime,
-          etag: `local-${stats.mtimeMs}`,
-          resolvedKey: cleanKey,
-        };
-      }
-    } catch (fsErr) {
-      console.warn(`[R2Server-Operation] Local read error for "${cleanKey}":`, fsErr);
-    }
+    throw err;
   }
-
-  return { body: null, resolvedKey: cleanKey };
 }
 
 /**
@@ -631,36 +532,27 @@ export async function generateR2SignedUrl(params: {
   const operation = params.operation || "getObject";
   const effectiveMime = params.contentType || getMimeTypeFromKey(cleanKey);
 
-  if (isR2Configured()) {
-    try {
-      const client = getR2S3Client();
-      if (operation === "putObject") {
-        const command = new PutObjectCommand({
-          Bucket: bucketName,
-          Key: cleanKey,
-          ContentType: effectiveMime,
-        });
-        return await getSignedUrl(client, command, { expiresIn });
-      }
-
-      const command = new GetObjectCommand({
-        Bucket: bucketName,
-        Key: cleanKey,
-        ResponseContentDisposition: "inline",
-        ResponseContentType: effectiveMime,
-      });
-      return await getSignedUrl(client, command, { expiresIn });
-    } catch {}
+  const client = getR2S3Client();
+  if (operation === "putObject") {
+    const command = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: cleanKey,
+      ContentType: effectiveMime,
+    });
+    return await getSignedUrl(client, command, { expiresIn });
   }
 
-  if (operation === "getObject" && config.publicUrl) {
-    return `${config.publicUrl}/${cleanKey}`;
-  }
-  return `/api/storage?action=download&bucket=${encodeURIComponent(bucketName)}&key=${encodeURIComponent(cleanKey)}`;
+  const command = new GetObjectCommand({
+    Bucket: bucketName,
+    Key: cleanKey,
+    ResponseContentDisposition: "inline",
+    ResponseContentType: effectiveMime,
+  });
+  return await getSignedUrl(client, command, { expiresIn });
 }
 
 /**
- * Deletes an object from Cloudflare R2 bucket and local filesystem.
+ * Deletes an object from Cloudflare R2 bucket.
  */
 export async function deleteObjectFromR2(params: {
   bucket?: string;
@@ -674,27 +566,14 @@ export async function deleteObjectFromR2(params: {
     return { success: true, bucket: bucketName, key: "" };
   }
 
-  // Delete local file if exists
-  const localPath = findLocalFilePath(bucketName, cleanKey);
-  if (localPath) {
-    try {
-      fs.unlinkSync(localPath);
-    } catch {}
-  }
-
-  if (isR2Configured()) {
-    try {
-      const client = getR2S3Client();
-      const input: DeleteObjectCommandInput = {
-        Bucket: bucketName,
-        Key: cleanKey,
-      };
-      const command = new DeleteObjectCommand(input);
-      await client.send(command);
-    } catch (err: any) {
-      console.warn(`[R2Server-Operation] Remote R2 DeleteObject warning:`, err?.message || err);
-    }
-  }
+  console.log(`[R2Server-Operation] DeleteObjectCommand for key="${cleanKey}" in bucket="${bucketName}"`);
+  const client = getR2S3Client();
+  const input: DeleteObjectCommandInput = {
+    Bucket: bucketName,
+    Key: cleanKey,
+  };
+  const command = new DeleteObjectCommand(input);
+  await client.send(command);
 
   return {
     success: true,
@@ -704,7 +583,7 @@ export async function deleteObjectFromR2(params: {
 }
 
 /**
- * Deletes multiple objects from Cloudflare R2 bucket and local filesystem.
+ * Deletes multiple objects from Cloudflare R2 bucket.
  */
 export async function deleteObjectsFromR2(params: {
   bucket?: string;
@@ -718,43 +597,24 @@ export async function deleteObjectsFromR2(params: {
   const config = getR2ServerConfig();
   const bucketName = (params.bucket || config.bucket || "academy-connect-files").trim();
 
-  for (const k of cleanKeys) {
-    const localPath = findLocalFilePath(bucketName, k);
-    if (localPath) {
-      try {
-        fs.unlinkSync(localPath);
-      } catch {}
-    }
-  }
-
-  if (isR2Configured()) {
-    try {
-      const client = getR2S3Client();
-      const command = new DeleteObjectsCommand({
-        Bucket: bucketName,
-        Delete: {
-          Objects: cleanKeys.map((k) => ({ Key: k })),
-          Quiet: false,
-        },
-      });
-      const response = await client.send(command);
-      return {
-        success: true,
-        deleted: (response.Deleted || []).map((d) => d.Key!).filter(Boolean),
-      };
-    } catch (err: any) {
-      console.warn(`[R2Server-Operation] Remote R2 DeleteObjects notice:`, err?.message || err);
-    }
-  }
-
+  console.log(`[R2Server-Operation] DeleteObjectsCommand for ${cleanKeys.length} keys in bucket="${bucketName}"`);
+  const client = getR2S3Client();
+  const command = new DeleteObjectsCommand({
+    Bucket: bucketName,
+    Delete: {
+      Objects: cleanKeys.map((k) => ({ Key: k })),
+      Quiet: false,
+    },
+  });
+  const response = await client.send(command);
   return {
     success: true,
-    deleted: cleanKeys,
+    deleted: (response.Deleted || []).map((d) => d.Key!).filter(Boolean),
   };
 }
 
 /**
- * Lists objects in Cloudflare R2 bucket and/or local filesystem matching a prefix.
+ * Lists objects in Cloudflare R2 bucket matching a prefix.
  */
 export async function listObjectsFromR2(params: {
   bucket?: string;
@@ -770,70 +630,28 @@ export async function listObjectsFromR2(params: {
   const bucketName = (params.bucket || config.bucket || "academy-connect-files").trim();
   const cleanPrefix = (params.prefix || "").replace(/^\/+/, "");
 
-  const objectMap = new Map<string, { key: string; size: number; lastModified?: Date; etag?: string }>();
+  const client = getR2S3Client();
+  const command = new ListObjectsV2Command({
+    Bucket: bucketName,
+    Prefix: cleanPrefix,
+    MaxKeys: params.maxKeys || 1000,
+    ContinuationToken: params.continuationToken,
+  });
+  const response = await client.send(command);
 
-  // 1. If R2 configured, list from R2
-  if (isR2Configured()) {
-    try {
-      const client = getR2S3Client();
-      const command = new ListObjectsV2Command({
-        Bucket: bucketName,
-        Prefix: cleanPrefix,
-        MaxKeys: params.maxKeys || 1000,
-        ContinuationToken: params.continuationToken,
-      });
-      const response = await client.send(command);
-      for (const item of response.Contents || []) {
-        if (item.Key) {
-          objectMap.set(item.Key, {
-            key: item.Key,
-            size: item.Size || 0,
-            lastModified: item.LastModified,
-            etag: item.ETag,
-          });
-        }
-      }
-    } catch (err: any) {
-      console.warn(`[R2Server-Operation] Remote R2 ListObjects notice:`, err?.message || err);
-    }
-  }
+  const objects = (response.Contents || [])
+    .filter((item) => Boolean(item.Key))
+    .map((item) => ({
+      key: item.Key!,
+      size: item.Size || 0,
+      lastModified: item.LastModified,
+      etag: item.ETag,
+    }));
 
-  // 2. Scan local storage directory
-  try {
-    const localBase = path.join(process.cwd(), "data", "storage", bucketName);
-    if (fs.existsSync(localBase)) {
-      const scanDir = (dir: string, relPath: string = "") => {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            scanDir(fullPath, entryRel);
-          } else if (entry.isFile()) {
-            if (!cleanPrefix || entryRel.startsWith(cleanPrefix)) {
-              if (!objectMap.has(entryRel)) {
-                const stat = fs.statSync(fullPath);
-                objectMap.set(entryRel, {
-                  key: entryRel,
-                  size: stat.size,
-                  lastModified: stat.mtime,
-                  etag: `local-${stat.mtimeMs}`,
-                });
-              }
-            }
-          }
-        }
-      };
-      scanDir(localBase);
-    }
-  } catch (fsErr) {
-    // ignore
-  }
-
-  const objects = Array.from(objectMap.values()).slice(0, params.maxKeys || 1000);
   return {
     objects,
-    isTruncated: false,
+    nextContinuationToken: response.NextContinuationToken,
+    isTruncated: Boolean(response.IsTruncated),
   };
 }
 

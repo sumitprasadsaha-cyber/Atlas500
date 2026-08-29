@@ -41,26 +41,25 @@ async function downloadJsonFromR2<T>(key: string): Promise<T | null> {
       if (text) return JSON.parse(text) as T;
     }
   } catch (err) {
-    // ignore
+    // Return null if not found or parse failed
   }
   return null;
 }
 
 async function uploadJsonToR2(key: string, data: any): Promise<void> {
-  try {
-    const jsonStr = JSON.stringify(data, null, 2);
-    const blob = new Blob([jsonStr], { type: "application/json" });
-    await uploadToR2({ bucket: PRACTICE_TESTS_BUCKET, key, file: blob, mimeType: "application/json" });
-  } catch (err) {
-    console.warn(`[ScorePersistence] R2 upload error for ${key}:`, err);
-  }
+  const jsonStr = JSON.stringify(data, null, 2);
+  const blob = new Blob([jsonStr], { type: "application/json" });
+  console.log(`[ScorePersistence] Uploading JSON to Cloudflare R2: key="${key}", size=${blob.size} bytes`);
+  await uploadToR2({ bucket: PRACTICE_TESTS_BUCKET, key, file: blob, mimeType: "application/json" });
+  console.log(`[ScorePersistence] Confirmed JSON uploaded to R2: key="${key}"`);
 }
 
 export async function syncTestAttemptsToR2Storage(attempts: TestAttemptRecord[]): Promise<boolean> {
   try {
     await uploadJsonToR2("practice_tests/test_attempts.json", attempts);
     return true;
-  } catch {
+  } catch (err) {
+    console.error("[ScorePersistence] syncTestAttemptsToR2Storage failed:", err);
     return false;
   }
 }
@@ -85,9 +84,10 @@ function cleanId(str?: string): string {
   return str.toLowerCase().trim().replace(/[^a-z0-9_]/g, "_");
 }
 
-function getStudentAttemptStoragePath(studentId: string): string {
+export function getStudentAttemptStoragePath(studentId: string): string {
   const cId = cleanId(studentId) || "unknown_student";
-  return `practice_tests/student_attempts/student_${cId}.json`;
+  const normalizedId = cId.startsWith("student_") ? cId : `student_${cId}`;
+  return `practice_tests/student_attempts/${normalizedId}.json`;
 }
 
 /**
@@ -160,7 +160,16 @@ export async function fetchStudentTestAttempts(
   // 2. Fetch student-specific JSON file from Cloudflare R2 bucket
   try {
     const filePath = getStudentAttemptStoragePath(studentId);
-    const parsed = await downloadJsonFromR2<TestAttemptRecord[]>(filePath);
+    let parsed = await downloadJsonFromR2<TestAttemptRecord[]>(filePath);
+    
+    // Legacy fallback probe if not found
+    if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
+      const legacyPath = `practice_tests/student_attempts/student_${cId}.json`;
+      if (legacyPath !== filePath) {
+        parsed = await downloadJsonFromR2<TestAttemptRecord[]>(legacyPath);
+      }
+    }
+
     if (Array.isArray(parsed) && parsed.length > 0) {
       remoteAttempts = [...remoteAttempts, ...parsed];
     }
@@ -219,78 +228,73 @@ export async function savePracticeTestAttempt(
   mergeAttemptsIntoMemoryAndCache([attempt]);
   notifyScoreUpdate();
 
-  // 2. ASYNCHRONOUS BACKGROUND SYNC: Save to Cloudflare R2 and Firestore without blocking UI
-  (async () => {
-    try {
-      // 2a. Fetch existing student attempts to preserve attempt history and deduplicate
-      let existingStudentAttempts = await fetchStudentTestAttempts(studentId, attempt.studentName);
+  // 2. Fetch existing student attempts to preserve attempt history and deduplicate
+  let existingStudentAttempts = await fetchStudentTestAttempts(studentId, attempt.studentName);
 
-      // Count previous attempts for this topic to set proper attemptNumber
-      const previousTopicAttempts = existingStudentAttempts.filter((a) => {
-        const aTopicNorm = (a.topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
-        const aTestType = a.testType || "topic";
-        return (
-          (a.classGrade || "").toLowerCase().trim() === (attempt.classGrade || "").toLowerCase().trim() &&
-          (a.subject || "").toLowerCase().trim() === (attempt.subject || "").toLowerCase().trim() &&
-          Number(a.chapterNo) === Number(attempt.chapterNo) &&
-          aTopicNorm === topicNorm &&
-          aTestType === testType
-        );
-      });
+  // Count previous attempts for this topic to set proper attemptNumber
+  const previousTopicAttempts = existingStudentAttempts.filter((a) => {
+    const aTopicNorm = (a.topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
+    const aTestType = a.testType || "topic";
+    return (
+      (a.classGrade || "").toLowerCase().trim() === (attempt.classGrade || "").toLowerCase().trim() &&
+      (a.subject || "").toLowerCase().trim() === (attempt.subject || "").toLowerCase().trim() &&
+      Number(a.chapterNo) === Number(attempt.chapterNo) &&
+      aTopicNorm === topicNorm &&
+      aTestType === testType
+    );
+  });
 
-      const existingIndex = existingStudentAttempts.findIndex((a) => a.id === attempt.id);
-      let updatedAttempt = {
-        ...attempt,
-        attemptNumber: attempt.attemptNumber || (previousTopicAttempts.length + 1)
-      };
+  const existingIndex = existingStudentAttempts.findIndex((a) => a.id === attempt.id);
+  const updatedAttempt = {
+    ...attempt,
+    attemptNumber: attempt.attemptNumber || (previousTopicAttempts.length + 1)
+  };
 
-      if (existingIndex > -1) {
-        existingStudentAttempts[existingIndex] = updatedAttempt;
-      } else {
-        existingStudentAttempts.push(updatedAttempt);
-      }
+  if (existingIndex > -1) {
+    existingStudentAttempts[existingIndex] = updatedAttempt;
+  } else {
+    existingStudentAttempts.push(updatedAttempt);
+  }
 
-      const finalStudentAttempts = deduplicateAttempts(existingStudentAttempts);
+  const finalStudentAttempts = deduplicateAttempts(existingStudentAttempts);
 
-      // 2b. Save per-student JSON file to Cloudflare R2
-      try {
-        const filePath = getStudentAttemptStoragePath(studentId);
-        await uploadJsonToR2(filePath, finalStudentAttempts);
-      } catch (err) {
-        console.warn(`[ScorePersistence] Storage upload error for student ${studentId}:`, err);
-      }
+  // 3. Save per-student JSON file to Cloudflare R2 (await and verify)
+  const filePath = getStudentAttemptStoragePath(studentId);
+  try {
+    await uploadJsonToR2(filePath, finalStudentAttempts);
+    console.log(`[ScorePersistence] Successfully persisted attempt to R2 at "${filePath}"`);
+  } catch (err: any) {
+    console.error(`[ScorePersistence] Failed to upload student attempts to R2 at "${filePath}":`, err);
+    throw new Error(`Practice test attempt upload to Cloudflare R2 failed: ${err?.message || err}`);
+  }
 
-      // 2c. Update global test_attempts.json in Cloudflare R2
-      try {
-        const globalList = (await downloadJsonFromR2<TestAttemptRecord[]>("practice_tests/test_attempts.json")) || [];
-        const otherStudentsAttempts = globalList.filter((a) => {
-          const aId = cleanId(a.studentId);
-          const aName = cleanId(a.studentName);
-          return aId !== cId && aName !== cleanId(attempt.studentName);
-        });
+  // 4. Update global test_attempts.json in Cloudflare R2
+  try {
+    const globalList = (await downloadJsonFromR2<TestAttemptRecord[]>("practice_tests/test_attempts.json")) || [];
+    const otherStudentsAttempts = globalList.filter((a) => {
+      const aId = cleanId(a.studentId);
+      const aName = cleanId(a.studentName);
+      return aId !== cId && aName !== cleanId(attempt.studentName);
+    });
 
-        const mergedGlobal = deduplicateAttempts([...otherStudentsAttempts, ...finalStudentAttempts]);
-        await uploadJsonToR2("practice_tests/test_attempts.json", mergedGlobal);
-      } catch (err) {
-        console.warn("[ScorePersistence] Global attempts upload error:", err);
-      }
+    const mergedGlobal = deduplicateAttempts([...otherStudentsAttempts, ...finalStudentAttempts]);
+    await uploadJsonToR2("practice_tests/test_attempts.json", mergedGlobal);
+  } catch (err) {
+    console.warn("[ScorePersistence] Global attempts upload notice:", err);
+  }
 
-      // 2d. Save to Firestore document
-      try {
-        await saveTestAttemptDoc(updatedAttempt);
-      } catch (err) {
-        console.warn("[ScorePersistence] Firestore save error:", err);
-      }
+  // 5. Save to Firestore document
+  try {
+    await saveTestAttemptDoc(updatedAttempt);
+  } catch (err) {
+    console.warn("[ScorePersistence] Firestore save notice:", err);
+  }
 
-      // 2e. Synchronize in memory & session cache
-      scoreSessionCache.set(cacheKey, updatedAttempt);
-      mergeAttemptsIntoMemoryAndCache([updatedAttempt]);
-    } catch (bgErr) {
-      console.warn("[ScorePersistence] Background sync error:", bgErr);
-    }
-  })();
+  // 6. Synchronize in memory & session cache
+  scoreSessionCache.set(cacheKey, updatedAttempt);
+  mergeAttemptsIntoMemoryAndCache([updatedAttempt]);
 
-  return attempt;
+  return updatedAttempt;
 }
 
 /**

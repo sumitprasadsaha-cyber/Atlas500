@@ -318,22 +318,17 @@ export async function uploadNotePipeline(params: NoteUploadParams): Promise<Clas
     let headCheck = await verifyR2ObjectExists({ bucket, key: canonicalStorageKey });
     if (!headCheck || !headCheck.exists) {
       for (let attempt = 1; attempt <= 3; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 200));
+        await new Promise((resolve) => setTimeout(resolve, attempt * 300));
         headCheck = await verifyR2ObjectExists({ bucket, key: canonicalStorageKey });
         if (headCheck && headCheck.exists) break;
       }
     }
 
     if (!headCheck || !headCheck.exists) {
-      if (uploadRes && (uploadRes.etag || uploadRes.url)) {
-        console.log(`[Upload Pipeline] Verification fallback: upload confirmed storage receipt with ETag "${uploadRes.etag}".`);
-        headCheck = { exists: true, bucket, key: canonicalStorageKey };
-      } else {
-        console.error(`[Upload Pipeline] HeadObject verification failed for key "${canonicalStorageKey}". Aborting upload before Firestore write.`);
-        // Rollback orphaned file in R2
-        await deleteFromR2({ bucket, key: canonicalStorageKey }).catch(() => {});
-        throw new Error(`Upload verification failed: HeadObject confirmed object does not exist in storage for key "${canonicalStorageKey}".`);
-      }
+      console.error(`[Upload Pipeline] HeadObject verification failed for key "${canonicalStorageKey}". Aborting upload before Firestore write.`);
+      // Rollback orphaned file in R2
+      await deleteFromR2({ bucket, key: canonicalStorageKey }).catch(() => {});
+      throw new Error(`Upload verification failed: HeadObject confirmed object does not exist in Cloudflare R2 for key "${canonicalStorageKey}".`);
     }
 
     const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(canonicalStorageKey)}`;
@@ -494,20 +489,15 @@ export async function replaceNotePipeline(params: NoteReplaceParams): Promise<Cl
     let headCheck = await verifyR2ObjectExists({ bucket, key: newStorageKey });
     if (!headCheck || !headCheck.exists) {
       for (let attempt = 1; attempt <= 3; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 200));
+        await new Promise((resolve) => setTimeout(resolve, attempt * 300));
         headCheck = await verifyR2ObjectExists({ bucket, key: newStorageKey });
         if (headCheck && headCheck.exists) break;
       }
     }
 
     if (!headCheck || !headCheck.exists) {
-      if (uploadRes && (uploadRes.etag || uploadRes.url)) {
-        console.log(`[Replace Pipeline] Verification fallback: upload confirmed storage receipt with ETag "${uploadRes.etag}".`);
-        headCheck = { exists: true, bucket, key: newStorageKey };
-      } else {
-        console.error(`[Replace Pipeline] HeadObject verification failed for key "${newStorageKey}". Aborting update.`);
-        throw new Error(`Replacement verification failed: HeadObject confirmed object does not exist in storage for key "${newStorageKey}".`);
-      }
+      console.error(`[Replace Pipeline] HeadObject verification failed for key "${newStorageKey}". Aborting update.`);
+      throw new Error(`Replacement verification failed: HeadObject confirmed object does not exist in Cloudflare R2 for key "${newStorageKey}".`);
     }
 
     const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(newStorageKey)}`;
