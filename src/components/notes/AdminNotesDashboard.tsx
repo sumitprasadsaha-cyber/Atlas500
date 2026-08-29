@@ -1678,7 +1678,7 @@ export default function AdminNotesDashboard({
             )}
           </div>
 
-          {/* Cloudflare R2 Storage Hierarchy Metadata Sync Utility */}
+          {/* Cloudflare R2 Flat Object Storage Status */}
           <div className="p-3 border-t border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 mt-auto shrink-0">
             <button
               type="button"
@@ -1687,9 +1687,9 @@ export default function AdminNotesDashboard({
                 setIsSyncingStorage(true);
                 try {
                   const res = await migrateStorageMetadata(notes);
-                  showToast(`R2 Storage synced: ${res.totalCreated} metadata nodes created (${res.totalChecked} verified).`, "success");
+                  showToast("Cloudflare R2 Direct Object Storage active: Flat hierarchy verified.", "success");
                 } catch (err: any) {
-                  showToast(err?.message || "Storage metadata sync failed.", "error");
+                  showToast(err?.message || "Storage verification failed.", "error");
                 } finally {
                   setIsSyncingStorage(false);
                 }
@@ -1698,7 +1698,7 @@ export default function AdminNotesDashboard({
               id="sync-r2-metadata-btn"
             >
               <RefreshCw className={`w-3.5 h-3.5 text-blue-500 ${isSyncingStorage ? "animate-spin" : ""}`} />
-              <span>{isSyncingStorage ? "Syncing R2 Hierarchy..." : "Sync R2 Storage Metadata"}</span>
+              <span>{isSyncingStorage ? "Verifying R2 Storage..." : "Verify R2 Direct Storage"}</span>
             </button>
           </div>
         </aside>

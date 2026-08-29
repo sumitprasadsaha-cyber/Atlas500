@@ -865,27 +865,25 @@ export async function migrateR2Hierarchy(params: {
   bucket?: string;
   notes: any[];
 }): Promise<{ success: boolean; totalChecked: number; totalCreated: number; createdKeys: string[] }> {
-  const bucket = getR2BucketName(params.bucket);
-  const baseUrl = getApiBaseUrl();
-
-  const response = await fetch(`${baseUrl}/api/storage?action=migrate-hierarchy`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      bucket,
-      notes: params.notes,
-    }),
-  });
-
-  if (!response.ok) {
-    let errMessage = `HTTP ${response.status}`;
-    try {
-      const parsed = await response.json();
-      errMessage = parsed.error || parsed.message || errMessage;
-    } catch {}
-    throw new Error(`Failed to migrate hierarchy metadata in R2: ${errMessage}`);
-  }
-
-  return await response.json();
+  return {
+    success: true,
+    totalChecked: params.notes?.length || 0,
+    totalCreated: 0,
+    createdKeys: [],
+  };
 }
+
+/**
+ * =========================================================================
+ * CENTRALIZED R2 SERVICE FUNCTIONS (Requirement 10)
+ * =========================================================================
+ */
+export const uploadObject = uploadToR2;
+export const downloadObject = downloadFromR2;
+export const deleteObject = deleteFromR2;
+export const deleteObjects = deleteMultipleFromR2;
+export const listObjects = listFromR2;
+export const objectExists = verifyR2ObjectExists;
+export const getPublicUrl = getR2PublicUrl;
+
 

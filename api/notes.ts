@@ -146,83 +146,79 @@ export default async function handler(req: any, res: any) {
           });
         }
 
-        // 6. Upload to Cloudflare R2
+        // 6. Upload to Cloudflare R2 directly (flat object storage model)
         const r2Config = getR2ServerConfig();
         const bucket = payload.bucket || fields.bucket || parsedBody.bucket || r2Config.bucket;
+        const uploadKey = canonicalMeta.storagePath;
+        const startTime = Date.now();
+
+        console.log(`[API Notes] Upload Started:`, {
+          bucket,
+          key: uploadKey,
+          sizeBytes: payload.size,
+          mimeType,
+          fileName: canonicalMeta.fileName,
+        });
 
         try {
-          // 1. Upload note file to canonical R2 key
+          // 1. Direct Object Upload via PutObjectCommand
           const uploadResult = await uploadObjectToR2({
             bucket,
-            key: canonicalMeta.storagePath,
+            key: uploadKey,
             body: payload.buffer,
             contentType: mimeType,
           });
 
-          // 2. Mandatory HeadObject verification for uploaded note file (PutObject -> HeadObject -> Success)
-          const verifyNote = await headObjectFromR2({ bucket, key: canonicalMeta.storagePath });
+          console.log(`[API Notes] Upload Finished:`, {
+            bucket,
+            key: uploadKey,
+            etag: uploadResult.etag,
+            durationMs: Date.now() - startTime,
+          });
+
+          // 2. Direct HeadObject verification on the uploaded key itself
+          const verifyNote = await headObjectFromR2({ bucket, key: uploadKey });
           if (!verifyNote || !verifyNote.exists) {
-            console.error(`[API Notes] HeadObject verification failed for uploaded note "${canonicalMeta.storagePath}".`);
+            console.error(`[API Notes] HeadObject verification failed for uploaded note "${uploadKey}".`);
             return res.status(500).json({
               success: false,
               code: "UPLOAD_VERIFICATION_FAILED",
-              error: `Upload verification failed: HeadObject confirmed object does not exist in R2 for key "${canonicalMeta.storagePath}".`,
+              error: `Upload verification failed: HeadObject confirmed object does not exist in R2 for key "${uploadKey}".`,
             });
           }
 
-          // 3. Ensure metadata.json exists for all ancestor hierarchy nodes (Class/GS Paper -> Subject -> Chapter/Module -> Topic)
-          const nowIso = new Date().toISOString();
-          const lineage = getHierarchyLineage(canonicalMeta);
-
-          for (const node of lineage) {
-            const check = await headObjectFromR2({ bucket, key: node.metadataKey });
-            if (!check.exists) {
-              const nodePayload = {
-                id: node.id,
-                name: node.name,
-                type: node.type,
-                category: node.category,
-                number: node.number,
-                folderPath: node.folderPath,
-                storageKey: node.metadataKey,
-                parentFolderPath: node.parentFolderPath,
-                parentMetadataKey: node.parentMetadataKey,
-                createdAt: nowIso,
-                updatedAt: nowIso,
-              };
-
-              await uploadObjectToR2({
-                bucket,
-                key: node.metadataKey,
-                body: Buffer.from(JSON.stringify(nodePayload, null, 2)),
-                contentType: "application/json",
-              });
-
-              await headObjectFromR2({ bucket, key: node.metadataKey });
-            }
-          }
-
-          // 4. Update immediate topic folder metadata.json with canonical NoteMetadata
-          const metadataKey = `${canonicalMeta.folderPath}/metadata.json`;
-          await uploadObjectToR2({
+          console.log(`[API Notes] Verification Passed:`, {
             bucket,
-            key: metadataKey,
-            body: Buffer.from(JSON.stringify(canonicalMeta, null, 2)),
-            contentType: "application/json",
-          }).catch((err) => {
-            console.warn("[API Notes] Warning writing folder metadata.json:", err);
+            key: uploadKey,
+            contentLength: verifyNote.contentLength,
+            contentType: verifyNote.contentType,
           });
         } catch (storageErr: any) {
-          console.error("[API Notes] R2 upload error:", storageErr);
+          console.error("[API Notes] R2 upload error:", {
+            bucket,
+            key: uploadKey,
+            error: storageErr?.message,
+            stack: storageErr?.stack,
+          });
           return res.status(500).json({
             success: false,
             error: "Failed to upload file to Cloudflare R2 storage.",
             details: storageErr?.message,
+            stack: storageErr?.stack,
           });
         }
 
         // Generate download URL
-        const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(canonicalMeta.storagePath)}`;
+        const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(uploadKey)}`;
+        const publicUrl = r2Config.publicUrl ? `${r2Config.publicUrl}/${uploadKey}` : downloadUrl;
+
+        console.log(`[API Notes] Returned URL:`, {
+          bucket,
+          key: uploadKey,
+          downloadUrl,
+          publicUrl,
+        });
+
         const noteResult: NoteMetadata = {
           ...canonicalMeta,
           pdfUrl: downloadUrl,
@@ -233,18 +229,19 @@ export default async function handler(req: any, res: any) {
           message: "Note uploaded successfully",
           note: noteResult,
           documentId: canonicalMeta.id,
-          r2Key: canonicalMeta.storagePath,
-          storageKey: canonicalMeta.storagePath,
-          storagePath: canonicalMeta.storagePath,
-          downloadKey: canonicalMeta.storagePath,
+          r2Key: uploadKey,
+          storageKey: uploadKey,
+          storagePath: uploadKey,
+          downloadKey: uploadKey,
           folderPath: canonicalMeta.folderPath,
           downloadUrl,
           pdfUrl: downloadUrl,
+          publicUrl,
         });
       }
 
       // ========================================================
-      // 2. NOTE REPLACEMENT (In-Place Canonical Update)
+      // 2. NOTE REPLACEMENT (Direct Object Update)
       // ========================================================
       case "replace": {
         const payload = await extractUploadPayload(req);
@@ -287,17 +284,33 @@ export default async function handler(req: any, res: any) {
 
         const r2Config = getR2ServerConfig();
         const bucket = payload.bucket || fields.bucket || parsedBody.bucket || r2Config.bucket;
+        const startTime = Date.now();
+
+        console.log(`[API Notes] Replace Started:`, {
+          bucket,
+          key: targetStorageKey,
+          sizeBytes: payload.size,
+          mimeType,
+          newFileName,
+        });
 
         try {
-          // Upload new file directly replacing existing object
-          await uploadObjectToR2({
+          // Direct Object Upload replacing key
+          const uploadRes = await uploadObjectToR2({
             bucket,
             key: targetStorageKey,
             body: payload.buffer,
             contentType: mimeType,
           });
 
-          // Strict verification check: confirm object presence in R2 before acknowledging success
+          console.log(`[API Notes] Replace Finished:`, {
+            bucket,
+            key: targetStorageKey,
+            etag: uploadRes.etag,
+            durationMs: Date.now() - startTime,
+          });
+
+          // Strict verification check on the replaced key
           const headResult = await headObjectFromR2({ bucket, key: targetStorageKey });
           if (!headResult || !headResult.exists) {
             console.error(`[API Notes] HeadObject verification failed for replaced key "${targetStorageKey}".`);
@@ -308,39 +321,35 @@ export default async function handler(req: any, res: any) {
             });
           }
 
-          // Update folder metadata.json if exists
-          const folderPath = path.dirname(targetStorageKey);
-          const metadataKey = `${folderPath}/metadata.json`;
-          const nowIso = new Date().toISOString();
-
-          const updateMetadata = {
-            storagePath: targetStorageKey,
-            r2Key: targetStorageKey,
-            storageKey: targetStorageKey,
-            downloadKey: targetStorageKey,
-            fileName: newFileName,
-            originalFilename: newFileName,
-            fileSize: payload.size,
-            mimeType,
-            updatedAt: nowIso,
-          };
-
-          await uploadObjectToR2({
+          console.log(`[API Notes] Replace Verification Passed:`, {
             bucket,
-            key: metadataKey,
-            body: Buffer.from(JSON.stringify(updateMetadata, null, 2)),
-            contentType: "application/json",
-          }).catch(() => {});
+            key: targetStorageKey,
+            contentLength: headResult.contentLength,
+          });
         } catch (replaceErr: any) {
-          console.error("[API Notes] R2 replacement error:", replaceErr);
+          console.error("[API Notes] R2 replacement error:", {
+            bucket,
+            key: targetStorageKey,
+            error: replaceErr?.message,
+            stack: replaceErr?.stack,
+          });
           return res.status(500).json({
             success: false,
             error: "Failed to replace note in storage.",
             details: replaceErr?.message,
+            stack: replaceErr?.stack,
           });
         }
 
         const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(targetStorageKey)}`;
+        const publicUrl = r2Config.publicUrl ? `${r2Config.publicUrl}/${targetStorageKey}` : downloadUrl;
+
+        console.log(`[API Notes] Replace Returned URL:`, {
+          bucket,
+          key: targetStorageKey,
+          downloadUrl,
+          publicUrl,
+        });
 
         return res.status(200).json({
           success: true,
@@ -356,14 +365,14 @@ export default async function handler(req: any, res: any) {
           mimeType,
           downloadUrl,
           pdfUrl: downloadUrl,
-          publicUrl: downloadUrl,
+          publicUrl,
           updatedAt: new Date().toISOString(),
         });
       }
 
       // ========================================================
       // 3. NOTE DELETE
-      // Clean up PDF, metadata.json, and practice-test.json from R2
+      // Directly deletes object key from R2
       // ========================================================
       case "delete": {
         const parsedBody = parseRequestBody(req.body) || {};
@@ -375,13 +384,10 @@ export default async function handler(req: any, res: any) {
 
         if (storageKey) {
           try {
+            console.log(`[API Notes] Deleting note object: key="${storageKey}", bucket="${bucket}"`);
             await deleteObjectFromR2({ bucket, key: storageKey });
-
-            const folderPath = path.dirname(storageKey);
-            await deleteObjectFromR2({ bucket, key: `${folderPath}/metadata.json` }).catch(() => {});
-            await deleteObjectFromR2({ bucket, key: `${folderPath}/practice-test.json` }).catch(() => {});
           } catch (delErr: any) {
-            console.warn("[API Notes] R2 delete warning (proceeding with DB deletion):", delErr);
+            console.warn("[API Notes] R2 delete warning (proceeding):", delErr?.message);
           }
         }
 

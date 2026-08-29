@@ -166,6 +166,7 @@ export default async function handler(req: any, res: any) {
 
       // 2. UPLOAD FILE
       case "upload": {
+        const startTime = Date.now();
         let payload;
         try {
           payload = await extractUploadPayload(req);
@@ -210,6 +211,14 @@ export default async function handler(req: any, res: any) {
           );
         }
 
+        console.log(`[Storage API] Upload Started:`, {
+          bucket: actualBucket,
+          key: cleanKey,
+          sizeBytes: payload.buffer.length,
+          contentType,
+          filename: payload.fileName,
+        });
+
         try {
           const result = await uploadObjectToR2({
             bucket: actualBucket,
@@ -218,10 +227,25 @@ export default async function handler(req: any, res: any) {
             contentType,
           });
 
+          console.log(`[Storage API] Upload Finished & Verification Passed:`, {
+            bucket: result.bucket,
+            key: result.key,
+            etag: result.etag,
+            size: result.size,
+            durationMs: Date.now() - startTime,
+          });
+
           const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(result.bucket)}&key=${encodeURIComponent(cleanKey)}`;
           const publicUrl = config.publicUrl
             ? `${config.publicUrl}/${cleanKey}`
             : downloadUrl;
+
+          console.log(`[Storage API] Returned URL:`, {
+            bucket: result.bucket,
+            key: result.key,
+            downloadUrl,
+            publicUrl,
+          });
 
           return sendSuccess(res, {
             bucket: result.bucket,
@@ -234,7 +258,12 @@ export default async function handler(req: any, res: any) {
             filename: payload.fileName,
           });
         } catch (uploadErr: any) {
-          console.error("[Storage API] Upload execution error:", uploadErr);
+          console.error("[Storage API] Upload execution error:", {
+            bucket: actualBucket,
+            key: cleanKey,
+            error: uploadErr?.message,
+            stack: uploadErr?.stack,
+          });
           return sendError(
             res,
             new StorageError(uploadErr?.message || "Cloudflare R2 unavailable or bucket upload failed.", "R2_UNAVAILABLE")
@@ -529,8 +558,8 @@ export default async function handler(req: any, res: any) {
         return sendSuccess(res, result);
       }
 
-      // 9. CREATE HIERARCHY NODE (Metadata-Driven Architecture)
-      // Writes metadata.json to R2 -> HeadObject Verify -> Return verified node
+      // 9. CREATE HIERARCHY NODE (Flat Object Storage Architecture)
+      // R2 is an object store, not a filesystem. No placeholder files or metadata.json needed.
       case "create-node": {
         const ctx: HierarchyPathContext = {
           category: params.category || (params.className?.toUpperCase() === "UPSC" || params.gsPaper ? "upsc" : "school"),
@@ -566,60 +595,14 @@ export default async function handler(req: any, res: any) {
         }
 
         const targetNode = lineage[lineage.length - 1];
-        const nowIso = new Date().toISOString();
-        const createdNodes = [];
-
-        // Recursively ensure all ancestor metadata objects exist in R2 with verification
-        for (const node of lineage) {
-          const check = await headObjectFromR2({ bucket: actualBucket, key: node.metadataKey });
-          const isTarget = node.metadataKey === targetNode.metadataKey;
-
-          if (!check.exists || isTarget) {
-            const metadataPayload = {
-              id: node.id,
-              name: (isTarget && params.name) ? params.name : node.name,
-              type: node.type,
-              category: node.category,
-              number: node.number,
-              folderPath: node.folderPath,
-              storageKey: node.metadataKey,
-              parentFolderPath: node.parentFolderPath,
-              parentMetadataKey: node.parentMetadataKey,
-              createdAt: nowIso,
-              updatedAt: nowIso,
-              metadata: {
-                ...(params.metadata || {}),
-                ...(isTarget && params.description ? { description: params.description } : {}),
-              },
-            };
-
-            await uploadObjectToR2({
-              bucket: actualBucket,
-              key: node.metadataKey,
-              body: Buffer.from(JSON.stringify(metadataPayload, null, 2)),
-              contentType: "application/json",
-            });
-
-            // HeadObject verification (PutObject -> HeadObject -> Success)
-            const verifyCheck = await headObjectFromR2({ bucket: actualBucket, key: node.metadataKey });
-            if (!verifyCheck || !verifyCheck.exists) {
-              console.error(`[Storage API] HeadObject verification failed for created node metadata "${node.metadataKey}".`);
-              return sendError(
-                res,
-                new StorageError(`Node metadata verification failed: Object was not found in R2 after write: ${node.metadataKey}`, "METADATA_VERIFY_FAILED")
-              );
-            }
-
-            createdNodes.push(metadataPayload);
-          }
-        }
+        console.log(`[Storage API] Hierarchy node registered: type="${targetNode.type}", name="${targetNode.name}", folderPath="${targetNode.folderPath}"`);
 
         return sendSuccess(res, {
           success: true,
-          message: "Hierarchy node metadata created and verified in Cloudflare R2",
+          message: "Hierarchy node registered (flat object storage model)",
           node: targetNode,
-          createdCount: createdNodes.length,
-          createdNodes,
+          createdCount: 0,
+          createdNodes: [],
           storageKey: targetNode.metadataKey,
           folderPath: targetNode.folderPath,
         });
@@ -642,35 +625,42 @@ export default async function handler(req: any, res: any) {
 
         try {
           const obj = await getObjectFromR2({ bucket: actualBucket, key: metadataKey });
-          if (!obj || !obj.body) {
-            return sendError(
-              res,
-              new NotFoundError(`Node metadata object not found: "${metadataKey}" in bucket "${actualBucket}".`)
-            );
-          }
+          if (obj && obj.body) {
+            const chunks: Buffer[] = [];
+            for await (const chunk of obj.body) {
+              chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+            }
+            const rawText = Buffer.concat(chunks).toString("utf-8");
+            const metadata = JSON.parse(rawText);
 
-          const chunks: Buffer[] = [];
-          for await (const chunk of obj.body) {
-            chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+            return sendSuccess(res, {
+              success: true,
+              storageKey: metadataKey,
+              node: metadata,
+            });
           }
-          const rawText = Buffer.concat(chunks).toString("utf-8");
-          const metadata = JSON.parse(rawText);
-
-          return sendSuccess(res, {
-            success: true,
-            storageKey: metadataKey,
-            node: metadata,
-          });
-        } catch (err: any) {
-          return sendError(
-            res,
-            new NotFoundError(`Node metadata object not found: "${metadataKey}" (${err?.message || err})`)
-          );
+        } catch (err) {
+          // In flat object storage, metadata.json is optional; return synthesized node
         }
+
+        const folderPath = metadataKey.replace(/\/metadata\.json$/, "");
+        const pathParts = folderPath.split("/").filter(Boolean);
+        const nodeName = pathParts[pathParts.length - 1] || "Node";
+
+        return sendSuccess(res, {
+          success: true,
+          storageKey: metadataKey,
+          node: {
+            id: folderPath,
+            name: nodeName.replace(/^Chapter_\d+_|^Topic_\d+_|^Module_\d+_/, "").replace(/_/g, " "),
+            folderPath,
+            storageKey: metadataKey,
+          },
+        });
       }
 
       // 11. LIST ALL HIERARCHY NODES (DISCOVERY)
-      // Discovers hierarchy nodes directly by reading metadata.json objects
+      // Discovers hierarchy nodes via object prefixes in R2
       case "list-nodes": {
         const category = params.category || "all";
         const customPrefix = params.prefix ? sanitizeKey(params.prefix, actualBucket) : "";
@@ -686,7 +676,7 @@ export default async function handler(req: any, res: any) {
           prefixesToSearch = ["class_notes/", "upsc/"];
         }
 
-        const nodes: any[] = [];
+        const nodesMap = new Map<string, any>();
         for (const prefix of prefixesToSearch) {
           let token: string | undefined = undefined;
           do {
@@ -697,22 +687,18 @@ export default async function handler(req: any, res: any) {
               continuationToken: token,
             });
 
-            const metadataObjects = (listRes.objects || []).filter((o) => o.key.endsWith("/metadata.json"));
-            for (const item of metadataObjects) {
-              try {
-                const getRes = await getObjectFromR2({ bucket: actualBucket, key: item.key });
-                if (getRes && getRes.body) {
-                  const chunks: Buffer[] = [];
-                  for await (const chunk of getRes.body) {
-                    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-                  }
-                  const rawText = Buffer.concat(chunks).toString("utf-8");
-                  const parsed = JSON.parse(rawText);
-                  nodes.push({ ...parsed, storageKey: item.key, lastModified: item.lastModified, size: item.size });
+            for (const item of listRes.objects || []) {
+              const parts = item.key.split("/");
+              if (parts.length >= 2) {
+                const folderPath = parts.slice(0, -1).join("/");
+                if (!nodesMap.has(folderPath)) {
+                  nodesMap.set(folderPath, {
+                    folderPath,
+                    storageKey: `${folderPath}/metadata.json`,
+                    name: parts[parts.length - 2]?.replace(/^Chapter_\d+_|^Topic_\d+_|^Module_\d+_/, "").replace(/_/g, " ") || folderPath,
+                    lastModified: item.lastModified,
+                  });
                 }
-              } catch (e) {
-                // If a single metadata read fails, include basic stub from path
-                nodes.push({ storageKey: item.key, key: item.key, lastModified: item.lastModified });
               }
             }
 
@@ -720,6 +706,7 @@ export default async function handler(req: any, res: any) {
           } while (token);
         }
 
+        const nodes = Array.from(nodesMap.values());
         return sendSuccess(res, {
           success: true,
           category,
@@ -742,7 +729,7 @@ export default async function handler(req: any, res: any) {
         }
 
         const sanitizedPrefix = targetPrefix.endsWith("/") ? targetPrefix : `${targetPrefix}/`;
-        console.log(`[Storage API] Deleting node and cascading all objects under prefix: "${sanitizedPrefix}" in bucket "${actualBucket}"`);
+        console.log(`[Storage API] Deleting node prefix: "${sanitizedPrefix}" in bucket "${actualBucket}"`);
 
         // List all objects under prefix
         let token: string | undefined = undefined;
@@ -762,12 +749,6 @@ export default async function handler(req: any, res: any) {
           token = listRes.nextContinuationToken;
         } while (token);
 
-        // Also ensure direct metadata key is included
-        const directMetadataKey = `${targetPrefix.replace(/\/+$/, "")}/metadata.json`;
-        if (!keysToDelete.includes(directMetadataKey)) {
-          keysToDelete.push(directMetadataKey);
-        }
-
         if (keysToDelete.length > 0) {
           await deleteObjectsFromR2({ bucket: actualBucket, keys: keysToDelete });
         }
@@ -780,80 +761,15 @@ export default async function handler(req: any, res: any) {
         });
       }
 
-      // 13. MIGRATE / GENERATE MISSING HIERARCHY METADATA
+      // 13. MIGRATE / GENERATE MISSING HIERARCHY METADATA (NO-OP in flat object store)
       case "migrate-hierarchy": {
-        const notesList: any[] = Array.isArray(params.notes) ? params.notes : [];
-        const nowIso = new Date().toISOString();
-        let totalChecked = 0;
-        let totalCreated = 0;
-        const createdKeys: string[] = [];
-
-        for (const note of notesList) {
-          const ctx: HierarchyPathContext = {
-            category: note.type === "upsc" || note.isUPSC || note.className === "UPSC" ? "upsc" : "school",
-            type: note.type || (note.isUPSC ? "upsc" : "school"),
-            className: note.className || note.classGrade || note.class,
-            classGrade: note.classGrade || note.className || note.class,
-            gsPaper: note.gsPaper || note.generalStudiesPaper || note.paper,
-            generalStudiesPaper: note.generalStudiesPaper || note.gsPaper || note.paper,
-            subject: note.subject || note.subjectName,
-            subjectName: note.subjectName || note.subject,
-            chapterNumber: note.chapterNumber ?? note.chapterNo,
-            chapterNo: note.chapterNo ?? note.chapterNumber,
-            chapterName: note.chapterName || note.chapterTitle,
-            chapterTitle: note.chapterTitle || note.chapterName,
-            moduleNumber: note.moduleNumber ?? note.moduleNo,
-            moduleNo: note.moduleNo ?? note.moduleNumber,
-            moduleName: note.moduleName || note.moduleTitle,
-            moduleTitle: note.moduleTitle || note.moduleName,
-            topicNumber: note.topicNumber ?? note.topicNo,
-            topicNo: note.topicNo ?? note.topicNumber,
-            topicName: note.topicName || note.topicTitle || note.partLabel,
-            topicTitle: note.topicTitle || note.topicName,
-            partLabel: note.partLabel,
-          };
-
-          const lineage = getHierarchyLineage(ctx);
-          for (const node of lineage) {
-            totalChecked++;
-            const check = await headObjectFromR2({ bucket: actualBucket, key: node.metadataKey });
-            if (!check.exists) {
-              const metadataPayload = {
-                id: node.id,
-                name: node.name,
-                type: node.type,
-                category: node.category,
-                number: node.number,
-                folderPath: node.folderPath,
-                storageKey: node.metadataKey,
-                parentFolderPath: node.parentFolderPath,
-                parentMetadataKey: node.parentMetadataKey,
-                createdAt: nowIso,
-                updatedAt: nowIso,
-              };
-
-              await uploadObjectToR2({
-                bucket: actualBucket,
-                key: node.metadataKey,
-                body: Buffer.from(JSON.stringify(metadataPayload, null, 2)),
-                contentType: "application/json",
-              });
-
-              const verifyCheck = await headObjectFromR2({ bucket: actualBucket, key: node.metadataKey });
-              if (verifyCheck && verifyCheck.exists) {
-                totalCreated++;
-                createdKeys.push(node.metadataKey);
-              }
-            }
-          }
-        }
-
+        console.log("[Storage API] Flat object storage active: No metadata.json files needed.");
         return sendSuccess(res, {
           success: true,
-          message: "Hierarchy metadata migration completed.",
-          totalChecked,
-          totalCreated,
-          createdKeys,
+          message: "Flat object storage model active: All objects are uploaded directly without folder/metadata creation.",
+          totalChecked: 0,
+          totalCreated: 0,
+          createdKeys: [],
         });
       }
 

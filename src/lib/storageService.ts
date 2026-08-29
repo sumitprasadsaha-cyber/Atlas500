@@ -22,6 +22,13 @@ import {
   listR2Nodes,
   deleteR2Node,
   migrateR2Hierarchy,
+  uploadObject,
+  downloadObject,
+  deleteObject,
+  deleteObjects,
+  listObjects,
+  objectExists,
+  getPublicUrl,
   type R2UploadResult,
   type R2ObjectInfo,
 } from "./r2Client";
@@ -50,8 +57,19 @@ import { deleteTopicPracticeTest } from "./practiceTestService";
 import type { ClassNote, HierarchyNodeMetadata, HierarchyNodeType } from "../types";
 import { buildCanonicalNoteMetadata, validateCanonicalNoteMetadata } from "../domain/notes/types";
 
-// Re-export canonical key generator as single source of truth
-export { generateTopicNoteKey, buildCanonicalStorageKey };
+// Re-export canonical key generator and centralized R2 functions as single source of truth
+export {
+  generateTopicNoteKey,
+  buildCanonicalStorageKey,
+  uploadObject,
+  downloadObject,
+  deleteObject,
+  deleteObjects,
+  listObjects,
+  objectExists,
+  getPublicUrl,
+};
+
 
 export interface UploadTopicNoteParams {
   file: File | Blob;
