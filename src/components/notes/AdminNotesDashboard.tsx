@@ -58,6 +58,12 @@ import {
   SchoolHierarchyData,
   UpscHierarchyData
 } from "../../lib/curriculumService";
+import {
+  createClassNode,
+  createSubjectNode,
+  createChapterNode,
+  migrateStorageMetadata
+} from "../../lib/storageService";
 
 interface AdminNotesDashboardProps {
   notes: ClassNote[];
@@ -235,6 +241,7 @@ export default function AdminNotesDashboard({
     subject: string;
   } | null>(null);
   const [isDeletingSubject, setIsDeletingSubject] = useState(false);
+  const [isSyncingStorage, setIsSyncingStorage] = useState(false);
 
   // Delete Chapter / Module Modal State
   const [deletingChapter, setDeletingChapter] = useState<{
@@ -1670,6 +1677,30 @@ export default function AdminNotesDashboard({
               </>
             )}
           </div>
+
+          {/* Cloudflare R2 Storage Hierarchy Metadata Sync Utility */}
+          <div className="p-3 border-t border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 mt-auto shrink-0">
+            <button
+              type="button"
+              disabled={isSyncingStorage}
+              onClick={async () => {
+                setIsSyncingStorage(true);
+                try {
+                  const res = await migrateStorageMetadata(notes);
+                  showToast(`R2 Storage synced: ${res.totalCreated} metadata nodes created (${res.totalChecked} verified).`, "success");
+                } catch (err: any) {
+                  showToast(err?.message || "Storage metadata sync failed.", "error");
+                } finally {
+                  setIsSyncingStorage(false);
+                }
+              }}
+              className="w-full py-2 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750 text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center justify-center gap-2 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              id="sync-r2-metadata-btn"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-blue-500 ${isSyncingStorage ? "animate-spin" : ""}`} />
+              <span>{isSyncingStorage ? "Syncing R2 Hierarchy..." : "Sync R2 Storage Metadata"}</span>
+            </button>
+          </div>
         </aside>
 
         {/* =========================================================================
@@ -1776,6 +1807,10 @@ export default function AdminNotesDashboard({
               }));
               setSelectedSchoolClass(result.name);
               showToast(`Class "${result.name}" created.`, "success");
+              // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
+              createClassNode({ name: result.name, category: "school" }).catch((err) => {
+                console.warn("[AdminNotes] R2 class node creation warning:", err);
+              });
             } else if (result.nodeType === "new_gs_paper") {
               updateUpscHierarchy((prev) => ({
                 ...prev,
@@ -1783,6 +1818,10 @@ export default function AdminNotesDashboard({
               }));
               setSelectedUpscPaper(result.name);
               showToast(`GS Paper "${result.name}" created.`, "success");
+              // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
+              createClassNode({ name: result.name, category: "upsc" }).catch((err) => {
+                console.warn("[AdminNotes] R2 GS paper node creation warning:", err);
+              });
             } else if (result.nodeType === "add_subject") {
               if (result.className) {
                 updateSchoolHierarchy((prev) => {
@@ -1795,6 +1834,10 @@ export default function AdminNotesDashboard({
                 });
                 setSelectedSchoolSubject(result.name);
                 showToast(`Subject "${result.name}" added to ${result.className}.`, "success");
+                // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
+                createSubjectNode({ className: result.className, name: result.name, category: "school" }).catch((err) => {
+                  console.warn("[AdminNotes] R2 subject node creation warning:", err);
+                });
               } else if (result.gsPaper) {
                 updateUpscHierarchy((prev) => {
                   const cur = prev.subjects[result.gsPaper!] || [];
@@ -1806,6 +1849,10 @@ export default function AdminNotesDashboard({
                 });
                 setSelectedUpscSubject(result.name);
                 showToast(`Subject "${result.name}" added to ${result.gsPaper}.`, "success");
+                // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
+                createSubjectNode({ gsPaper: result.gsPaper, name: result.name, category: "upsc" }).catch((err) => {
+                  console.warn("[AdminNotes] R2 UPSC subject node creation warning:", err);
+                });
               }
             } else if (result.nodeType === "add_chapter" && result.className && result.subject && result.number) {
               updateSchoolHierarchy((prev) => {
@@ -1827,6 +1874,16 @@ export default function AdminNotesDashboard({
               setSelectedSchoolChapterNo(result.number);
               setSelectedSchoolChapterName(result.name);
               showToast(`Chapter ${result.number}: ${result.name} created.`, "success");
+              // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
+              createChapterNode({
+                className: result.className,
+                subject: result.subject!,
+                number: result.number!,
+                name: result.name,
+                category: "school"
+              }).catch((err) => {
+                console.warn("[AdminNotes] R2 chapter node creation warning:", err);
+              });
             } else if (result.nodeType === "add_module" && result.gsPaper && result.subject && result.number) {
               updateUpscHierarchy((prev) => {
                 const cur = prev.modules[result.gsPaper!]?.[result.subject!] || [];
@@ -1847,6 +1904,16 @@ export default function AdminNotesDashboard({
               setSelectedUpscModuleNo(result.number);
               setSelectedUpscModuleName(result.name);
               showToast(`Module ${result.number}: ${result.name} created.`, "success");
+              // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
+              createChapterNode({
+                gsPaper: result.gsPaper,
+                subject: result.subject!,
+                number: result.number!,
+                name: result.name,
+                category: "upsc"
+              }).catch((err) => {
+                console.warn("[AdminNotes] R2 module node creation warning:", err);
+              });
             }
 
             if (onRefresh) onRefresh();

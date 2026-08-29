@@ -21,11 +21,36 @@ export type StorageAction =
   | "signed-url"
   | "delete"
   | "delete-multiple"
+  | "delete-node"
   | "replace"
   | "list"
   | "exists"
   | "verify"
-  | "head";
+  | "head"
+  | "create-node"
+  | "get-node"
+  | "list-nodes"
+  | "migrate-hierarchy";
+
+export interface StorageNodeRequest {
+  bucket?: string;
+  id?: string;
+  name?: string;
+  type?: "class" | "subject" | "chapter" | "topic" | "gs_paper" | "module";
+  category?: "school" | "upsc";
+  className?: string;
+  gsPaper?: string;
+  subject?: string;
+  chapterNumber?: number;
+  chapterName?: string;
+  moduleNumber?: number;
+  moduleName?: string;
+  topicNumber?: number | string;
+  topicName?: string;
+  metadata?: Record<string, any>;
+  path?: string;
+  storageKey?: string;
+}
 
 export interface StorageUploadRequest {
   bucket?: string;

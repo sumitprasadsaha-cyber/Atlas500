@@ -3,6 +3,7 @@ import { handleOptions, sendSuccess, sendError } from "./_lib/responses.js";
 import { sanitizeKey, getMimeType, extractUploadPayload, parseRequestBody, buildCanonicalFilename, extractCleanExtension } from "./_lib/utils.js";
 import { uploadObjectToR2, deleteObjectFromR2, headObjectFromR2, getR2ServerConfig } from "./_lib/r2.js";
 import { buildCanonicalNoteMetadata, validateCanonicalNoteMetadata, NoteMetadata } from "../src/domain/notes/types.js";
+import { getHierarchyLineage } from "../src/utils/canonicalStorageKey.js";
 
 export const runtime = "nodejs";
 
@@ -150,7 +151,7 @@ export default async function handler(req: any, res: any) {
         const bucket = payload.bucket || fields.bucket || parsedBody.bucket || r2Config.bucket;
 
         try {
-          // Upload note file to canonical R2 key with mandatory HeadObject verification
+          // 1. Upload note file to canonical R2 key
           const uploadResult = await uploadObjectToR2({
             bucket,
             key: canonicalMeta.storagePath,
@@ -158,7 +159,50 @@ export default async function handler(req: any, res: any) {
             contentType: mimeType,
           });
 
-          // Upload metadata.json to the canonical folder
+          // 2. Mandatory HeadObject verification for uploaded note file (PutObject -> HeadObject -> Success)
+          const verifyNote = await headObjectFromR2({ bucket, key: canonicalMeta.storagePath });
+          if (!verifyNote || !verifyNote.exists) {
+            console.error(`[API Notes] HeadObject verification failed for uploaded note "${canonicalMeta.storagePath}".`);
+            return res.status(500).json({
+              success: false,
+              code: "UPLOAD_VERIFICATION_FAILED",
+              error: `Upload verification failed: HeadObject confirmed object does not exist in R2 for key "${canonicalMeta.storagePath}".`,
+            });
+          }
+
+          // 3. Ensure metadata.json exists for all ancestor hierarchy nodes (Class/GS Paper -> Subject -> Chapter/Module -> Topic)
+          const nowIso = new Date().toISOString();
+          const lineage = getHierarchyLineage(canonicalMeta);
+
+          for (const node of lineage) {
+            const check = await headObjectFromR2({ bucket, key: node.metadataKey });
+            if (!check.exists) {
+              const nodePayload = {
+                id: node.id,
+                name: node.name,
+                type: node.type,
+                category: node.category,
+                number: node.number,
+                folderPath: node.folderPath,
+                storageKey: node.metadataKey,
+                parentFolderPath: node.parentFolderPath,
+                parentMetadataKey: node.parentMetadataKey,
+                createdAt: nowIso,
+                updatedAt: nowIso,
+              };
+
+              await uploadObjectToR2({
+                bucket,
+                key: node.metadataKey,
+                body: Buffer.from(JSON.stringify(nodePayload, null, 2)),
+                contentType: "application/json",
+              });
+
+              await headObjectFromR2({ bucket, key: node.metadataKey });
+            }
+          }
+
+          // 4. Update immediate topic folder metadata.json with canonical NoteMetadata
           const metadataKey = `${canonicalMeta.folderPath}/metadata.json`;
           await uploadObjectToR2({
             bucket,
@@ -166,7 +210,7 @@ export default async function handler(req: any, res: any) {
             body: Buffer.from(JSON.stringify(canonicalMeta, null, 2)),
             contentType: "application/json",
           }).catch((err) => {
-            console.warn("[API Notes] Warning writing metadata.json:", err);
+            console.warn("[API Notes] Warning writing folder metadata.json:", err);
           });
         } catch (storageErr: any) {
           console.error("[API Notes] R2 upload error:", storageErr);

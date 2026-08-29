@@ -695,3 +695,197 @@ export async function listFromR2(params: {
   const data = await response.json();
   return data.objects || [];
 }
+
+/**
+ * Creates and verifies a hierarchy node metadata object in Cloudflare R2.
+ */
+export async function createR2Node(params: {
+  bucket?: string;
+  category?: "school" | "upsc";
+  type?: "class" | "subject" | "chapter" | "topic" | "gs_paper" | "module";
+  nodeType?: "class" | "subject" | "chapter" | "topic" | "gs_paper" | "module";
+  className?: string;
+  classGrade?: string;
+  gsPaper?: string;
+  generalStudiesPaper?: string;
+  subject?: string;
+  subjectName?: string;
+  chapterNumber?: number | string;
+  chapterNo?: number | string;
+  chapterName?: string;
+  chapterTitle?: string;
+  moduleNumber?: number | string;
+  moduleNo?: number | string;
+  moduleName?: string;
+  moduleTitle?: string;
+  topicNumber?: number | string;
+  topicNo?: number | string;
+  topicName?: string;
+  topicTitle?: string;
+  name?: string;
+  description?: string;
+  metadata?: Record<string, any>;
+}): Promise<{
+  success: boolean;
+  node: any;
+  createdCount: number;
+  createdNodes: any[];
+  storageKey: string;
+  folderPath: string;
+}> {
+  const bucket = getR2BucketName(params.bucket);
+  const baseUrl = getApiBaseUrl();
+
+  const response = await fetch(`${baseUrl}/api/storage?action=create-node`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...params,
+      bucket,
+    }),
+  });
+
+  if (!response.ok) {
+    let errMessage = `HTTP ${response.status}`;
+    try {
+      const parsed = await response.json();
+      errMessage = parsed.error || parsed.message || errMessage;
+    } catch {}
+    throw new Error(`Failed to create hierarchy node in R2: ${errMessage}`);
+  }
+
+  return await response.json();
+}
+
+/**
+ * Retrieves a hierarchy node's metadata.json from Cloudflare R2.
+ */
+export async function getR2Node(params: {
+  bucket?: string;
+  key?: string;
+  storageKey?: string;
+}): Promise<{ success: boolean; storageKey: string; node: any }> {
+  const bucket = getR2BucketName(params.bucket);
+  const baseUrl = getApiBaseUrl();
+
+  const response = await fetch(`${baseUrl}/api/storage?action=get-node`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      bucket,
+      key: params.key || params.storageKey,
+      storageKey: params.storageKey || params.key,
+    }),
+  });
+
+  if (!response.ok) {
+    let errMessage = `HTTP ${response.status}`;
+    try {
+      const parsed = await response.json();
+      errMessage = parsed.error || parsed.message || errMessage;
+    } catch {}
+    throw new Error(`Failed to retrieve hierarchy node from R2: ${errMessage}`);
+  }
+
+  return await response.json();
+}
+
+/**
+ * Discovers and lists all hierarchy nodes from Cloudflare R2 by querying metadata.json objects.
+ */
+export async function listR2Nodes(params?: {
+  bucket?: string;
+  category?: "school" | "upsc" | "all";
+  prefix?: string;
+}): Promise<{ success: boolean; category: string; count: number; nodes: any[] }> {
+  const bucket = getR2BucketName(params?.bucket);
+  const baseUrl = getApiBaseUrl();
+
+  const response = await fetch(`${baseUrl}/api/storage?action=list-nodes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      bucket,
+      category: params?.category || "all",
+      prefix: params?.prefix,
+    }),
+  });
+
+  if (!response.ok) {
+    let errMessage = `HTTP ${response.status}`;
+    try {
+      const parsed = await response.json();
+      errMessage = parsed.error || parsed.message || errMessage;
+    } catch {}
+    throw new Error(`Failed to list hierarchy nodes from R2: ${errMessage}`);
+  }
+
+  return await response.json();
+}
+
+/**
+ * Deletes a hierarchy node and cascades deletion to child objects in Cloudflare R2.
+ */
+export async function deleteR2Node(params: {
+  bucket?: string;
+  key?: string;
+  storageKey?: string;
+  folderPath?: string;
+}): Promise<{ success: boolean; deletedPrefix: string; deletedCount: number; deletedKeys: string[] }> {
+  const bucket = getR2BucketName(params.bucket);
+  const baseUrl = getApiBaseUrl();
+
+  const response = await fetch(`${baseUrl}/api/storage?action=delete-node`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      bucket,
+      key: params.key || params.storageKey,
+      storageKey: params.storageKey || params.key,
+      folderPath: params.folderPath,
+    }),
+  });
+
+  if (!response.ok) {
+    let errMessage = `HTTP ${response.status}`;
+    try {
+      const parsed = await response.json();
+      errMessage = parsed.error || parsed.message || errMessage;
+    } catch {}
+    throw new Error(`Failed to delete hierarchy node from R2: ${errMessage}`);
+  }
+
+  return await response.json();
+}
+
+/**
+ * Migrates and generates missing metadata.json files in Cloudflare R2 for existing notes.
+ */
+export async function migrateR2Hierarchy(params: {
+  bucket?: string;
+  notes: any[];
+}): Promise<{ success: boolean; totalChecked: number; totalCreated: number; createdKeys: string[] }> {
+  const bucket = getR2BucketName(params.bucket);
+  const baseUrl = getApiBaseUrl();
+
+  const response = await fetch(`${baseUrl}/api/storage?action=migrate-hierarchy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      bucket,
+      notes: params.notes,
+    }),
+  });
+
+  if (!response.ok) {
+    let errMessage = `HTTP ${response.status}`;
+    try {
+      const parsed = await response.json();
+      errMessage = parsed.error || parsed.message || errMessage;
+    } catch {}
+    throw new Error(`Failed to migrate hierarchy metadata in R2: ${errMessage}`);
+  }
+
+  return await response.json();
+}
+

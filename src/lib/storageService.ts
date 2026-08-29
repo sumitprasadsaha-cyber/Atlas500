@@ -17,6 +17,11 @@ import {
   deleteMultipleFromR2,
   listFromR2,
   verifyR2ObjectExists,
+  createR2Node,
+  getR2Node,
+  listR2Nodes,
+  deleteR2Node,
+  migrateR2Hierarchy,
   type R2UploadResult,
   type R2ObjectInfo,
 } from "./r2Client";
@@ -26,13 +31,23 @@ import {
   buildCanonicalStorageKey,
   getCanonicalFileName,
   getFileExtension,
+  getHierarchyLineage,
+  getClassMetadataKey,
+  getSubjectMetadataKey,
+  getChapterMetadataKey,
+  getTopicMetadataKey,
+  getGSPaperMetadataKey,
+  getUPSCOrSubjectMetadataKey,
+  getUPSCModuleMetadataKey,
+  getUPSCTopicMetadataKey,
   type CanonicalStorageKeyParams,
+  type HierarchyPathContext,
 } from "../utils/canonicalStorageKey";
 import { saveClassNoteDoc, deleteClassNoteDoc, getLocalClassNotes } from "./firestoreService";
 import { notesCacheService } from "./notesCacheService";
 import { notesLogger } from "./notesLogger";
 import { deleteTopicPracticeTest } from "./practiceTestService";
-import type { ClassNote } from "../types";
+import type { ClassNote, HierarchyNodeMetadata, HierarchyNodeType } from "../types";
 import { buildCanonicalNoteMetadata, validateCanonicalNoteMetadata } from "../domain/notes/types";
 
 // Re-export canonical key generator as single source of truth
@@ -1259,3 +1274,211 @@ export async function deleteFileFromStorage(
     throw new Error(`Cloudflare R2 deletion failed: ${errorMsg}`);
   }
 }
+
+/**
+ * =========================================================================
+ * UNIFIED METADATA-DRIVEN STORAGE SERVICE (Atlas v5.0.8)
+ * Explicit metadata.json objects in Cloudflare R2 for every Class, Subject, Chapter, Topic.
+ * Atomic creation, HeadObject verification, and unified operations.
+ * =========================================================================
+ */
+
+export interface CreateClassNodeParams {
+  name: string; // e.g. "Class 9" or "Class 10" or "UPSC"
+  category?: "school" | "upsc";
+  description?: string;
+  metadata?: Record<string, any>;
+}
+
+export async function createClassNode(params: CreateClassNodeParams): Promise<{
+  success: boolean;
+  node: HierarchyNodeMetadata;
+  storageKey: string;
+}> {
+  const isUPSC = params.category === "upsc" || params.name.trim().toUpperCase() === "UPSC";
+  const result = await createR2Node({
+    category: isUPSC ? "upsc" : "school",
+    type: isUPSC ? "gs_paper" : "class",
+    className: params.name,
+    gsPaper: isUPSC ? params.name : undefined,
+    name: params.name,
+    description: params.description,
+    metadata: params.metadata,
+  });
+
+  return {
+    success: true,
+    node: result.node,
+    storageKey: result.storageKey,
+  };
+}
+
+export interface CreateSubjectNodeParams {
+  className?: string;
+  gsPaper?: string;
+  name: string; // e.g. "Mathematics", "Science", "Polity"
+  category?: "school" | "upsc";
+  description?: string;
+  metadata?: Record<string, any>;
+}
+
+export async function createSubjectNode(params: CreateSubjectNodeParams): Promise<{
+  success: boolean;
+  node: HierarchyNodeMetadata;
+  storageKey: string;
+}> {
+  const isUPSC = params.category === "upsc" || params.className?.trim().toUpperCase() === "UPSC" || Boolean(params.gsPaper);
+  const result = await createR2Node({
+    category: isUPSC ? "upsc" : "school",
+    type: "subject",
+    className: params.className || (isUPSC ? "UPSC" : "Class 10"),
+    gsPaper: params.gsPaper || (isUPSC ? "GS1" : undefined),
+    subject: params.name,
+    subjectName: params.name,
+    name: params.name,
+    description: params.description,
+    metadata: params.metadata,
+  });
+
+  return {
+    success: true,
+    node: result.node,
+    storageKey: result.storageKey,
+  };
+}
+
+export interface CreateChapterNodeParams {
+  className?: string;
+  gsPaper?: string;
+  subject: string;
+  number: number | string; // Chapter or Module number (e.g. 5)
+  name: string; // Chapter or Module title (e.g. "Exploring Mixtures")
+  category?: "school" | "upsc";
+  description?: string;
+  metadata?: Record<string, any>;
+}
+
+export async function createChapterNode(params: CreateChapterNodeParams): Promise<{
+  success: boolean;
+  node: HierarchyNodeMetadata;
+  storageKey: string;
+}> {
+  const isUPSC = params.category === "upsc" || params.className?.trim().toUpperCase() === "UPSC" || Boolean(params.gsPaper);
+  const num = typeof params.number === "number" ? params.number : parseInt(String(params.number).replace(/\D/g, ""), 10) || 1;
+
+  const result = await createR2Node({
+    category: isUPSC ? "upsc" : "school",
+    type: isUPSC ? "module" : "chapter",
+    className: params.className || (isUPSC ? "UPSC" : "Class 10"),
+    gsPaper: params.gsPaper || (isUPSC ? "GS1" : undefined),
+    subject: params.subject,
+    subjectName: params.subject,
+    chapterNumber: !isUPSC ? num : undefined,
+    chapterNo: !isUPSC ? num : undefined,
+    chapterName: !isUPSC ? params.name : undefined,
+    moduleNumber: isUPSC ? num : undefined,
+    moduleNo: isUPSC ? num : undefined,
+    moduleName: isUPSC ? params.name : undefined,
+    name: params.name,
+    description: params.description,
+    metadata: params.metadata,
+  });
+
+  return {
+    success: true,
+    node: result.node,
+    storageKey: result.storageKey,
+  };
+}
+
+export interface CreateTopicNodeParams {
+  className?: string;
+  gsPaper?: string;
+  subject: string;
+  chapterNumber?: number | string;
+  chapterName?: string;
+  moduleNumber?: number | string;
+  moduleName?: string;
+  number?: number | string; // Topic number (e.g. 1)
+  name: string; // Topic title (e.g. "Introduction")
+  category?: "school" | "upsc";
+  description?: string;
+  metadata?: Record<string, any>;
+}
+
+export async function createTopicNode(params: CreateTopicNodeParams): Promise<{
+  success: boolean;
+  node: HierarchyNodeMetadata;
+  storageKey: string;
+}> {
+  const isUPSC = params.category === "upsc" || params.className?.trim().toUpperCase() === "UPSC" || Boolean(params.gsPaper);
+  const topicNum = params.number !== undefined ? (typeof params.number === "number" ? params.number : parseInt(String(params.number).replace(/\D/g, ""), 10) || 1) : 1;
+
+  const result = await createR2Node({
+    category: isUPSC ? "upsc" : "school",
+    type: "topic",
+    className: params.className || (isUPSC ? "UPSC" : "Class 10"),
+    gsPaper: params.gsPaper || (isUPSC ? "GS1" : undefined),
+    subject: params.subject,
+    subjectName: params.subject,
+    chapterNumber: params.chapterNumber,
+    chapterNo: params.chapterNumber,
+    chapterName: params.chapterName,
+    moduleNumber: params.moduleNumber,
+    moduleNo: params.moduleNumber,
+    moduleName: params.moduleName,
+    topicNumber: topicNum,
+    topicNo: topicNum,
+    topicName: params.name,
+    name: params.name,
+    description: params.description,
+    metadata: params.metadata,
+  });
+
+  return {
+    success: true,
+    node: result.node,
+    storageKey: result.storageKey,
+  };
+}
+
+/**
+ * Discovers and lists all hierarchy nodes from Cloudflare R2 by reading metadata.json objects.
+ */
+export async function listHierarchyNodes(params?: {
+  category?: "school" | "upsc" | "all";
+  prefix?: string;
+}): Promise<HierarchyNodeMetadata[]> {
+  const res = await listR2Nodes(params);
+  return res.nodes || [];
+}
+
+/**
+ * Deletes a hierarchy node and all nested child notes/metadata objects.
+ */
+export async function deleteHierarchyNode(params: {
+  storageKey?: string;
+  folderPath?: string;
+}): Promise<{ success: boolean; deletedCount: number }> {
+  const res = await deleteR2Node(params);
+  return {
+    success: true,
+    deletedCount: res.deletedCount,
+  };
+}
+
+/**
+ * Migration Utility: Scans notes and ensures all metadata.json files are generated in R2.
+ */
+export async function migrateStorageMetadata(notes?: ClassNote[]): Promise<{
+  success: boolean;
+  totalChecked: number;
+  totalCreated: number;
+  createdKeys: string[];
+}> {
+  const notesToMigrate = notes && notes.length > 0 ? notes : getLocalClassNotes();
+  const res = await migrateR2Hierarchy({ notes: notesToMigrate });
+  console.log(`[StorageService] Hierarchy metadata migration completed: Checked=${res.totalChecked}, Created=${res.totalCreated}`);
+  return res;
+}
+

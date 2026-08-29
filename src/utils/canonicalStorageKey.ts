@@ -337,3 +337,351 @@ export function buildImageStorageKey(category: string, filename?: string, custom
   return `images/${catFolder}/${canonicalFileName}`;
 }
 
+/**
+ * =========================================================================
+ * METADATA-DRIVEN HIERARCHY PATH BUILDERS
+ * Cloudflare R2 has no native folders; every node in the hierarchy
+ * (Class, Subject, Chapter, Topic) has an explicit metadata.json object.
+ * =========================================================================
+ */
+
+export interface HierarchyPathContext {
+  category?: "school" | "upsc";
+  type?: "school" | "upsc" | "class" | "subject" | "chapter" | "topic" | "gs_paper" | "module";
+  nodeType?: "class" | "subject" | "chapter" | "topic" | "gs_paper" | "module";
+  className?: string;
+  classGrade?: string;
+  gsPaper?: string;
+  generalStudiesPaper?: string;
+  subject?: string;
+  subjectName?: string;
+  chapterNumber?: number | string;
+  chapterNo?: number | string;
+  chapterName?: string;
+  chapterTitle?: string;
+  moduleNumber?: number | string;
+  moduleNo?: number | string;
+  moduleName?: string;
+  moduleTitle?: string;
+  topicNumber?: number | string;
+  topicNo?: number | string;
+  topicName?: string;
+  topicTitle?: string;
+  partLabel?: string;
+}
+
+/**
+ * School Hierarchy Metadata Paths
+ */
+export function getClassFolderPath(className: string): string {
+  return `class_notes/${formatClassSegment(className)}`;
+}
+
+export function getClassMetadataKey(className: string): string {
+  return `${getClassFolderPath(className)}/metadata.json`;
+}
+
+export function getSubjectFolderPath(className: string, subject: string): string {
+  const classPath = getClassFolderPath(className);
+  const cleanSubject = sanitizeFolderSegment(subject, "General");
+  return `${classPath}/${cleanSubject}`;
+}
+
+export function getSubjectMetadataKey(className: string, subject: string): string {
+  return `${getSubjectFolderPath(className, subject)}/metadata.json`;
+}
+
+export function getChapterFolderPath(
+  className: string,
+  subject: string,
+  chNo: number | string,
+  chName?: string | null
+): string {
+  const subjectPath = getSubjectFolderPath(className, subject);
+  const chFolder = formatChapterSegment(chNo, chName);
+  return `${subjectPath}/${chFolder}`;
+}
+
+export function getChapterMetadataKey(
+  className: string,
+  subject: string,
+  chNo: number | string,
+  chName?: string | null
+): string {
+  return `${getChapterFolderPath(className, subject, chNo, chName)}/metadata.json`;
+}
+
+export function getTopicFolderPath(
+  className: string,
+  subject: string,
+  chNo: number | string,
+  chName: string | null | undefined,
+  topicNo: number | string | null | undefined,
+  topicName: string | null | undefined
+): string {
+  const chapterPath = getChapterFolderPath(className, subject, chNo, chName);
+  const topicFolder = formatTopicSegment(topicNo, topicName) || "Topic_01_General";
+  return `${chapterPath}/${topicFolder}`;
+}
+
+export function getTopicMetadataKey(
+  className: string,
+  subject: string,
+  chNo: number | string,
+  chName: string | null | undefined,
+  topicNo: number | string | null | undefined,
+  topicName: string | null | undefined
+): string {
+  return `${getTopicFolderPath(className, subject, chNo, chName, topicNo, topicName)}/metadata.json`;
+}
+
+/**
+ * UPSC Hierarchy Metadata Paths
+ */
+export function getGSPaperFolderPath(gsPaper: string): string {
+  return `upsc/${formatGSPaperSegment(gsPaper)}`;
+}
+
+export function getGSPaperMetadataKey(gsPaper: string): string {
+  return `${getGSPaperFolderPath(gsPaper)}/metadata.json`;
+}
+
+export function getUPSCOrSubjectFolderPath(gsPaper: string, subject: string): string {
+  const paperPath = getGSPaperFolderPath(gsPaper);
+  const cleanSubject = sanitizeFolderSegment(subject, "General");
+  return `${paperPath}/${cleanSubject}`;
+}
+
+export function getUPSCOrSubjectMetadataKey(gsPaper: string, subject: string): string {
+  return `${getUPSCOrSubjectFolderPath(gsPaper, subject)}/metadata.json`;
+}
+
+export function getUPSCModuleFolderPath(
+  gsPaper: string,
+  subject: string,
+  modNo: number | string,
+  modName?: string | null
+): string {
+  const subjectPath = getUPSCOrSubjectFolderPath(gsPaper, subject);
+  const modFolder = formatModuleSegment(modNo, modName);
+  return `${subjectPath}/${modFolder}`;
+}
+
+export function getUPSCModuleMetadataKey(
+  gsPaper: string,
+  subject: string,
+  modNo: number | string,
+  modName?: string | null
+): string {
+  return `${getUPSCModuleFolderPath(gsPaper, subject, modNo, modName)}/metadata.json`;
+}
+
+export function getUPSCTopicFolderPath(
+  gsPaper: string,
+  subject: string,
+  modNo: number | string,
+  modName: string | null | undefined,
+  topicNo: number | string | null | undefined,
+  topicName: string | null | undefined
+): string {
+  const modulePath = getUPSCModuleFolderPath(gsPaper, subject, modNo, modName);
+  const topicFolder = formatTopicSegment(topicNo, topicName) || "Topic_01_General";
+  return `${modulePath}/${topicFolder}`;
+}
+
+export function getUPSCTopicMetadataKey(
+  gsPaper: string,
+  subject: string,
+  modNo: number | string,
+  modName: string | null | undefined,
+  topicNo: number | string | null | undefined,
+  topicName: string | null | undefined
+): string {
+  return `${getUPSCTopicFolderPath(gsPaper, subject, modNo, modName, topicNo, topicName)}/metadata.json`;
+}
+
+export interface HierarchyNodeInfo {
+  id: string;
+  name: string;
+  type: "class" | "subject" | "chapter" | "topic" | "gs_paper" | "module";
+  category: "school" | "upsc";
+  number?: number;
+  folderPath: string;
+  metadataKey: string;
+  parentFolderPath?: string;
+  parentMetadataKey?: string;
+}
+
+/**
+ * Computes all ancestor and current hierarchy node metadata paths for a given note or hierarchy position.
+ * Returns an ordered array of nodes from Root -> Class/GS Paper -> Subject -> Chapter/Module -> Topic.
+ */
+export function getHierarchyLineage(ctx: HierarchyPathContext): HierarchyNodeInfo[] {
+  const rawClass = ctx.className || ctx.classGrade || "";
+  const isUPSC =
+    ctx.category === "upsc" ||
+    ctx.type === "upsc" ||
+    rawClass.trim().toUpperCase() === "UPSC" ||
+    Boolean(ctx.gsPaper || ctx.generalStudiesPaper || ctx.moduleNumber || ctx.moduleNo || ctx.moduleName || ctx.moduleTitle);
+
+  const lineage: HierarchyNodeInfo[] = [];
+
+  if (isUPSC) {
+    const rawPaper = ctx.gsPaper || ctx.generalStudiesPaper || "GS1";
+    const paperFolder = formatGSPaperSegment(rawPaper);
+    const paperPath = `upsc/${paperFolder}`;
+    const paperKey = `${paperPath}/metadata.json`;
+
+    lineage.push({
+      id: `upsc_paper_${paperFolder.toLowerCase()}`,
+      name: rawPaper,
+      type: "gs_paper",
+      category: "upsc",
+      folderPath: paperPath,
+      metadataKey: paperKey,
+    });
+
+    const rawSubj = ctx.subject || ctx.subjectName;
+    if (rawSubj) {
+      const cleanSubj = sanitizeFolderSegment(rawSubj, "General");
+      const subjPath = `${paperPath}/${cleanSubj}`;
+      const subjKey = `${subjPath}/metadata.json`;
+
+      lineage.push({
+        id: `upsc_subj_${paperFolder.toLowerCase()}_${cleanSubj.toLowerCase()}`,
+        name: rawSubj,
+        type: "subject",
+        category: "upsc",
+        folderPath: subjPath,
+        metadataKey: subjKey,
+        parentFolderPath: paperPath,
+        parentMetadataKey: paperKey,
+      });
+
+      const rawModNo = ctx.moduleNumber ?? ctx.moduleNo ?? ctx.chapterNumber ?? ctx.chapterNo;
+      const rawModName = ctx.moduleName || ctx.moduleTitle || ctx.chapterName || ctx.chapterTitle;
+
+      if (rawModNo !== undefined && rawModNo !== null) {
+        const modNo = typeof rawModNo === "number" ? rawModNo : parseInt(String(rawModNo).replace(/\D/g, ""), 10) || 1;
+        const modFolder = formatModuleSegment(modNo, rawModName);
+        const modPath = `${subjPath}/${modFolder}`;
+        const modKey = `${modPath}/metadata.json`;
+
+        lineage.push({
+          id: `upsc_mod_${paperFolder.toLowerCase()}_${cleanSubj.toLowerCase()}_${modNo}`,
+          name: rawModName || `Module ${modNo}`,
+          type: "module",
+          category: "upsc",
+          number: modNo,
+          folderPath: modPath,
+          metadataKey: modKey,
+          parentFolderPath: subjPath,
+          parentMetadataKey: subjKey,
+        });
+
+        const rawTopicNo = ctx.topicNumber ?? ctx.topicNo;
+        const rawTopicName = ctx.topicName || ctx.topicTitle || ctx.partLabel;
+
+        if (rawTopicNo !== undefined || rawTopicName) {
+          const topicFolder = formatTopicSegment(rawTopicNo, rawTopicName) || "Topic_01_General";
+          const topicPath = `${modPath}/${topicFolder}`;
+          const topicKey = `${topicPath}/metadata.json`;
+          const topicNum = rawTopicNo !== undefined ? (typeof rawTopicNo === "number" ? rawTopicNo : parseInt(String(rawTopicNo).replace(/\D/g, ""), 10) || 1) : undefined;
+
+          lineage.push({
+            id: `upsc_topic_${paperFolder.toLowerCase()}_${cleanSubj.toLowerCase()}_${modNo}_${topicFolder.toLowerCase()}`,
+            name: rawTopicName || `Topic ${rawTopicNo || 1}`,
+            type: "topic",
+            category: "upsc",
+            number: topicNum,
+            folderPath: topicPath,
+            metadataKey: topicKey,
+            parentFolderPath: modPath,
+            parentMetadataKey: modKey,
+          });
+        }
+      }
+    }
+  } else {
+    // School hierarchy
+    const cleanClass = rawClass || "Class 10";
+    const classFolder = formatClassSegment(cleanClass);
+    const classPath = `class_notes/${classFolder}`;
+    const classKey = `${classPath}/metadata.json`;
+
+    lineage.push({
+      id: `school_class_${classFolder.toLowerCase()}`,
+      name: cleanClass,
+      type: "class",
+      category: "school",
+      folderPath: classPath,
+      metadataKey: classKey,
+    });
+
+    const rawSubj = ctx.subject || ctx.subjectName;
+    if (rawSubj) {
+      const cleanSubj = sanitizeFolderSegment(rawSubj, "General");
+      const subjPath = `${classPath}/${cleanSubj}`;
+      const subjKey = `${subjPath}/metadata.json`;
+
+      lineage.push({
+        id: `school_subj_${classFolder.toLowerCase()}_${cleanSubj.toLowerCase()}`,
+        name: rawSubj,
+        type: "subject",
+        category: "school",
+        folderPath: subjPath,
+        metadataKey: subjKey,
+        parentFolderPath: classPath,
+        parentMetadataKey: classKey,
+      });
+
+      const rawChNo = ctx.chapterNumber ?? ctx.chapterNo;
+      const rawChName = ctx.chapterName || ctx.chapterTitle;
+
+      if (rawChNo !== undefined && rawChNo !== null) {
+        const chNo = typeof rawChNo === "number" ? rawChNo : parseInt(String(rawChNo).replace(/\D/g, ""), 10) || 1;
+        const chFolder = formatChapterSegment(chNo, rawChName);
+        const chPath = `${subjPath}/${chFolder}`;
+        const chKey = `${chPath}/metadata.json`;
+
+        lineage.push({
+          id: `school_ch_${classFolder.toLowerCase()}_${cleanSubj.toLowerCase()}_${chNo}`,
+          name: rawChName || `Chapter ${chNo}`,
+          type: "chapter",
+          category: "school",
+          number: chNo,
+          folderPath: chPath,
+          metadataKey: chKey,
+          parentFolderPath: subjPath,
+          parentMetadataKey: subjKey,
+        });
+
+        const rawTopicNo = ctx.topicNumber ?? ctx.topicNo;
+        const rawTopicName = ctx.topicName || ctx.topicTitle || ctx.partLabel;
+
+        if (rawTopicNo !== undefined || rawTopicName) {
+          const topicFolder = formatTopicSegment(rawTopicNo, rawTopicName) || "Topic_01_General";
+          const topicPath = `${chPath}/${topicFolder}`;
+          const topicKey = `${topicPath}/metadata.json`;
+          const topicNum = rawTopicNo !== undefined ? (typeof rawTopicNo === "number" ? rawTopicNo : parseInt(String(rawTopicNo).replace(/\D/g, ""), 10) || 1) : undefined;
+
+          lineage.push({
+            id: `school_topic_${classFolder.toLowerCase()}_${cleanSubj.toLowerCase()}_${chNo}_${topicFolder.toLowerCase()}`,
+            name: rawTopicName || `Topic ${rawTopicNo || 1}`,
+            type: "topic",
+            category: "school",
+            number: topicNum,
+            folderPath: topicPath,
+            metadataKey: topicKey,
+            parentFolderPath: chPath,
+            parentMetadataKey: chKey,
+          });
+        }
+      }
+    }
+  }
+
+  return lineage;
+}
+
+

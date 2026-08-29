@@ -1,3 +1,31 @@
+export type HierarchyNodeType = "class" | "subject" | "chapter" | "topic" | "gs_paper" | "module";
+
+export interface HierarchyNodeMetadata {
+  id: string;
+  name: string;
+  type: HierarchyNodeType;
+  category: "school" | "upsc";
+  createdAt: string;
+  updatedAt: string;
+  number?: number;
+  parentId?: string;
+  parentPath?: string;
+  path: string; // e.g. class_notes/Class_9/Science/Chapter_05_Exploring_Mixtures
+  storageKey: string; // e.g. class_notes/Class_9/Science/Chapter_05_Exploring_Mixtures/metadata.json
+  className?: string;
+  gsPaper?: string;
+  subject?: string;
+  chapterNumber?: number;
+  chapterName?: string;
+  moduleNumber?: number;
+  moduleName?: string;
+  topicNumber?: number | string;
+  topicName?: string;
+  metadata?: Record<string, any>;
+  childrenCount?: number;
+  notesCount?: number;
+}
+
 export interface ClassNote {
   id: string;
   isUPSC?: boolean;
