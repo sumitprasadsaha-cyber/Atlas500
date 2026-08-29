@@ -406,3 +406,22 @@ export async function repairStorageIntegrity(
     removedNotes,
   };
 }
+
+/**
+ * Verifies all topic notes across Firestore and Cloudflare R2 without performing destructive modifications.
+ */
+export async function verifyAllTopicNotes(
+  onProgress?: (checked: number, total: number, currentNoteTitle: string) => void
+): Promise<StorageIntegrityReport> {
+  return auditStorageIntegrity(onProgress);
+}
+
+/**
+ * Canonical StorageIntegrityService providing non-destructive auditing and automated self-healing.
+ */
+export const StorageIntegrityService = {
+  verifyAllTopicNotes,
+  auditStorageIntegrity,
+  repairStorageIntegrity,
+};
+

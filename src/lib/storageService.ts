@@ -206,10 +206,16 @@ export async function uploadTopicNote(params: UploadTopicNoteParams): Promise<Cl
 
   const createdNote: ClassNote = {
     id: noteId,
+    noteId: noteId,
+    classId: isUPSC ? "upsc" : (metadata.classGrade || metadata.className || "class_10").toLowerCase().replace(/\s+/g, "_"),
+    className: metadata.classGrade || metadata.className || "Class 10",
     classGrade: metadata.classGrade || metadata.className || "Class 10",
+    subjectId: (metadata.subject || metadata.subjectName || "general").toLowerCase().replace(/\s+/g, "_"),
     subject: metadata.subject || metadata.subjectName || "General",
+    chapterId: isUPSC ? `module_${chapterNo || 1}` : `chapter_${chapterNo || 1}`,
     chapterNo: Number(chapterNo) || 1,
     chapterName: String(chapterName || "Chapter 1"),
+    topicId: metadata.topicNumber !== undefined ? `topic_${metadata.topicNumber}` : undefined,
     topicNo: metadata.topicNumber ?? metadata.topicNo,
     topicName: metadata.topicName || metadata.topicTitle || metadata.title || "Topic Note",
     partLabel: metadata.partLabel,
@@ -217,6 +223,7 @@ export async function uploadTopicNote(params: UploadTopicNoteParams): Promise<Cl
     originalFilename: rawFileName,
     pdfFileName: canonicalFileName,
     objectKey: canonicalStorageKey,
+    bucket: bucket,
     storageKey: canonicalStorageKey,
     storagePath: canonicalStorageKey,
     r2Key: canonicalStorageKey,
@@ -230,12 +237,21 @@ export async function uploadTopicNote(params: UploadTopicNoteParams): Promise<Cl
     allowedStudentIds: metadata.allowedStudentIds,
     allowedClasses: metadata.allowedClasses,
     uploadedBy: metadata.uploadedBy || "Admin",
+    uploadedAt: new Date().toISOString(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 
-  // 6. Persist to Firestore database
-  await saveClassNoteDoc(createdNote);
+  // 6. Persist to Firestore database (with immediate R2 rollback on failure)
+  try {
+    await saveClassNoteDoc(createdNote);
+  } catch (dbErr: any) {
+    console.error(`[StorageService] Firestore write failed, rolling back uploaded R2 object "${canonicalStorageKey}":`, dbErr);
+    await deleteFromR2({ bucket, key: canonicalStorageKey }).catch((delErr) => {
+      console.warn(`[StorageService] Warning during R2 rollback:`, delErr);
+    });
+    throw new Error(`Database save failed: ${dbErr?.message || "Failed to persist note record"}. Upload rolled back.`);
+  }
 
   // 7. Logging: Database Update
   console.log(`[StorageService] Database Update Success: noteId="${createdNote.id}", objectKey="${canonicalStorageKey}"`);
@@ -503,6 +519,40 @@ export async function getTopicNote(params: GetTopicNoteParams): Promise<(ClassNo
     downloadUrl,
   };
 }
+
+export interface VerifyObjectExistsParams {
+  objectKey: string;
+  bucket?: string;
+}
+
+/**
+ * 5. Storage Verification Pipeline
+ * Verifies existence of binary object in Cloudflare R2 via HeadObject.
+ */
+export async function verifyObjectExists(params: VerifyObjectExistsParams | string): Promise<{
+  exists: boolean;
+  size?: number;
+  contentLength?: number;
+  contentType?: string;
+  lastModified?: string;
+  etag?: string;
+}> {
+  const key = typeof params === "string" ? params : params.objectKey;
+  const bucket = typeof params === "string" ? getR2BucketName() : (params.bucket || getR2BucketName());
+  const cleanKey = (key || "").replace(/^\/+/, "");
+  return verifyR2ObjectExists({ bucket, key: cleanKey });
+}
+
+/**
+ * Canonical StorageService implementing all required methods for Topic Notes architecture.
+ */
+export const StorageService = {
+  uploadTopicNote,
+  replaceTopicNote,
+  deleteTopicNote,
+  getTopicNote,
+  verifyObjectExists,
+};
 
 const PDF_MIME_TYPE = "application/pdf";
 

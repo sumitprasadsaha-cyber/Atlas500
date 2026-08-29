@@ -59,20 +59,27 @@ export interface SchoolNote {
   type: "school";
   noteType: "school";
   id: string;
+  noteId?: string;
+  classId?: string;
   className: string; // e.g. "Class 10"
   classFolder: string; // e.g. "Class_10"
+  subjectId?: string;
   subject: string; // e.g. "Mathematics"
+  chapterId?: string;
   chapterNumber: number; // e.g. 1
   chapterName: string; // e.g. "Real Numbers"
   chapterFolder: string; // e.g. "Chapter_01_Real_Numbers"
+  topicId?: string;
   topicNumber?: number; // e.g. 2 (optional)
   topicName?: string; // e.g. "Examples" (optional)
   topicFolder?: string; // e.g. "Topic_02_Examples" (optional)
   hasTopic: boolean;
   folderPath: string; // Directory containing the note
   storagePath: string; // Full R2 object key: class_notes/Class_10/Mathematics/Chapter_01_Real_Numbers/Topic_02_Examples/note.pdf
-  r2Key: string; // Alias for storagePath
-  downloadKey: string; // Alias for storagePath
+  objectKey: string; // Immutable Cloudflare R2 object key (source of truth for binary)
+  bucket: string;
+  r2Key: string; // Alias for storagePath / objectKey
+  downloadKey: string; // Alias for storagePath / objectKey
   practiceTestPath: string; // Reserved future path: class_notes/.../practice_tests/
   pdfUrl: string;
   fileName: string;
@@ -105,22 +112,29 @@ export interface UPSCNote {
   type: "upsc";
   noteType: "upsc";
   id: string;
+  noteId?: string;
+  classId?: string;
   className: "UPSC";
   classFolder: "upsc";
   gsPaper: string; // e.g. "General Studies Paper II"
   gsPaperFolder: string; // e.g. "GS2"
+  subjectId?: string;
   subject: string; // e.g. "Polity"
+  chapterId?: string;
   moduleNumber: number; // e.g. 3
   moduleName: string; // e.g. "Fundamental Rights"
   moduleFolder: string; // e.g. "Module_03_Fundamental_Rights"
+  topicId?: string;
   topicNumber?: number; // e.g. 1 (optional)
   topicName?: string; // e.g. "Basics" (optional)
   topicFolder?: string; // e.g. "Topic_01_Basics" (optional)
   hasTopic: boolean;
   folderPath: string; // Directory containing the note
   storagePath: string; // Full R2 object key: upsc/GS2/Polity/Module_03_Fundamental_Rights/Topic_01_Basics/note.pdf
-  r2Key: string; // Alias for storagePath
-  downloadKey: string; // Alias for storagePath
+  objectKey: string; // Immutable Cloudflare R2 object key (source of truth for binary)
+  bucket: string;
+  r2Key: string; // Alias for storagePath / objectKey
+  downloadKey: string; // Alias for storagePath / objectKey
   practiceTestPath: string; // Reserved future path: upsc/.../practice_tests/
   pdfUrl: string;
   fileName: string;
@@ -203,6 +217,13 @@ export interface NoteFormInput {
   fileType?: "pdf" | "image";
 
   // Access & persistence
+  bucket?: string;
+  noteId?: string;
+  classId?: string;
+  subjectId?: string;
+  chapterId?: string;
+  topicId?: string;
+  objectKey?: string;
   visibility?: "all" | "selected" | "hidden" | string;
   allowedStudentIds?: string[];
   allowedClasses?: string[];
@@ -540,27 +561,35 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
     const id = input.id || input.documentId || generatedId;
     const searchableText = `UPSC ${gsInfo.gsPaper} ${subject} Module ${moduleNumber} ${rawModName} ${parsedTopicNumber ? `Topic ${parsedTopicNumber}` : ""} ${parsedTopicName || ""} ${canonicalFileName}`.trim();
 
-    const rawKey = input.storagePath || input.storageKey || input.r2Key || input.downloadKey || paths.storagePath;
+    const rawKey = input.objectKey || input.storagePath || input.storageKey || input.r2Key || input.downloadKey || paths.storagePath;
     const immutableKey = sanitizeCanonicalStorageKey(rawKey, mimeType);
+    const bucket = input.bucket || "academy-connect-files";
 
     return {
       type: "upsc",
       noteType: "upsc",
       id,
+      noteId: id,
+      classId: input.classId || "upsc",
       className: "UPSC",
       classFolder: "upsc",
       gsPaper: gsInfo.gsPaper,
       gsPaperFolder: gsInfo.gsPaperFolder,
+      subjectId: input.subjectId || sanitizeFolderName(subject).toLowerCase(),
       subject,
+      chapterId: input.chapterId || `module_${moduleNumber}`,
       moduleNumber,
       moduleName: rawModName,
       moduleFolder,
+      topicId: input.topicId || (parsedTopicNumber ? `topic_${parsedTopicNumber}` : undefined),
       topicNumber: parsedTopicNumber,
       topicName: parsedTopicName,
       topicFolder,
       hasTopic,
       folderPath: paths.folderPath,
       storagePath: immutableKey,
+      objectKey: immutableKey,
+      bucket,
       r2Key: immutableKey,
       downloadKey: immutableKey,
       practiceTestPath: paths.practiceTestPath,
@@ -610,25 +639,33 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
     const id = input.id || input.documentId || generatedId;
     const searchableText = `${classInfo.className} ${subject} Chapter ${chapterNumber} ${rawChName} ${parsedTopicNumber ? `Topic ${parsedTopicNumber}` : ""} ${parsedTopicName || ""} ${canonicalFileName}`.trim();
 
-    const rawKey = input.storagePath || input.storageKey || input.r2Key || input.downloadKey || paths.storagePath;
+    const rawKey = input.objectKey || input.storagePath || input.storageKey || input.r2Key || input.downloadKey || paths.storagePath;
     const immutableKey = sanitizeCanonicalStorageKey(rawKey, mimeType);
+    const bucket = input.bucket || "academy-connect-files";
 
     return {
       type: "school",
       noteType: "school",
       id,
+      noteId: id,
+      classId: input.classId || classInfo.classFolder.toLowerCase(),
       className: classInfo.className,
       classFolder: classInfo.classFolder,
+      subjectId: input.subjectId || sanitizeFolderName(subject).toLowerCase(),
       subject,
+      chapterId: input.chapterId || `chapter_${chapterNumber}`,
       chapterNumber,
       chapterName: rawChName,
       chapterFolder,
+      topicId: input.topicId || (parsedTopicNumber ? `topic_${parsedTopicNumber}` : undefined),
       topicNumber: parsedTopicNumber,
       topicName: parsedTopicName,
       topicFolder,
       hasTopic,
       folderPath: paths.folderPath,
       storagePath: immutableKey,
+      objectKey: immutableKey,
+      bucket,
       r2Key: immutableKey,
       downloadKey: immutableKey,
       practiceTestPath: paths.practiceTestPath,

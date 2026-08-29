@@ -28,6 +28,7 @@ export interface HierarchyNodeMetadata {
 
 export interface ClassNote {
   id: string;
+  noteId?: string;
   isUPSC?: boolean;
   class?: string;
   classGrade: string; // e.g. "Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "UPSC"
@@ -41,8 +42,10 @@ export interface ClassNote {
   className?: string; // e.g. "Class 9" or "UPSC"
   subjectId?: string; // e.g. "mathematics"
   subjectName?: string; // e.g. "Mathematics"
+  chapterId?: string; // e.g. "chapter_1"
   chapterNumber?: number; // e.g. 1
   chapterTitle?: string; // e.g. "Number Systems"
+  topicId?: string; // e.g. "topic_1"
   topicNumber?: number | string; // e.g. 1
   topicTitle?: string; // e.g. "Introduction"
   r2Key?: string; // Hierarchical R2 path: class_notes/Class_9/Mathematics/Chapter_01_Number_Systems/Topic_01_Introduction/note.pdf
