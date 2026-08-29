@@ -14,8 +14,9 @@ import {
   extractHierarchyFromNotes 
 } from "./curriculumService";
 import { getLocalClassNotes } from "./firestoreService";
+import { repairStorageIntegrity } from "./storageIntegrityService";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 const STORAGE_KEY_SCHEMA_VERSION = "tuition_database_schema_version";
 
 export interface DatabaseSchemaInfo {
@@ -98,6 +99,13 @@ export async function runDatabaseMigrationsIfNeeded(): Promise<void> {
       // Save merged hierarchies (will not destroy anything)
       await saveSchoolHierarchy(mergedSchool);
       await saveUpscHierarchy(mergedUpsc);
+
+      // Step 2: Automatic Storage Integrity Check and Repair
+      try {
+        await repairStorageIntegrity();
+      } catch (repairErr) {
+        console.warn("[SchemaMigration] Storage integrity repair notice:", repairErr);
+      }
 
       // Record schema version update
       localStorage.setItem(STORAGE_KEY_SCHEMA_VERSION, String(CURRENT_SCHEMA_VERSION));

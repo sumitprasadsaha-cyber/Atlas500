@@ -237,7 +237,145 @@ export async function uploadToR2(params: {
 
   const errors: string[] = [];
 
-  // Step 1: Upload via FormData multipart (Native browser streaming, handles any file format cleanly)
+  // Helper to convert File/Blob to base64
+  const readAsBase64 = (file: File | Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = reader.result as string;
+        const commaIdx = res.indexOf(",");
+        resolve(commaIdx !== -1 ? res.substring(commaIdx + 1) : res);
+      };
+      reader.onerror = (e) => reject(e);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Strategy 1: Direct Binary Upload to /api/r2/upload (High performance, streaming)
+  try {
+    const directUploadUrl = `${baseUrl}/api/r2/upload?key=${encodeURIComponent(cleanKey)}&bucket=${encodeURIComponent(bucket)}&mimeType=${encodeURIComponent(mimeType)}`;
+    if (typeof XMLHttpRequest !== "undefined") {
+      const result = await new Promise<R2UploadResult>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", directUploadUrl, true);
+        xhr.setRequestHeader("Content-Type", mimeType);
+
+        if (xhr.upload && params.onProgress) {
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable && e.total > 0) {
+              const pct = Math.min(99, Math.max(0, Math.round((e.loaded / e.total) * 100)));
+              params.onProgress!(pct);
+            }
+          };
+        }
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            if (params.onProgress) params.onProgress(100);
+            try {
+              const resData = JSON.parse(xhr.responseText || "{}");
+              resolve({
+                bucket,
+                key: cleanKey,
+                url: resData.publicUrl || resData.url || getR2PublicUrl(bucket, cleanKey),
+                size: params.file.size,
+                mimeType,
+                etag: resData.etag,
+              });
+            } catch {
+              resolve({
+                bucket,
+                key: cleanKey,
+                url: getR2PublicUrl(bucket, cleanKey),
+                size: params.file.size,
+                mimeType,
+              });
+            }
+          } else {
+            let errDetail = `HTTP ${xhr.status}`;
+            try {
+              const parsed = JSON.parse(xhr.responseText);
+              errDetail = parsed.error || parsed.message || errDetail;
+            } catch {}
+            reject(new Error(`Direct Binary Upload: ${errDetail}`));
+          }
+        };
+
+        xhr.onerror = () => reject(new Error("Direct Binary Upload: Network Error"));
+        xhr.ontimeout = () => reject(new Error("Direct Binary Upload: Timeout"));
+        xhr.send(params.file);
+      });
+      return result;
+    } else {
+      const res = await fetch(directUploadUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": mimeType,
+        },
+        body: params.file,
+      });
+      if (res.ok) {
+        if (params.onProgress) params.onProgress(100);
+        const resData = await res.json();
+        return {
+          bucket,
+          key: cleanKey,
+          url: resData.publicUrl || resData.url || getR2PublicUrl(bucket, cleanKey),
+          size: params.file.size,
+          mimeType,
+          etag: resData.etag,
+        };
+      } else {
+        const text = await res.text();
+        errors.push(`Direct Binary HTTP ${res.status}: ${text}`);
+      }
+    }
+  } catch (err: any) {
+    console.warn("[R2Client] Direct binary upload attempt failed:", err);
+    errors.push(err?.message || String(err));
+  }
+
+  // Strategy 2: Base64 JSON Upload to /api/r2/upload (Guaranteed compatibility across all iframe/proxy setups)
+  try {
+    if (typeof FileReader !== "undefined") {
+      if (params.onProgress) params.onProgress(20);
+      const base64Data = await readAsBase64(params.file);
+      if (params.onProgress) params.onProgress(50);
+
+      const jsonRes = await fetch(`${baseUrl}/api/r2/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key: cleanKey,
+          bucket,
+          base64: base64Data,
+          mimeType,
+          fileName: cleanFilename,
+        }),
+      });
+
+      if (jsonRes.ok) {
+        if (params.onProgress) params.onProgress(100);
+        const resData = await jsonRes.json();
+        return {
+          bucket,
+          key: cleanKey,
+          url: resData.publicUrl || resData.url || getR2PublicUrl(bucket, cleanKey),
+          size: params.file.size,
+          mimeType,
+          etag: resData.etag,
+        };
+      } else {
+        const errJson = await jsonRes.json().catch(() => ({}));
+        errors.push(`Base64 JSON Upload: ${errJson.error || errJson.message || `HTTP ${jsonRes.status}`}`);
+      }
+    }
+  } catch (err: any) {
+    console.warn("[R2Client] Base64 JSON upload attempt failed:", err);
+    errors.push(`Base64 JSON Upload: ${err?.message || err}`);
+  }
+
+  // Strategy 3: Upload via FormData multipart to /api/storage?action=upload
   try {
     const uploadApiUrl = `${baseUrl}/api/storage?action=upload&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(cleanKey)}&mimeType=${encodeURIComponent(mimeType)}`;
 
@@ -310,7 +448,7 @@ export async function uploadToR2(params: {
     errors.push(formDataError?.message || String(formDataError));
   }
 
-  // Step 2: Upload directly via binary body / stream (Fetch or XHR)
+  // Strategy 4: Direct binary body upload to /api/storage?action=upload
   try {
     const uploadApiUrl = `${baseUrl}/api/storage?action=upload&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(cleanKey)}&mimeType=${encodeURIComponent(mimeType)}`;
 
@@ -375,7 +513,6 @@ export async function uploadToR2(params: {
 
       return proxyResult;
     } else {
-      // Direct binary body upload via fetch
       const res = await fetch(uploadApiUrl, {
         method: "POST",
         headers: {
@@ -406,7 +543,7 @@ export async function uploadToR2(params: {
     errors.push(proxyError?.message || String(proxyError));
   }
 
-  // Step 3: Presigned URL Fallback
+  // Strategy 5: Presigned URL Fallback
   let presignedPutUrl: string | null = null;
   try {
     const presignRes = await fetch(`${baseUrl}/api/storage?action=signed-url`, {

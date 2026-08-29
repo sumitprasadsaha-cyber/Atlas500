@@ -18,8 +18,8 @@ export const apiApp = express();
 // Enable CORS for all API routes so direct browser fetches / downloads work smoothly
 apiApp.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Range, Authorization, X-Requested-With");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Range, Authorization, X-Requested-With, Accept, Cache-Control, If-None-Match, If-Modified-Since, Origin");
   res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Content-Type, ETag, Content-Disposition");
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);

@@ -294,3 +294,115 @@ export async function auditStorageIntegrity(
     orphanedObjects,
   };
 }
+
+/**
+ * Executes automatic repair on startup:
+ * - Scans every topic note in the database.
+ * - Verifies the referenced Cloudflare R2 binary object exists.
+ * - Removes any database records whose binary object is missing or 0 bytes.
+ * - Rebuilds cache and metadata from verified database records.
+ */
+export async function repairStorageIntegrity(
+  onProgress?: (checked: number, total: number, message: string) => void
+): Promise<{
+  totalScanned: number;
+  healthyCount: number;
+  removedCount: number;
+  removedNotes: { id: string; title: string; storageKey: string; reason: string }[];
+}> {
+  const bucket = getR2BucketName();
+  console.log(`[Storage Integrity Repair] Starting automatic startup storage integrity check...`);
+
+  const allNotes: ClassNote[] = await fetchAllClassNotesFromFirestore();
+  const total = allNotes.length;
+  console.log(`[Storage Integrity Repair] Auditing ${total} persisted notes for R2 binary synchronization.`);
+
+  let healthyCount = 0;
+  let removedCount = 0;
+  const removedNotes: { id: string; title: string; storageKey: string; reason: string }[] = [];
+
+  const { deleteClassNoteDoc } = await import("./firestoreService");
+  const { notesCacheService } = await import("./notesCacheService");
+
+  for (let i = 0; i < total; i++) {
+    const note = allNotes[i];
+    const storageKey =
+      note.objectKey ||
+      note.storageKey ||
+      note.storagePath ||
+      note.r2Key ||
+      note.downloadKey ||
+      "";
+    const title =
+      note.topicName ||
+      note.topicTitle ||
+      note.partLabel ||
+      note.fileName ||
+      note.pdfFileName ||
+      `Note ${note.id}`;
+
+    if (onProgress) {
+      onProgress(i + 1, total, `Verifying "${title}"...`);
+    }
+
+    if (!storageKey) {
+      console.warn(`[Storage Integrity Repair] Note "${note.id}" has no storage key. Removing broken record.`);
+      await deleteClassNoteDoc(note.id).catch(() => {});
+      removedCount++;
+      removedNotes.push({
+        id: note.id,
+        title,
+        storageKey: "(none)",
+        reason: "Missing storage key reference in database",
+      });
+      continue;
+    }
+
+    const cleanKey = storageKey.replace(/^\/+/, "");
+
+    try {
+      const head = await verifyR2ObjectExists({ bucket, key: cleanKey });
+
+      if (!head || !head.exists) {
+        console.warn(`[Storage Integrity Repair] Note "${note.id}" (key: "${cleanKey}") binary object not found in R2. Removing broken record.`);
+        await deleteClassNoteDoc(note.id).catch(() => {});
+        removedCount++;
+        removedNotes.push({
+          id: note.id,
+          title,
+          storageKey: cleanKey,
+          reason: "Binary object does not exist in Cloudflare R2",
+        });
+      } else if (head.size !== undefined && head.size <= 0) {
+        console.warn(`[Storage Integrity Repair] Note "${note.id}" (key: "${cleanKey}") is 0 bytes in R2. Removing broken record.`);
+        await deleteClassNoteDoc(note.id).catch(() => {});
+        removedCount++;
+        removedNotes.push({
+          id: note.id,
+          title,
+          storageKey: cleanKey,
+          reason: "Binary object is empty (0 bytes)",
+        });
+      } else {
+        healthyCount++;
+      }
+    } catch (err: any) {
+      console.warn(`[Storage Integrity Repair] Verification error for note "${note.id}":`, err?.message || err);
+      healthyCount++;
+    }
+  }
+
+  // Purge metadata cache to ensure student/admin views are 100% in sync
+  await notesCacheService.invalidateMetadataCache();
+
+  console.log(
+    `[Storage Integrity Repair] Integrity check complete: ${healthyCount}/${total} healthy, ${removedCount} orphaned records purged.`
+  );
+
+  return {
+    totalScanned: total,
+    healthyCount,
+    removedCount,
+    removedNotes,
+  };
+}

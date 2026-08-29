@@ -3,10 +3,10 @@ import { HttpError } from "./errors.js";
 /**
  * Sets comprehensive CORS and caching headers on the outgoing response.
  */
-export function setCorsHeaders(res: any, methods: string = "GET, POST, PUT, DELETE, OPTIONS, HEAD"): void {
+export function setCorsHeaders(res: any, methods: string = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", methods);
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Range, Authorization, X-Requested-With, Accept");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Range, Authorization, X-Requested-With, Accept, Cache-Control, If-None-Match, If-Modified-Since, Origin");
   res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Content-Type, ETag, Content-Disposition");
 }
 
