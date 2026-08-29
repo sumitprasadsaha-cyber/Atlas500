@@ -242,6 +242,13 @@ export function getR2S3Client(): S3Client {
 /**
  * Uploads an object directly to Cloudflare R2 bucket with mandatory verification.
  * Does NOT mask failures or use fake local fallbacks.
+ * Requirements:
+ * 1. Validate request
+ * 2. Generate canonical R2 key
+ * 3. Upload object via PutObjectCommand
+ * 4. Wait for PutObject to complete
+ * 5. Verify object exists using HeadObject with bounded consistency checks
+ * 6. Only then return success.
  */
 export async function uploadObjectToR2(params: {
   bucket?: string;
@@ -253,7 +260,12 @@ export async function uploadObjectToR2(params: {
 }): Promise<{ bucket: string; key: string; etag: string; size: number; contentType: string }> {
   const config = getR2ServerConfig();
   const bucketName = (params.bucket || config.bucket || "academy-connect-files").trim();
-  const cleanKey = params.key.replace(/^\/+/, "");
+  const cleanKey = (params.key || "").trim().replace(/^\/+/, "");
+
+  if (!cleanKey) {
+    throw new Error("[R2Server-Operation] PutObjectCommand aborted: Missing required object 'key'.");
+  }
+
   const contentType = params.contentType || getMimeTypeFromKey(cleanKey);
   const cacheControl = params.cacheControl || "public, max-age=31536000, immutable";
 
@@ -292,11 +304,19 @@ export async function uploadObjectToR2(params: {
     Metadata: params.metadata,
   };
 
-  const command = new PutObjectCommand(input);
-  const putResponse = await client.send(command);
-  const durationMs = Date.now() - startTime;
+  let putResponse;
+  try {
+    const command = new PutObjectCommand(input);
+    putResponse = await client.send(command);
+  } catch (putErr: any) {
+    console.error(`[R2Server-Operation] PutObjectCommand FAILED for key="${cleanKey}" in bucket="${bucketName}":`, putErr);
+    throw new Error(
+      `Cloudflare R2 PutObject execution failed for key "${cleanKey}" in bucket "${bucketName}". Root cause: ${putErr?.message || putErr}`
+    );
+  }
 
-  console.log(`[R2Server-Operation] PutObjectCommand PUT completed in ${durationMs}ms:`, {
+  const putDurationMs = Date.now() - startTime;
+  console.log(`[R2Server-Operation] PutObjectCommand PUT completed in ${putDurationMs}ms:`, {
     bucket: bucketName,
     key: cleanKey,
     etag: putResponse.ETag,
@@ -304,24 +324,50 @@ export async function uploadObjectToR2(params: {
   });
 
   // MANDATORY POST-UPLOAD VERIFICATION: HEAD Object directly against R2
+  // Cloudflare R2 is an edge object storage system. We use a deterministic bounded poll (up to 4 attempts: 0ms, 80ms, 200ms, 400ms)
+  // to ensure edge propagation has settled before confirming success.
   console.log(`[R2Server-Operation] Verifying upload via HeadObjectCommand for key="${cleanKey}" in bucket="${bucketName}"...`);
   const headCommand = new HeadObjectCommand({
     Bucket: bucketName,
     Key: cleanKey,
   });
-  
-  let headResponse;
-  try {
-    headResponse = await client.send(headCommand);
-  } catch (headErr: any) {
-    console.error(`[R2Server-Operation] HeadObject verification FAILED for key="${cleanKey}":`, headErr?.message || headErr);
+
+  let headResponse: any = null;
+  let lastHeadErr: any = null;
+  const maxVerifyAttempts = 4;
+  const verifyDelays = [0, 80, 200, 400];
+
+  for (let attempt = 0; attempt < maxVerifyAttempts; attempt++) {
+    if (verifyDelays[attempt] > 0) {
+      await new Promise((resolve) => setTimeout(resolve, verifyDelays[attempt]));
+    }
+    try {
+      headResponse = await client.send(headCommand);
+      if (headResponse) break;
+    } catch (err: any) {
+      lastHeadErr = err;
+      const is404 =
+        err?.name === "NoSuchKey" ||
+        err?.name === "NotFound" ||
+        err?.$metadata?.httpStatusCode === 404;
+
+      if (!is404 && attempt > 0) {
+        // Non-404 error (e.g. network/auth), stop polling immediately
+        break;
+      }
+    }
+  }
+
+  if (!headResponse) {
+    console.error(`[R2Server-Operation] HeadObject verification FAILED for key="${cleanKey}" after ${maxVerifyAttempts} attempts:`, lastHeadErr?.message || lastHeadErr);
     throw new Error(
-      `Cloudflare R2 upload verification failed: Object was not confirmed in bucket "${bucketName}" for key "${cleanKey}". Root cause: ${headErr?.message || headErr}`
+      `Cloudflare R2 upload verification failed: HeadObject confirmed object does not exist in Cloudflare R2 bucket "${bucketName}" for key "${cleanKey}". Root cause: ${lastHeadErr?.message || lastHeadErr || "NoSuchKey"}`
     );
   }
 
   const verifiedEtag = headResponse.ETag || putResponse.ETag || "";
   const verifiedSize = headResponse.ContentLength ?? bodyBuffer.length;
+  const totalDurationMs = Date.now() - startTime;
 
   console.log(`[R2Server-Operation] Cloudflare R2 Upload & Verification SUCCESS:`, {
     bucket: bucketName,
@@ -330,6 +376,9 @@ export async function uploadObjectToR2(params: {
     sizeBytes: verifiedSize,
     contentType: headResponse.ContentType || contentType,
     lastModified: headResponse.LastModified,
+    totalDurationMs,
+    publicUrl: config.publicUrl ? `${config.publicUrl}/${cleanKey}` : undefined,
+    downloadUrl: `/api/storage?action=download&bucket=${encodeURIComponent(bucketName)}&key=${encodeURIComponent(cleanKey)}`,
   });
 
   return {

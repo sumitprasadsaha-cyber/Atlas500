@@ -212,16 +212,6 @@ export default async function handler(req: any, res: any) {
             contentType,
           });
 
-          // Verify with HeadObject in Cloudflare R2 before reporting success
-          const headCheck = await headObjectFromR2({ bucket: actualBucket, key: cleanKey });
-          if (!headCheck.exists) {
-            console.error(`[Storage API] HeadObject verification failed immediately after upload: key="${cleanKey}"`);
-            return sendError(
-              res,
-              new StorageError(`Upload verification failed: object "${cleanKey}" could not be confirmed in Cloudflare R2 after PutObject.`, "R2_VERIFICATION_FAILED")
-            );
-          }
-
           const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(result.bucket)}&key=${encodeURIComponent(cleanKey)}`;
           const publicUrl = config.publicUrl
             ? `${config.publicUrl}/${cleanKey}`
@@ -233,8 +223,8 @@ export default async function handler(req: any, res: any) {
             etag: result.etag,
             url: downloadUrl,
             publicUrl: publicUrl,
-            size: payload.buffer.length,
-            mimeType: contentType,
+            size: result.size,
+            mimeType: result.contentType || contentType,
             filename: payload.fileName,
           });
         } catch (uploadErr: any) {

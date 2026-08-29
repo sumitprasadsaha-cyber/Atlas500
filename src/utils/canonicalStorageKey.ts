@@ -291,3 +291,49 @@ export function validateStorageKey(key: string): { isValid: boolean; error?: str
   }
   return { isValid: true, canonicalFileName: filename };
 }
+
+/**
+ * Single Canonical Key Builder for Student Practice Test Attempts
+ */
+export function getStudentAttemptStoragePath(studentId: string): string {
+  const clean = String(studentId || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9_]/g, "_");
+  const normalizedId = clean.startsWith("student_") ? clean : `student_${clean || "unknown"}`;
+  return `practice_tests/student_attempts/${normalizedId}.json`;
+}
+
+/**
+ * Single Canonical Key for Global Test Attempts
+ */
+export function getPracticeTestAttemptsKey(): string {
+  return "practice_tests/test_attempts.json";
+}
+
+/**
+ * Single Canonical Key for Practice Test Bank
+ */
+export function getPracticeTestsBankKey(): string {
+  return "practice_tests/test_bank.json";
+}
+
+/**
+ * Single Canonical Key Builder for Curriculum Practice Tests
+ */
+export function buildPracticeTestKey(classGrade: string, subject: string, testId?: string): string {
+  const classFolder = formatClassSegment(classGrade);
+  const subjFolder = sanitizeFolderSegment(subject, "General");
+  const cleanTestId = (testId || `test_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `practice_tests/${classFolder}/${subjFolder}/${cleanTestId}.json`;
+}
+
+/**
+ * Single Canonical Key Builder for General Images / Assets
+ */
+export function buildImageStorageKey(category: string, filename?: string, customUuid?: string): string {
+  const catFolder = sanitizeFolderSegment(category, "general");
+  const canonicalFileName = getCanonicalFileName(filename || "image.png", customUuid);
+  return `images/${catFolder}/${canonicalFileName}`;
+}
+

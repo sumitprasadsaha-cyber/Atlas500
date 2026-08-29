@@ -150,8 +150,8 @@ export default async function handler(req: any, res: any) {
         const bucket = payload.bucket || fields.bucket || parsedBody.bucket || r2Config.bucket;
 
         try {
-          // Upload note file to canonical R2 key
-          await uploadObjectToR2({
+          // Upload note file to canonical R2 key with mandatory HeadObject verification
+          const uploadResult = await uploadObjectToR2({
             bucket,
             key: canonicalMeta.storagePath,
             body: payload.buffer,
@@ -168,17 +168,6 @@ export default async function handler(req: any, res: any) {
           }).catch((err) => {
             console.warn("[API Notes] Warning writing metadata.json:", err);
           });
-
-          // Strict verification check: confirm object presence in R2 before acknowledging success
-          const headResult = await headObjectFromR2({ bucket, key: canonicalMeta.storagePath });
-          if (!headResult || !headResult.exists) {
-            console.error(`[API Notes] HeadObject verification failed for uploaded key "${canonicalMeta.storagePath}".`);
-            return res.status(500).json({
-              success: false,
-              code: "UPLOAD_VERIFICATION_FAILED",
-              error: `Upload verification failed: HeadObject confirmed object does not exist in R2 for key "${canonicalMeta.storagePath}".`,
-            });
-          }
         } catch (storageErr: any) {
           console.error("[API Notes] R2 upload error:", storageErr);
           return res.status(500).json({

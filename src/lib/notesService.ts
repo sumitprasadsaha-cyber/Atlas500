@@ -311,25 +311,7 @@ export async function uploadNotePipeline(params: NoteUploadParams): Promise<Clas
     });
 
     r2Uploaded = true;
-    console.log(`[Upload Pipeline] Stage 4: Cloudflare R2 upload confirmed. ETag/Result:`, uploadRes);
-
-    // Rule 9: VERIFY BEFORE FIRESTORE WRITE: Perform HeadObject check on canonicalStorageKey
-    console.log(`[Upload Pipeline] Stage 4.1: Verifying object existence via HeadObject for key "${canonicalStorageKey}"...`);
-    let headCheck = await verifyR2ObjectExists({ bucket, key: canonicalStorageKey });
-    if (!headCheck || !headCheck.exists) {
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 300));
-        headCheck = await verifyR2ObjectExists({ bucket, key: canonicalStorageKey });
-        if (headCheck && headCheck.exists) break;
-      }
-    }
-
-    if (!headCheck || !headCheck.exists) {
-      console.error(`[Upload Pipeline] HeadObject verification failed for key "${canonicalStorageKey}". Aborting upload before Firestore write.`);
-      // Rollback orphaned file in R2
-      await deleteFromR2({ bucket, key: canonicalStorageKey }).catch(() => {});
-      throw new Error(`Upload verification failed: HeadObject confirmed object does not exist in Cloudflare R2 for key "${canonicalStorageKey}".`);
-    }
+    console.log(`[Upload Pipeline] Stage 4: Cloudflare R2 upload confirmed and verified via HeadObject. ETag/Result:`, uploadRes);
 
     const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(canonicalStorageKey)}`;
     const publicUrl = uploadRes.url || getR2PublicUrl(bucket, canonicalStorageKey);
