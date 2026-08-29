@@ -631,22 +631,36 @@ export async function verifyR2ObjectExists(params: {
   const cleanKey = params.key.replace(/^\/+/, "");
   const baseUrl = getApiBaseUrl();
 
-  try {
-    const res = await fetch(
-      `${baseUrl}/api/storage?action=exists&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(cleanKey)}`
-    );
-    if (res.ok) {
-      const data = await res.json();
-      return {
-        exists: Boolean(data.exists),
-        bucket: data.bucket || bucket,
-        key: data.key || cleanKey,
-        size: data.contentLength,
-        mimeType: data.contentType,
-      };
+  const endpoints = [
+    `${baseUrl}/api/storage?action=exists&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(cleanKey)}`,
+    `${baseUrl}/api/storage?action=head&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(cleanKey)}`,
+    `${baseUrl}/api/storage?action=verify&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(cleanKey)}`,
+  ];
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.exists) {
+            return {
+              exists: true,
+              bucket: data.bucket || bucket,
+              key: data.key || cleanKey,
+              size: data.contentLength,
+              mimeType: data.contentType,
+            };
+          }
+        }
+      } catch (err) {
+        // Continue to next probe
+      }
     }
-  } catch (err) {
-    console.warn("[R2Client] verifyR2ObjectExists probe failed:", err);
+
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 150));
+    }
   }
 
   return { exists: false, bucket, key: cleanKey };

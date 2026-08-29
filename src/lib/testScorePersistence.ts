@@ -103,25 +103,16 @@ export function deduplicateAttempts(attempts: TestAttemptRecord[]): TestAttemptR
     const studentKey = cleanId(a.studentId) || cleanId(a.studentName);
     const testType = a.testType || "topic";
     const topicNorm = (a.topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
-    const key = `${studentKey}__${a.classGrade || ""}__${a.subject || ""}__${a.chapterNo || 0}__${topicNorm}__${testType}`;
+    // Uniquely identify distinct attempts by ID or compound timestamp key to preserve complete attempt history
+    const key = a.id
+      ? `${studentKey}__${a.id}`
+      : `${studentKey}__${a.classGrade || ""}__${a.subject || ""}__${a.chapterNo || 0}__${topicNorm}__${testType}__${a.timestamp || 0}__${a.attemptNumber || 1}`;
 
     const existing = map.get(key);
     if (!existing) {
       map.set(key, a);
     } else {
-      const existingPct = existing.percentage ?? (existing.totalQuestions > 0 ? (existing.score / existing.totalQuestions) * 100 : 0);
-      const newPct = a.percentage ?? (a.totalQuestions > 0 ? (a.score / a.totalQuestions) * 100 : 0);
-
-      const existingTime = existing.timestamp || 0;
-      const newTime = a.timestamp || 0;
-
-      if (newTime > existingTime || (newTime === existingTime && newPct >= existingPct)) {
-        map.set(key, {
-          ...existing,
-          ...a,
-          attemptNumber: Math.max(existing.attemptNumber || 1, a.attemptNumber || 1)
-        });
-      }
+      map.set(key, { ...existing, ...a });
     }
   });
 
@@ -234,7 +225,8 @@ export async function savePracticeTestAttempt(
       // 2a. Fetch existing student attempts to preserve attempt history and deduplicate
       let existingStudentAttempts = await fetchStudentTestAttempts(studentId, attempt.studentName);
 
-      const existingIndex = existingStudentAttempts.findIndex((a) => {
+      // Count previous attempts for this topic to set proper attemptNumber
+      const previousTopicAttempts = existingStudentAttempts.filter((a) => {
         const aTopicNorm = (a.topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
         const aTestType = a.testType || "topic";
         return (
@@ -246,17 +238,13 @@ export async function savePracticeTestAttempt(
         );
       });
 
-      let updatedAttempt = { ...attempt };
+      const existingIndex = existingStudentAttempts.findIndex((a) => a.id === attempt.id);
+      let updatedAttempt = {
+        ...attempt,
+        attemptNumber: attempt.attemptNumber || (previousTopicAttempts.length + 1)
+      };
 
       if (existingIndex > -1) {
-        const prev = existingStudentAttempts[existingIndex];
-        updatedAttempt = {
-          ...prev,
-          ...attempt,
-          id: prev.id || attempt.id,
-          attemptNumber: Math.max(attempt.attemptNumber || 1, (prev.attemptNumber || 0) + 1),
-          timestamp: attempt.timestamp || Date.now()
-        };
         existingStudentAttempts[existingIndex] = updatedAttempt;
       } else {
         existingStudentAttempts.push(updatedAttempt);

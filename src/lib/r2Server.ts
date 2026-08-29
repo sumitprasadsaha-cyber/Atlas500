@@ -32,14 +32,39 @@ let lastS3Endpoint: string = "";
  */
 function findLocalFilePath(bucketName: string, cleanKey: string): string | null {
   try {
-    const candidatePaths = [
-      path.join(process.cwd(), "data", "storage", bucketName, cleanKey),
-      path.join(process.cwd(), "data", "storage", cleanKey),
-      path.join(process.cwd(), "data", cleanKey),
+    const candidates = generateCandidateKeys(cleanKey);
+    const candidateBases = [
+      path.join(process.cwd(), "data", "storage", bucketName),
+      path.join(process.cwd(), "data", "storage"),
+      path.join(process.cwd(), "data"),
+      path.join(process.cwd(), "public"),
     ];
-    for (const p of candidatePaths) {
-      if (fs.existsSync(p) && fs.statSync(p).isFile()) {
-        return p;
+
+    for (const base of candidateBases) {
+      for (const k of candidates) {
+        const p = path.join(base, k);
+        if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+          return p;
+        }
+      }
+    }
+
+    // Additional check: search by filename in the target directory
+    const fileName = path.basename(cleanKey);
+    const dirPart = path.dirname(cleanKey);
+    if (fileName && dirPart && dirPart !== ".") {
+      for (const base of candidateBases) {
+        const targetDir = path.join(base, dirPart);
+        if (fs.existsSync(targetDir) && fs.statSync(targetDir).isDirectory()) {
+          const files = fs.readdirSync(targetDir);
+          const match = files.find((f) => f.toLowerCase() === fileName.toLowerCase() || f.includes(fileName) || fileName.includes(f));
+          if (match) {
+            const p = path.join(targetDir, match);
+            if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+              return p;
+            }
+          }
+        }
       }
     }
   } catch {}

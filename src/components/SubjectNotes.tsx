@@ -26,7 +26,8 @@ import {
   Calendar,
   AlertCircle,
   Folder,
-  Layers
+  Layers,
+  FlaskConical
 } from "lucide-react";
 import { ChapterNote, Student, TestAttemptRecord } from "../types";
 import { uploadPdfToStorage, sanitizeStoragePath, getBucketName } from "../lib/storageService";
@@ -1434,27 +1435,25 @@ export default function SubjectNotes({
                                             });
                                           }
                                         }}
-                                        className={`px-3 py-1.5 rounded-xl border transition-all cursor-pointer shadow-2xs shrink-0 min-h-[40px] flex items-center gap-2 ${btnStyles.container}`}
+                                        className={`px-3 py-1.5 rounded-xl border transition-all cursor-pointer shadow-2xs shrink-0 min-h-[38px] flex items-center gap-2 ${btnStyles.container}`}
                                         title={
                                           isAttempted && stats
-                                            ? `Highest Score: ${stats.bestScore}/${stats.totalQuestions}`
+                                            ? `Latest Attempt: ${stats.latestScore}/${stats.latestTotalQuestions}\nHighest Score: ${stats.bestScore}/${stats.totalQuestions}\nNumber of Attempts: ${stats.attemptCount}\nLast Attempt Date: ${stats.lastAttemptDate}`
                                             : "Practice Test for this Topic"
                                         }
                                       >
-                                        <FileCheck className={`w-4 h-4 shrink-0 ${btnStyles.icon}`} />
                                         {isAttempted && stats ? (
-                                          <div className="flex flex-col items-center justify-center text-center leading-none">
-                                            <span className={`text-xs sm:text-sm font-black ${btnStyles.scoreText}`}>
-                                              {stats.bestScore}/{stats.totalQuestions}
-                                            </span>
-                                            <span className={`text-[10px] sm:text-[11px] font-bold mt-0.5 ${btnStyles.labelText}`}>
-                                              Test
-                                            </span>
-                                          </div>
-                                        ) : (
-                                          <span className={`text-xs sm:text-sm font-bold ${btnStyles.labelText}`}>
-                                            {isAdmin && !hasTest ? "+ Test" : "Test"}
+                                          <span className={`text-xs sm:text-sm font-extrabold flex items-center gap-1 ${btnStyles.scoreText}`}>
+                                            <span>✓</span>
+                                            <span>{stats.bestScore}/{stats.totalQuestions}</span>
                                           </span>
+                                        ) : (
+                                          <>
+                                            <FlaskConical className={`w-4 h-4 shrink-0 ${btnStyles.icon}`} />
+                                            <span className={`text-xs sm:text-sm font-bold ${btnStyles.labelText}`}>
+                                              {isAdmin && !hasTest ? "+ Test" : "Test"}
+                                            </span>
+                                          </>
                                         )}
                                       </button>
                                     )}

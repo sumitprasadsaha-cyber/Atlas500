@@ -4,14 +4,18 @@ import {
   ChevronDown, 
   BookOpen, 
   FileText, 
-  Image as ImageIcon,
+  Image as ImageIcon, 
   Search, 
-  X,
-  FlaskConical
+  X, 
+  FlaskConical 
 } from "lucide-react";
 import { Student, ClassNote, ChapterNote } from "../types";
 import { StudentUPSCGSPaper, StudentUPSCSubject, StudentUPSCModule } from "../utils/studentUPSCHierarchyHelper";
 import { getTopicPracticeTestSync, subscribeToPracticeTests } from "../lib/practiceTestService";
+import { getAllTestAttempts } from "../utils/assessmentParser";
+import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
+import { getTopicTestStats } from "../utils/testStatsHelper";
+import StudentTestScoreButton from "./StudentTestScoreButton";
 
 interface StudentUPSCTreeProps {
   paper: StudentUPSCGSPaper;
@@ -42,8 +46,12 @@ export default function StudentUPSCTree({
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({});
   const [, setTestBankTick] = useState(0);
 
-  // Subscribe to real-time practice test changes so attached tests update instantly
+  // Fetch student test attempts and subscribe to real-time practice test & score changes
   useEffect(() => {
+    if (student?.id) {
+      fetchStudentTestAttempts(student.id, student.name);
+    }
+
     const handleUpdate = () => setTestBankTick((t) => t + 1);
     const unsub = subscribeToPracticeTests(handleUpdate);
     if (typeof window !== "undefined") {
@@ -59,7 +67,11 @@ export default function StudentUPSCTree({
         window.removeEventListener("storage", handleUpdate);
       }
     };
-  }, []);
+  }, [student?.id, student?.name]);
+
+  const allAttempts = useMemo(() => {
+    return getAllTestAttempts();
+  }, [student?.id, student?.name]);
 
   const toggleModule = (moduleKey: string) => {
     setExpandedModules((prev) => ({
@@ -254,6 +266,26 @@ export default function StudentUPSCTree({
 
                             const hasTest = !!(topicTest && Array.isArray(topicTest.questions) && topicTest.questions.length > 0);
 
+                            const stats =
+                              getTopicTestStats(
+                                allAttempts,
+                                student.id,
+                                student.name,
+                                targetClass,
+                                targetSubj,
+                                chapterNo,
+                                topic.topicName || topic.topicLabel
+                              ) ||
+                              getTopicTestStats(
+                                allAttempts,
+                                student.id,
+                                student.name,
+                                paper.gsPaper,
+                                targetSubj,
+                                chapterNo,
+                                topic.topicName || topic.topicLabel
+                              );
+
                             return (
                               <div
                                 key={`upsc-topic-${topic.id}`}
@@ -282,12 +314,13 @@ export default function StudentUPSCTree({
                                   )}
                                 </div>
 
-                                {/* Attached Test Button (Only displayed if test exists for this topic) */}
+                                {/* Attached Test Button / Obtained Score */}
                                 {hasTest && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
+                                  <StudentTestScoreButton
+                                    stats={stats}
+                                    hasTest={hasTest}
+                                    topicName={topic.topicName}
+                                    onOpenTest={() => {
                                       onOpenPracticeTest?.({
                                         classGrade: targetClass,
                                         subject: targetSubj,
@@ -297,13 +330,7 @@ export default function StudentUPSCTree({
                                         testType: "topic",
                                       });
                                     }}
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/90 dark:border-emerald-800/80 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 cursor-pointer transition active:scale-95 shrink-0 shadow-2xs"
-                                    title="Take Practice Test"
-                                    aria-label={`Take practice test for ${topic.topicName}`}
-                                  >
-                                    <FlaskConical className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                                    <span>Test</span>
-                                  </button>
+                                  />
                                 )}
                               </div>
                             );
