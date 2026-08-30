@@ -221,6 +221,8 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
   const verifiedNote = await fetchNoteBlobWithCache({
     storageKey,
     storagePath: storageKey,
+    noteId: typeof target === "object" && target !== null ? target.noteId : undefined,
+    title: typeof target === "object" && target !== null ? target.title : undefined,
     fileName,
     pdfFileName: fileName,
     mimeType,

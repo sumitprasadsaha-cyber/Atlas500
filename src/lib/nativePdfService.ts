@@ -237,9 +237,23 @@ export async function verifyDocumentBlob(
   return { valid: false, reason: "Document signature verification failed" };
 }
 
+let previousBlobUrl: string | null = null;
+
 /**
- * Fetches and strictly verifies note binary data with intelligent IndexedDB cache
- * and AbortSignal support.
+ * Revokes any previously allocated object URL to prevent memory leaks and blob collisions.
+ */
+export function revokePreviousNoteBlob(): void {
+  if (previousBlobUrl) {
+    try {
+      URL.revokeObjectURL(previousBlobUrl);
+    } catch {}
+    previousBlobUrl = null;
+  }
+}
+
+/**
+ * Fetches and strictly verifies note binary data fresh from the topic's unique URL.
+ * Never reuses previous blobs, object URLs, responses, or cached variables.
  */
 export async function fetchNoteBlobWithCache(
   options: OpenPdfOptions,
@@ -256,62 +270,31 @@ export async function fetchNoteBlobWithCache(
   const fileName = options.fileName || options.pdfFileName || options.filename || "note.pdf";
   const mimeType = getNoteMimeType(fileName, options.mimeType, options.fileType);
 
-  const candidateKeys = [
-    storageKey,
-    options.storagePath,
-    options.storage_path,
-    options.objectKey,
-    options.r2Key,
-    options.key,
-    options.noteId,
-    fileName,
-    options.url,
-    options.downloadUrl,
-    options.publicUrl,
-  ].filter((k): k is string => typeof k === "string" && k.trim().length > 0);
+  // 1. Revoke any previous Blob Object URL before opening a new note
+  revokePreviousNoteBlob();
 
-  // 1. Check offline / IndexedDB cache first across all candidate keys
-  const cached = await notesCacheService.getCachedBlobByKeys(candidateKeys);
-  if (cached && cached.blob && cached.blob.size > 0) {
-    const check = await verifyDocumentBlob(cached.blob, options.fileType, fileName, cached.mimeType);
-    if (check.valid) {
-      notesLogger.info("VERIFICATION_PASSED", { storageKey, fileName, fileSize: cached.blob.size, cached: true });
-      notesLogger.info("DOWNLOAD_CACHED", { storageKey, fileName });
-      if (onProgress) onProgress(100);
-      const objectUrl = URL.createObjectURL(cached.blob);
-      return {
-        blob: cached.blob,
-        mimeType: cached.mimeType || mimeType,
-        fileName: cached.fileName || fileName,
-        objectUrl,
-        cached: true,
-      };
-    } else {
-      // Invalidate corrupted/invalid cache
-      for (const k of candidateKeys) {
-        await notesCacheService.invalidateBlobCache(k);
-      }
-    }
-  }
-
-  // 2. If offline and not in cache, throw helpful offline error
+  // 2. Offline check
   if (!notesCacheService.getOnlineStatus() || (typeof navigator !== "undefined" && !navigator.onLine)) {
     throw new Error("This note is not available offline. Connect to the internet to download it.");
   }
 
   notesLogger.info("DOWNLOAD_START", { storageKey, fileName });
 
-  // 3. Resolve direct URL to download
+  // 3. Resolve direct unique URL for the selected topic
   let targetUrl = "";
   try {
     targetUrl = await resolveDirectNoteUrl(options);
   } catch {
     // Fallback to streaming download proxy if direct signed URL fails
-    targetUrl = `/api/r2/download?key=${encodeURIComponent(storageKey.replace(/^\/+/, ""))}`;
+    targetUrl = `/api/storage?action=download&key=${encodeURIComponent(storageKey.replace(/^\/+/, ""))}`;
   }
 
-  // 4. Stream response with real progress and abort support
-  const response = await fetch(targetUrl, { signal });
+  console.log("Topic ID:", options.noteId || storageKey || "topic-note");
+  console.log("Topic Name:", options.title || fileName || "Topic Note");
+  console.log("Download URL:", targetUrl);
+
+  // 4. Download selected topic's file fresh (never reuse previous response, ArrayBuffer, or Blob)
+  const response = await fetch(targetUrl, { signal, cache: "no-store" });
   if (!response.ok || response.status !== 200) {
     notesLogger.error("DOWNLOAD_ERROR", { storageKey, fileName, status: response.status });
     if (response.status === 404) {
@@ -321,30 +304,11 @@ export async function fetchNoteBlobWithCache(
   }
 
   const contentTypeHeader = response.headers.get("content-type");
-  const contentLength = Number(response.headers.get("content-length") || 0);
-  let blob: Blob;
+  const responseData = await response.arrayBuffer();
+  const blob = new Blob([responseData], { type: mimeType });
 
-  if (response.body && contentLength > 0 && typeof response.body.getReader === "function") {
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let receivedBytes = 0;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        chunks.push(value);
-        receivedBytes += value.length;
-        if (onProgress) {
-          const pct = Math.min(99, Math.round((receivedBytes / contentLength) * 100));
-          onProgress(pct);
-        }
-      }
-    }
-    blob = new Blob(chunks, { type: mimeType });
-  } else {
-    blob = await response.blob();
-  }
+  console.log("Blob Size:", blob.size);
+  console.log("Blob Type:", blob.type);
 
   // 5. Strict Document Verification Pipeline
   const verification = await verifyDocumentBlob(blob, options.fileType, fileName, contentTypeHeader);
@@ -380,16 +344,9 @@ export async function fetchNoteBlobWithCache(
     mimeType,
   });
 
-  // 6. Store in local cache for instant future retrieval & offline access
-  await notesCacheService.setCachedBlob({
-    key: storageKey || fileName,
-    blob,
-    mimeType,
-    fileName,
-    aliases: candidateKeys,
-  });
-
+  // 6. Create fresh object URL
   const objectUrl = URL.createObjectURL(blob);
+  previousBlobUrl = objectUrl;
 
   notesLogger.info("DOWNLOAD_SUCCESS", {
     storageKey,
@@ -409,47 +366,10 @@ export async function fetchNoteBlobWithCache(
 }
 
 /**
- * Background preloads adjacent topic notes into cache to achieve near-instant opening
+ * Background preloads adjacent topic notes (safe no-op to ensure zero stale blob cross-contamination).
  */
-export function preloadAdjacentNotes(notes: ClassNote[], currentIndex: number): void {
-  if (!Array.isArray(notes) || notes.length <= 1 || currentIndex < 0) return;
-
-  const adjacentIndices = [currentIndex + 1, currentIndex - 1].filter(
-    (idx) => idx >= 0 && idx < notes.length
-  );
-
-  for (const idx of adjacentIndices) {
-    const note = notes[idx];
-    const storageKey = note.storagePath || note.r2Key || (note as any).storageKey;
-    if (!storageKey) continue;
-
-    // Check if already in cache
-    notesCacheService.getCachedBlob(storageKey).then((cached) => {
-      if (!cached && notesCacheService.getOnlineStatus()) {
-        // Preload in background without blocking
-        const fileName = note.fileName || (note as any).originalFilename || "note.pdf";
-        resolveDirectNoteUrl({
-          storageKey,
-          fileName,
-          fileType: (note as any).fileType,
-          mimeType: (note as any).mimeType,
-        })
-          .then((url) => fetch(url))
-          .then((res) => (res.ok ? res.blob() : null))
-          .then((blob) => {
-            if (blob) {
-              notesCacheService.setCachedBlob({
-                key: storageKey,
-                blob,
-                mimeType: (note as any).mimeType || getMimeType(fileName),
-                fileName,
-              });
-            }
-          })
-          .catch(() => {});
-      }
-    });
-  }
+export function preloadAdjacentNotes(_notes: ClassNote[], _currentIndex: number): void {
+  // Safe no-op to strictly preserve topic isolation and fresh downloads
 }
 
 /**

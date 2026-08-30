@@ -455,6 +455,10 @@ export default function SubjectNotes({
     const topicFormatted = getFormattedTopicLabel(note);
     const title = topicFormatted || `Chapter ${note.chapterNo} - ${note.chapterName}`;
 
+    console.log("Topic ID:", note.id);
+    console.log("Topic Name:", (note as any).topicTitle || (note as any).topicName || topicFormatted || note.chapterName || "Topic Note");
+    console.log("Download URL:", url || storagePath || (note as any).downloadUrl || "");
+
     const finalStorageKey =
       (note as any).storageKey ||
       storagePath ||

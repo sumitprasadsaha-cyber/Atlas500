@@ -367,6 +367,13 @@ export default function StudentUPSCTree({
                               setLocalErrorMsg("");
                               setLocalDownloadingId(topic.id);
 
+                              const topicId = topic.id;
+                              const topicName = topic.topicName || topic.topicLabel || (topic.note as any)?.topicTitle || (topic as any).name || "";
+                              const noteUrl = topic.note?.pdfUrl || topic.note?.storagePath || (topic.note as any)?.url || (topic.note as any)?.downloadUrl || "";
+                              console.log("Topic ID:", topicId);
+                              console.log("Topic Name:", topicName);
+                              console.log("Download URL:", noteUrl);
+
                               if (isRetry) {
                                 notesLogger.info("RETRY_ATTEMPT", {
                                   noteId: topic.id,

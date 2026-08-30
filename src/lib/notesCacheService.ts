@@ -154,7 +154,7 @@ class NotesCacheService {
       const entry: CachedMetadataEntry = {
         key: METADATA_CACHE_KEY,
         notes,
-        version: "6.6.0",
+        version: "6.7.0",
         cachedAt: Date.now(),
       };
 
@@ -185,9 +185,27 @@ class NotesCacheService {
   // BINARY BLOB (PDF/IMAGE) CACHING & OFFLINE
   // ==========================================
 
+  private static GENERIC_KEYS = new Set([
+    "note.pdf",
+    "note.jpg",
+    "note.png",
+    "note.jpeg",
+    "document.pdf",
+    "image.png",
+    "image.jpg",
+    "image.jpeg",
+    "file.pdf",
+    "note",
+    "document",
+  ]);
+
   public normalizeStorageKey(keyOrUrl: string): string {
     if (!keyOrUrl) return "";
-    return keyOrUrl.replace(/^https?:\/\/[^\/]+/, "").replace(/^\/+/, "").split("?")[0].trim();
+    const clean = keyOrUrl.replace(/^https?:\/\/[^\/]+/, "").replace(/^\/+/, "").split("?")[0].trim().toLowerCase();
+    if (NotesCacheService.GENERIC_KEYS.has(clean)) {
+      return "";
+    }
+    return clean;
   }
 
   public async isLocallyCached(keys: (string | undefined | null)[]): Promise<boolean> {
