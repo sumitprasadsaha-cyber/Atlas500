@@ -68,12 +68,11 @@ export interface LaunchNativeFileParams {
 }
 
 /**
- * Launches a downloaded or cached document directly into Android/iOS native app chooser or default viewer.
+ * Launches a downloaded or cached document directly into the device's native/browser default viewer.
  * 
  * Flow:
  * 1. Capacitor Native (Android/iOS): Uses FileOpener to trigger ACTION_VIEW Intent.
- * 2. Android Chrome / Installed PWA: Uses Web Share API (navigator.share with File) to invoke the native Android App Chooser (Drive PDF Viewer, Adobe, Gallery, etc.).
- * 3. Browser / Desktop: Opens directly in a clean external tab/viewer without 'download' attribute (preventing duplicate download dialogs).
+ * 2. Browser / Android Chrome / Installed PWA: Opens directly in a clean external tab/viewer without triggering the Android Share Sheet or duplicate download dialogs.
  */
 export async function launchFileInNativeViewer(params: LaunchNativeFileParams): Promise<boolean> {
   const { blob, fileName, mimeType } = params;
@@ -111,33 +110,9 @@ export async function launchFileInNativeViewer(params: LaunchNativeFileParams): 
     }
   }
 
-  // Strategy 2: Web Share API with File (Standard PWA -> Android Native App Chooser)
-  // In Android Chrome and installed Android PWAs, sharing a File triggers the Android system
-  // app chooser (ACTION_VIEW / ACTION_SEND equivalent) with PDF Viewer, Adobe, Gallery, etc.
-  if (typeof navigator !== "undefined" && typeof navigator.canShare === "function" && typeof File !== "undefined") {
-    try {
-      const file = new File([blob], cleanName, { type: mimeType, lastModified: Date.now() });
-      if (navigator.canShare({ files: [file] })) {
-        console.log(`[NativeFileOpener] Invoking Web Share API for native app launch: ${cleanName}`);
-        await navigator.share({
-          files: [file],
-          title: cleanName,
-        });
-        return true;
-      }
-    } catch (shareErr: any) {
-      // User dismissing or completing the Android share sheet is a normal interaction
-      if (shareErr?.name === "AbortError") {
-        console.log(`[NativeFileOpener] User interacted with native app chooser`);
-        return true;
-      }
-      console.warn("[NativeFileOpener] Web Share API notice:", shareErr?.message || shareErr);
-    }
-  }
-
-  // Strategy 3: Direct Native Window/Tab Launch (WITHOUT download attribute!)
+  // Strategy 2: Direct Native Window/Tab Launch (WITHOUT share sheet or download attribute!)
   // Opening the blob URL in a new window/target allows the browser's built-in PDF/image viewer
-  // or OS default app to render it directly without asking "Download file again?"
+  // or OS default app to render it directly without opening any share sheets or asking "Download file again?"
   try {
     const win = window.open(objectUrl, "_blank", "noopener,noreferrer");
     if (win && !win.closed) {
@@ -148,7 +123,7 @@ export async function launchFileInNativeViewer(params: LaunchNativeFileParams): 
     console.warn("[NativeFileOpener] window.open blocked/failed:", winErr);
   }
 
-  // Strategy 4: Anchor Click Fallback (Without download attribute)
+  // Strategy 3: Anchor Click Fallback (Without download attribute or share sheet)
   try {
     const a = document.createElement("a");
     a.href = objectUrl;
