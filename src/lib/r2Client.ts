@@ -88,10 +88,13 @@ export function getR2PublicUrl(bucket: string, key: string): string {
 
 export interface R2SignedUrlDetails {
   signedUrl: string;
+  downloadUrl?: string;
   exists: boolean;
   status: number;
   contentType?: string;
   contentLength?: number;
+  expiresIn?: number;
+  expiryTimestamp?: string;
   bucket: string;
   key: string;
   error?: string;
@@ -126,13 +129,16 @@ export async function getR2SignedUrlDetails(params: {
 
     if (response.ok) {
       const data = await response.json();
-      if (data.signedUrl) {
+      if (data.signedUrl || data.downloadUrl) {
         return {
-          signedUrl: data.signedUrl,
+          signedUrl: data.signedUrl || "",
+          downloadUrl: data.downloadUrl,
           exists: data.exists !== undefined ? Boolean(data.exists) : true,
           status: data.status || 200,
           contentType: data.contentType,
           contentLength: data.contentLength,
+          expiresIn: data.expiresIn,
+          expiryTimestamp: data.expiryTimestamp,
           bucket: data.bucket || bucket,
           key: data.key || cleanKey,
         };

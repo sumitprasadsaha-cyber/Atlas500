@@ -126,9 +126,16 @@ export async function resolveDirectNoteUrl(target: string | NoteOpeningTarget): 
     throw new Error("Unable to open note: Missing file storage key.");
   }
 
-  console.log(`[resolveDirectNoteUrl] Resolving note URL: key="${cleanKey}", bucket="${cleanBucket}", mime="${finalMime}"`);
+  console.log(`[Stage 1: Metadata Lookup] Resolving note storage info:`, {
+    stage: "1_METADATA_LOOKUP",
+    storageKey: cleanKey,
+    rawKey: storageKey,
+    bucket: cleanBucket,
+    mimeType: finalMime,
+    fileName,
+  });
 
-  // 1. Request a verified pre-signed URL from backend with inline Content-Disposition
+  // 1. Verify object existence and retrieve secure retrieval metadata from backend
   try {
     const signedDetails = await getR2SignedUrlDetails({
       bucket: cleanBucket,
@@ -139,26 +146,31 @@ export async function resolveDirectNoteUrl(target: string | NoteOpeningTarget): 
     });
 
     if (signedDetails.status === 404 || signedDetails.exists === false) {
+      console.warn(`[Stage 3: R2 Existence Check] Object does NOT exist in storage: key="${cleanKey}"`);
       throw new Error(`Object not found: "${cleanKey}" does not exist in storage.`);
     }
 
-    if (signedDetails.signedUrl) {
-      return signedDetails.signedUrl;
+    console.log(`[Stage 4: URL Resolution] Verified storage resolution:`, {
+      stage: "4_URL_RESOLUTION",
+      key: cleanKey,
+      bucket: cleanBucket,
+      downloadUrl: signedDetails.downloadUrl,
+      expiryTimestamp: signedDetails.expiryTimestamp,
+      contentLength: signedDetails.contentLength,
+    });
+
+    // Prefer the secure backend download proxy route to ensure immunity against Cloudflare Bot Fight Mode, WAF challenges, and CORS 403s
+    if (signedDetails.downloadUrl) {
+      return signedDetails.downloadUrl;
     }
   } catch (signErr: any) {
     if (signErr?.message && signErr.message.includes("Object not found")) {
       throw signErr;
     }
-    console.warn("[resolveDirectNoteUrl] Error getting signed URL details:", signErr);
+    console.warn("[Stage 4: URL Resolution] Signed URL detail check notice:", signErr?.message || signErr);
   }
 
-  // 2. Direct public URL fallback if configured
-  const directPublicUrl = getR2PublicUrl(cleanBucket, cleanKey);
-  if (directPublicUrl && (directPublicUrl.startsWith("http://") || directPublicUrl.startsWith("https://"))) {
-    return directPublicUrl;
-  }
-
-  // 3. Streaming download proxy fallback
+  // 2. Direct streaming download proxy fallback
   return `/api/storage?action=download&bucket=${encodeURIComponent(cleanBucket)}&key=${encodeURIComponent(cleanKey)}`;
 }
 

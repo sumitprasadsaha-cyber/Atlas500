@@ -570,7 +570,60 @@ export async function uploadObjectToR2(params: {
 }
 
 /**
+ * Generates all plausible candidate keys for an object lookup to handle URL encoding, prefix discrepancies, and path differences.
+ */
+function getCandidateStorageKeys(key: string): string[] {
+  const clean = (key || "").trim().replace(/^\/+/, "");
+  if (!clean) return [];
+
+  const candidates = new Set<string>();
+  candidates.add(clean);
+
+  // 1. Decoded URI component
+  try {
+    const decoded = decodeURIComponent(clean);
+    if (decoded && decoded !== clean) {
+      candidates.add(decoded);
+    }
+  } catch {}
+
+  // 2. Encoded URI components
+  try {
+    const encoded = encodeURI(clean);
+    if (encoded && encoded !== clean) {
+      candidates.add(encoded);
+    }
+  } catch {}
+
+  // 3. Normalized slashes and spaces
+  const normalizedSpaces = clean.replace(/\+/g, " ");
+  candidates.add(normalizedSpaces);
+
+  const plusSpaces = clean.replace(/ /g, "+");
+  candidates.add(plusSpaces);
+
+  // 4. Strip bucket prefix if accidentally included in key
+  const strippedBucket = clean.replace(/^(academy-connect-files|tuition-files|storage)\//i, "");
+  if (strippedBucket && strippedBucket !== clean) {
+    candidates.add(strippedBucket);
+    try {
+      candidates.add(decodeURIComponent(strippedBucket));
+    } catch {}
+  }
+
+  // 5. Add/remove class_notes prefix
+  if (clean.startsWith("class_notes/")) {
+    candidates.add(clean.replace(/^class_notes\//, ""));
+  } else if (!clean.startsWith("class_notes/") && !clean.startsWith("notes/")) {
+    candidates.add(`class_notes/${clean}`);
+  }
+
+  return Array.from(candidates);
+}
+
+/**
  * Checks metadata / existence of an object in Cloudflare R2 bucket or local storage fallback.
+ * Emits structured logging for Stage 3 (R2 Existence Check).
  */
 export async function headObjectFromR2(params: {
   bucket?: string;
@@ -585,69 +638,116 @@ export async function headObjectFromR2(params: {
   resolvedKey?: string;
   error?: string;
 }> {
+  const startTime = Date.now();
   const config = getR2ServerConfig();
   const bucketName = (params.bucket || config.bucket || "academy-connect-files").trim();
-  const cleanKey = (params.key || "").trim().replace(/^\/+/, "");
+  const rawKey = (params.key || "").trim().replace(/^\/+/, "");
 
-  if (!cleanKey) {
+  if (!rawKey) {
     return { exists: false };
   }
 
+  const candidateKeys = getCandidateStorageKeys(rawKey);
+
   // 1. Direct AWS S3 Client HeadObject if R2 is configured
   if (isR2Configured()) {
-    try {
-      const client = getR2S3Client();
-      const command = new HeadObjectCommand({
-        Bucket: bucketName,
-        Key: cleanKey,
-      });
-      const response = await client.send(command);
+    const client = getR2S3Client();
 
-      return {
-        exists: true,
-        contentLength: response.ContentLength,
-        contentType: response.ContentType || getMimeTypeFromKey(cleanKey),
-        lastModified: response.LastModified,
-        etag: response.ETag,
-        metadata: response.Metadata,
-        resolvedKey: cleanKey,
-      };
-    } catch (err: any) {
-      const isNotFound =
-        err?.name === "NoSuchKey" ||
-        err?.name === "NotFound" ||
-        err?.$metadata?.httpStatusCode === 404 ||
-        err?.code === "NoSuchKey" ||
-        err?.code === "NotFound";
+    for (const keyToTry of candidateKeys) {
+      try {
+        const command = new HeadObjectCommand({
+          Bucket: bucketName,
+          Key: keyToTry,
+        });
+        const response = await client.send(command);
 
-      if (!isNotFound) {
-        console.warn(`[R2Server-Operation] HeadObject notice for key="${cleanKey}":`, err?.message || err);
+        console.log(`[Stage 3: R2 Existence Check] Success:`, {
+          stage: "3_R2_EXISTENCE_CHECK",
+          bucket: bucketName,
+          requestedKey: rawKey,
+          resolvedKey: keyToTry,
+          httpStatusFromR2: response.$metadata?.httpStatusCode || 200,
+          contentLength: response.ContentLength,
+          contentType: response.ContentType || getMimeTypeFromKey(keyToTry),
+          etag: response.ETag,
+          lastModified: response.LastModified?.toISOString(),
+          durationMs: Date.now() - startTime,
+        });
+
+        return {
+          exists: true,
+          contentLength: response.ContentLength,
+          contentType: response.ContentType || getMimeTypeFromKey(keyToTry),
+          lastModified: response.LastModified,
+          etag: response.ETag,
+          metadata: response.Metadata,
+          resolvedKey: keyToTry,
+        };
+      } catch (err: any) {
+        const isNotFound =
+          err?.name === "NoSuchKey" ||
+          err?.name === "NotFound" ||
+          err?.$metadata?.httpStatusCode === 404 ||
+          err?.code === "NoSuchKey" ||
+          err?.code === "NotFound";
+
+        if (!isNotFound) {
+          console.warn(`[Stage 3: R2 Existence Check] Notice for key="${keyToTry}":`, {
+            name: err?.name,
+            code: err?.code,
+            httpStatusCode: err?.$metadata?.httpStatusCode,
+            message: err?.message,
+            requestId: err?.$metadata?.requestId,
+          });
+        }
       }
     }
   }
 
   // 2. Check local filesystem storage fallback
-  const local = getFromLocalStorage(bucketName, cleanKey);
-  if (local.exists) {
-    return {
-      exists: true,
-      contentLength: local.size,
-      contentType: local.contentType,
-      lastModified: local.lastModified,
-      etag: local.etag,
-      metadata: local.metadata,
-      resolvedKey: cleanKey,
-    };
+  for (const keyToTry of candidateKeys) {
+    const local = getFromLocalStorage(bucketName, keyToTry);
+    if (local.exists) {
+      console.log(`[Stage 3: R2 Existence Check] Resolved from Local Storage:`, {
+        stage: "3_R2_EXISTENCE_CHECK",
+        bucket: bucketName,
+        requestedKey: rawKey,
+        resolvedKey: keyToTry,
+        contentLength: local.size,
+        contentType: local.contentType,
+        etag: local.etag,
+        durationMs: Date.now() - startTime,
+      });
+
+      return {
+        exists: true,
+        contentLength: local.size,
+        contentType: local.contentType,
+        lastModified: local.lastModified,
+        etag: local.etag,
+        metadata: local.metadata,
+        resolvedKey: keyToTry,
+      };
+    }
   }
+
+  console.info(`[Stage 3: R2 Existence Check] Object NOT found across candidate keys:`, {
+    stage: "3_R2_EXISTENCE_CHECK",
+    bucket: bucketName,
+    requestedKey: rawKey,
+    candidateKeysTried: candidateKeys,
+    durationMs: Date.now() - startTime,
+  });
 
   return {
     exists: false,
-    resolvedKey: cleanKey,
+    resolvedKey: rawKey,
   };
 }
 
 /**
  * Downloads an object stream from Cloudflare R2 bucket or local storage fallback.
+ * Emits structured logging for Stage 5 (Backend Streaming & Cloudflare Headers).
  */
 export async function getObjectFromR2(params: {
   bucket?: string;
@@ -663,123 +763,174 @@ export async function getObjectFromR2(params: {
   metadata?: Record<string, string>;
   resolvedKey: string;
 }> {
+  const startTime = Date.now();
   const config = getR2ServerConfig();
   const bucketName = (params.bucket || config.bucket || "academy-connect-files").trim();
-  const cleanKey = (params.key || "").trim().replace(/^\/+/, "");
+  const rawKey = (params.key || "").trim().replace(/^\/+/, "");
 
-  if (!cleanKey) {
+  if (!rawKey) {
     return { body: null, resolvedKey: "" };
   }
 
+  const candidateKeys = getCandidateStorageKeys(rawKey);
+
   // 1. Try direct S3 Client GetObject if R2 is configured
   if (isR2Configured()) {
-    try {
-      const client = getR2S3Client();
-      const input: GetObjectCommandInput = {
-        Bucket: bucketName,
-        Key: cleanKey,
-        Range: params.range,
-      };
-      const command = new GetObjectCommand(input);
-      const response = await client.send(command);
+    const client = getR2S3Client();
 
-      return {
-        body: (response.Body as unknown as Readable) || null,
-        contentType: response.ContentType || getMimeTypeFromKey(cleanKey),
-        contentLength: response.ContentLength,
-        contentRange: response.ContentRange,
-        lastModified: response.LastModified,
-        etag: response.ETag,
-        metadata: response.Metadata,
-        resolvedKey: cleanKey,
-      };
-    } catch (err: any) {
-      const isNotFound =
-        err?.name === "NoSuchKey" ||
-        err?.name === "NotFound" ||
-        err?.$metadata?.httpStatusCode === 404 ||
-        err?.code === "NoSuchKey" ||
-        err?.code === "NotFound";
+    for (const keyToTry of candidateKeys) {
+      try {
+        const input: GetObjectCommandInput = {
+          Bucket: bucketName,
+          Key: keyToTry,
+          Range: params.range,
+        };
+        const command = new GetObjectCommand(input);
+        const response = await client.send(command);
 
-      if (!isNotFound) {
-        console.warn(`[R2Server-Operation] GetObject S3 notice for key="${cleanKey}":`, err?.message || err);
+        console.log(`[Stage 5: Backend Streaming] S3 GetObject stream opened:`, {
+          stage: "5_BACKEND_STREAMING",
+          bucket: bucketName,
+          resolvedKey: keyToTry,
+          httpStatusFromR2: response.$metadata?.httpStatusCode || 200,
+          contentType: response.ContentType || getMimeTypeFromKey(keyToTry),
+          contentLength: response.ContentLength,
+          contentRange: response.ContentRange,
+          etag: response.ETag,
+          lastModified: response.LastModified?.toISOString(),
+          durationMs: Date.now() - startTime,
+        });
+
+        return {
+          body: (response.Body as unknown as Readable) || null,
+          contentType: response.ContentType || getMimeTypeFromKey(keyToTry),
+          contentLength: response.ContentLength,
+          contentRange: response.ContentRange,
+          lastModified: response.LastModified,
+          etag: response.ETag,
+          metadata: response.Metadata,
+          resolvedKey: keyToTry,
+        };
+      } catch (err: any) {
+        const isNotFound =
+          err?.name === "NoSuchKey" ||
+          err?.name === "NotFound" ||
+          err?.$metadata?.httpStatusCode === 404 ||
+          err?.code === "NoSuchKey" ||
+          err?.code === "NotFound";
+
+        if (!isNotFound) {
+          console.warn(`[Stage 5: Backend Streaming] S3 GetObject notice for key="${keyToTry}":`, {
+            name: err?.name,
+            code: err?.code,
+            httpStatusCode: err?.$metadata?.httpStatusCode,
+            message: err?.message,
+            requestId: err?.$metadata?.requestId,
+          });
+        }
       }
     }
   }
 
   // 2. Try Public URL stream if configured
   if (config.publicUrl) {
-    try {
-      const publicFetchUrl = `${config.publicUrl}/${cleanKey}`;
-      const fetchHeaders: Record<string, string> = {};
-      if (params.range) {
-        fetchHeaders["Range"] = params.range;
-      }
-      const pubRes = await fetch(publicFetchUrl, { headers: fetchHeaders });
-      if (pubRes.ok || pubRes.status === 200 || pubRes.status === 206) {
-        const ct = pubRes.headers.get("content-type") || getMimeTypeFromKey(cleanKey);
-        const len = Number(pubRes.headers.get("content-length")) || undefined;
-        const cr = pubRes.headers.get("content-range") || undefined;
-        const etag = pubRes.headers.get("etag") || undefined;
-        const lastMod = pubRes.headers.get("last-modified");
-
-        let bodyStream: Readable | null = null;
-        if (pubRes.body) {
-          if (typeof Readable.fromWeb === "function") {
-            bodyStream = Readable.fromWeb(pubRes.body as any);
-          } else {
-            const arrayBuf = await pubRes.arrayBuffer();
-            bodyStream = Readable.from(Buffer.from(arrayBuf));
-          }
+    for (const keyToTry of candidateKeys) {
+      try {
+        const publicFetchUrl = `${config.publicUrl}/${keyToTry}`;
+        const fetchHeaders: Record<string, string> = {};
+        if (params.range) {
+          fetchHeaders["Range"] = params.range;
         }
+        const pubRes = await fetch(publicFetchUrl, { headers: fetchHeaders });
+        if (pubRes.ok || pubRes.status === 200 || pubRes.status === 206) {
+          const ct = pubRes.headers.get("content-type") || getMimeTypeFromKey(keyToTry);
+          const len = Number(pubRes.headers.get("content-length")) || undefined;
+          const cr = pubRes.headers.get("content-range") || undefined;
+          const etag = pubRes.headers.get("etag") || undefined;
+          const lastMod = pubRes.headers.get("last-modified");
 
-        return {
-          body: bodyStream,
-          contentType: ct,
-          contentLength: len,
-          contentRange: cr,
-          etag,
-          lastModified: lastMod ? new Date(lastMod) : undefined,
-          resolvedKey: cleanKey,
-        };
-      }
-    } catch {}
+          let bodyStream: Readable | null = null;
+          if (pubRes.body) {
+            if (typeof Readable.fromWeb === "function") {
+              bodyStream = Readable.fromWeb(pubRes.body as any);
+            } else {
+              const arrayBuf = await pubRes.arrayBuffer();
+              bodyStream = Readable.from(Buffer.from(arrayBuf));
+            }
+          }
+
+          console.log(`[Stage 5: Backend Streaming] Public URL stream opened:`, {
+            stage: "5_BACKEND_STREAMING",
+            bucket: bucketName,
+            resolvedKey: keyToTry,
+            httpStatusFromR2: pubRes.status,
+            contentType: ct,
+            contentLength: len,
+            etag,
+            durationMs: Date.now() - startTime,
+          });
+
+          return {
+            body: bodyStream,
+            contentType: ct,
+            contentLength: len,
+            contentRange: cr,
+            etag,
+            lastModified: lastMod ? new Date(lastMod) : undefined,
+            resolvedKey: keyToTry,
+          };
+        }
+      } catch {}
+    }
   }
 
   // 3. Check local filesystem storage fallback
-  const local = getFromLocalStorage(bucketName, cleanKey);
-  if (local.exists && local.filePath) {
-    let streamOptions: any = undefined;
-    let contentRange: string | undefined = undefined;
-    let contentLength = local.size;
+  for (const keyToTry of candidateKeys) {
+    const local = getFromLocalStorage(bucketName, keyToTry);
+    if (local.exists && local.filePath) {
+      let streamOptions: any = undefined;
+      let contentRange: string | undefined = undefined;
+      let contentLength = local.size;
 
-    if (params.range && local.size) {
-      const rangeMatch = params.range.match(/bytes=(\d+)-(\d+)?/);
-      if (rangeMatch) {
-        const start = parseInt(rangeMatch[1], 10);
-        const end = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : local.size - 1;
-        if (start < local.size) {
-          streamOptions = { start, end: Math.min(end, local.size - 1) };
-          contentLength = streamOptions.end - streamOptions.start + 1;
-          contentRange = `bytes ${streamOptions.start}-${streamOptions.end}/${local.size}`;
+      if (params.range && local.size) {
+        const rangeMatch = params.range.match(/bytes=(\d+)-(\d+)?/);
+        if (rangeMatch) {
+          const start = parseInt(rangeMatch[1], 10);
+          const end = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : local.size - 1;
+          if (start < local.size) {
+            streamOptions = { start, end: Math.min(end, local.size - 1) };
+            contentLength = streamOptions.end - streamOptions.start + 1;
+            contentRange = `bytes ${streamOptions.start}-${streamOptions.end}/${local.size}`;
+          }
         }
       }
-    }
 
-    const fileStream = fs.createReadStream(local.filePath, streamOptions);
-    return {
-      body: fileStream,
-      contentType: local.contentType,
-      contentLength,
-      contentRange,
-      lastModified: local.lastModified,
-      etag: local.etag,
-      metadata: local.metadata,
-      resolvedKey: cleanKey,
-    };
+      const fileStream = fs.createReadStream(local.filePath, streamOptions);
+
+      console.log(`[Stage 5: Backend Streaming] Local filesystem stream opened:`, {
+        stage: "5_BACKEND_STREAMING",
+        bucket: bucketName,
+        resolvedKey: keyToTry,
+        contentType: local.contentType,
+        contentLength,
+        etag: local.etag,
+        durationMs: Date.now() - startTime,
+      });
+
+      return {
+        body: fileStream,
+        contentType: local.contentType,
+        contentLength,
+        contentRange,
+        lastModified: local.lastModified,
+        etag: local.etag,
+        metadata: local.metadata,
+        resolvedKey: keyToTry,
+      };
+    }
   }
 
-  return { body: null, resolvedKey: cleanKey };
+  return { body: null, resolvedKey: rawKey };
 }
 
 /**

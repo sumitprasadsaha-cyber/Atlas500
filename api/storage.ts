@@ -85,7 +85,7 @@ export default async function handler(req: any, res: any) {
     const actualBucket = (params.bucket || config.bucket || "academy-connect-files").trim();
 
     switch (action) {
-      // 1. GENERATE SIGNED URL
+      // 1. GENERATE SIGNED URL / SECURE RETRIEVAL METADATA
       case "signed-url": {
         const startTime = Date.now();
         const cleanKey = resolveStorageKey(params, actualBucket);
@@ -96,20 +96,12 @@ export default async function handler(req: any, res: any) {
           );
         }
 
-        console.log("[Storage API] Signed URL Request:", {
+        console.log(`[Stage 2: Key Resolution] Storage Key Resolved:`, {
+          stage: "2_KEY_RESOLUTION",
           incomingKey: params.key || params.storageKey || params.storagePath || params.r2Key || params.pdfUrl,
           canonicalKey: cleanKey,
           bucket: actualBucket,
           operation: params.operation || "getObject",
-          isR2Configured: isR2Configured(),
-          envDetected: {
-            R2_ACCOUNT_ID: Boolean(process.env.R2_ACCOUNT_ID || process.env.CLOUDFLARE_R2_ACCOUNT_ID || process.env.VITE_R2_ACCOUNT_ID),
-            R2_ACCESS_KEY_ID: Boolean(process.env.R2_ACCESS_KEY_ID || process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID || process.env.VITE_R2_ACCESS_KEY_ID),
-            R2_SECRET_ACCESS_KEY: Boolean(process.env.R2_SECRET_ACCESS_KEY || process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY || process.env.VITE_R2_SECRET_ACCESS_KEY),
-            R2_ENDPOINT: Boolean(process.env.R2_ENDPOINT || process.env.CLOUDFLARE_R2_ENDPOINT || process.env.VITE_R2_ENDPOINT || process.env.R2_ACCOUNT_ID),
-            R2_BUCKET: Boolean(process.env.R2_BUCKET || process.env.CLOUDFLARE_R2_BUCKET || process.env.VITE_R2_BUCKET),
-            R2_PUBLIC_URL: Boolean(process.env.R2_PUBLIC_URL || process.env.CLOUDFLARE_R2_PUBLIC_URL || process.env.VITE_R2_PUBLIC_URL),
-          },
         });
 
         // Verify object existence using HeadObject before generating any signed URL
@@ -117,7 +109,7 @@ export default async function handler(req: any, res: any) {
         const exists = Boolean(headCheck && headCheck.exists);
 
         if (!exists && params.operation !== "putObject") {
-          console.info(`[Storage API] HeadObject check: Object NOT found: key="${cleanKey}", bucket="${actualBucket}" (${Date.now() - startTime}ms)`);
+          console.info(`[Stage 3: R2 Existence Check] Object NOT found: key="${cleanKey}", bucket="${actualBucket}" (${Date.now() - startTime}ms)`);
           setCorsHeaders(res);
           return res.status(404).json({
             success: false,
@@ -130,20 +122,35 @@ export default async function handler(req: any, res: any) {
         const headContentType = headCheck.contentType || params.contentType || getMimeType(cleanKey);
         const headContentLength = headCheck.contentLength || 0;
         const fileName = cleanKey.split("/").pop() || "document.pdf";
+        const expiresIn = Number(params.expiresIn) || 3600;
+        const expiryTimestamp = new Date(Date.now() + expiresIn * 1000).toISOString();
+        const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(actualBucket)}&key=${encodeURIComponent(effectiveKey)}`;
 
         try {
           const signedUrl = await generateR2SignedUrl({
             bucket: actualBucket,
             key: effectiveKey,
-            expiresIn: Number(params.expiresIn) || 3600,
+            expiresIn,
             operation: params.operation === "putObject" ? "putObject" : "getObject",
             contentType: headContentType,
           });
 
-          console.log(`[Storage API] Signed URL generated: key="${effectiveKey}", mime="${headContentType}", size=${headContentLength}, duration=${Date.now() - startTime}ms`);
+          console.log(`[Stage 4: URL Generation] URL Generated Successfully:`, {
+            stage: "4_URL_GENERATION",
+            bucket: actualBucket,
+            key: effectiveKey,
+            signedUrl: signedUrl.substring(0, 80) + "...",
+            downloadUrl,
+            expiresIn,
+            expiryTimestamp,
+            contentType: headContentType,
+            contentLength: headContentLength,
+            durationMs: Date.now() - startTime,
+          });
 
           return sendSuccess(res, {
             signedUrl,
+            downloadUrl,
             contentType: headContentType,
             contentLength: headContentLength,
             filename: fileName,
@@ -151,10 +158,12 @@ export default async function handler(req: any, res: any) {
             bucket: actualBucket,
             key: effectiveKey,
             exists: true,
+            expiresIn,
+            expiryTimestamp,
             status: 200,
           });
         } catch (signErr: any) {
-          console.error("[Storage API] Signed URL generation failed:", signErr);
+          console.error("[Stage 4: URL Generation] Signed URL generation failed:", signErr);
           return sendError(
             res,
             signErr,
@@ -282,7 +291,8 @@ export default async function handler(req: any, res: any) {
           );
         }
 
-        console.log("[Storage API] Download Request:", {
+        console.log(`[Stage 2: Key Resolution] Storage Key Resolved for Download:`, {
+          stage: "2_KEY_RESOLUTION",
           incomingKey: params.key || params.storageKey || params.storagePath || params.r2Key || params.pdfUrl,
           canonicalKey: cleanKey,
           bucket: actualBucket,
@@ -322,7 +332,7 @@ export default async function handler(req: any, res: any) {
         try {
           obj = await getObjectFromR2({ bucket: actualBucket, key: cleanKey, range });
         } catch (getErr: any) {
-          console.warn("[Storage API] getObjectFromR2 notice:", getErr?.message || getErr);
+          console.warn("[Stage 5: Backend Streaming] getObjectFromR2 notice:", getErr?.message || getErr);
           return sendError(
             res,
             new NotFoundError(`Object not found: "${cleanKey}" does not exist in bucket "${actualBucket}".`)
@@ -330,7 +340,7 @@ export default async function handler(req: any, res: any) {
         }
 
         if (!obj || !obj.body) {
-          console.info(`[Storage API] Download Object Not Found: key="${cleanKey}", bucket="${actualBucket}"`);
+          console.info(`[Stage 5: Backend Streaming] Download Object Not Found: key="${cleanKey}", bucket="${actualBucket}"`);
           return sendError(
             res,
             new NotFoundError(`Object not found: "${cleanKey}" does not exist in bucket "${actualBucket}".`)
@@ -340,6 +350,7 @@ export default async function handler(req: any, res: any) {
         const contentType = params.mimeType || obj.contentType || getMimeType(cleanKey);
         const fileName = (params.filename as string) || cleanKey.split("/").pop() || (contentType === "application/pdf" ? "note.pdf" : "image.jpg");
         const isAttachment = params.download === "true" || params.download === true;
+        const dispositionType = isAttachment ? "attachment" : "inline";
 
         setCorsHeaders(res);
         res.setHeader("Content-Type", contentType);
@@ -356,10 +367,24 @@ export default async function handler(req: any, res: any) {
         }
 
         // Set Content-Disposition: inline for topic viewing, attachment for download
-        const dispositionType = isAttachment ? "attachment" : "inline";
         res.setHeader("Content-Disposition", `${dispositionType}; filename="${encodeURIComponent(fileName)}"`);
 
-        console.log(`[Storage API] Commencing stream: key="${cleanKey}", mime="${contentType}", size=${obj.contentLength || "chunked"}, disposition="${dispositionType}"`);
+        console.log(`[Stage 5: Backend Streaming] Commencing pipeline stream:`, {
+          stage: "5_BACKEND_STREAMING",
+          bucket: actualBucket,
+          key: cleanKey,
+          resolvedKey: obj.resolvedKey,
+          contentType,
+          contentLength: obj.contentLength || "chunked",
+          dispositionType,
+          etag: obj.etag,
+          headersSent: {
+            "Content-Type": contentType,
+            "Content-Disposition": `${dispositionType}; filename="${fileName}"`,
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=31536000, immutable",
+          },
+        });
 
         // Safely stream through pipeline and await completion so serverless lambda does not terminate execution prematurely
         return await new Promise<void>((resolve) => {
@@ -371,11 +396,26 @@ export default async function handler(req: any, res: any) {
             const durationMs = Date.now() - startTime;
 
             if (status === "success") {
-              console.log(`[Storage API] Stream completed successfully: key="${cleanKey}", duration=${durationMs}ms`);
+              console.log(`[Stage 6: Client Final Response] Stream completed successfully:`, {
+                stage: "6_FINAL_RESPONSE",
+                key: cleanKey,
+                durationMs,
+                status: 200,
+              });
             } else if (status === "aborted") {
-              console.log(`[Storage API] Client aborted stream connection: key="${cleanKey}", duration=${durationMs}ms`);
+              console.log(`[Stage 6: Client Final Response] Client aborted stream connection:`, {
+                stage: "6_FINAL_RESPONSE",
+                key: cleanKey,
+                durationMs,
+                status: "ABORTED",
+              });
             } else {
-              console.error(`[Storage API] Stream failed: key="${cleanKey}", duration=${durationMs}ms, error=`, err?.message || err);
+              console.error(`[Stage 6: Client Final Response] Stream failed:`, {
+                stage: "6_FINAL_RESPONSE",
+                key: cleanKey,
+                durationMs,
+                error: err?.message || err,
+              });
               if (!res.headersSent) {
                 sendError(res, err, "Stream transmission error", "STREAM_ERROR");
               }
