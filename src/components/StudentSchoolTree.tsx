@@ -23,29 +23,8 @@ import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
 import { getTopicTestStats } from "../utils/testStatsHelper";
 import StudentTestScoreButton from "./StudentTestScoreButton";
 import { notesLogger } from "../lib/notesLogger";
-
-/**
- * Animated three-dot loading indicator: "Downloading." -> "Downloading.." -> "Downloading..."
- */
-function AnimatedDownloadingIndicator() {
-  const [dotCount, setDotCount] = useState(1);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDotCount((prev) => (prev >= 3 ? 1 : prev + 1));
-    }, 350);
-    return () => clearInterval(interval);
-  }, []);
-
-  const dots = ".".repeat(dotCount);
-
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/70 border border-blue-200/80 dark:border-blue-800/70 text-[11px] font-bold text-blue-700 dark:text-blue-300 shrink-0 select-none shadow-2xs">
-      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping shrink-0" />
-      <span>Downloading{dots}</span>
-    </span>
-  );
-}
+import { TopicDownloadProgressBar } from "./notes/TopicDownloadProgressBar";
+import { topicDownloadProgress } from "../lib/topicDownloadProgress";
 
 interface StudentSchoolTreeProps {
   className: string;
@@ -98,7 +77,7 @@ export default function StudentSchoolTree({
   });
 
   const [, setTestBankTick] = useState(0);
-  const [localDownloadingId, setLocalDownloadingId] = useState<string | null>(null);
+  const [downloadingIds, setDownloadingIds] = useState<Record<string, boolean>>({});
   const [localErrorId, setLocalErrorId] = useState<string | null>(null);
   const [localErrorMsg, setLocalErrorMsg] = useState<string>("");
 
@@ -324,9 +303,8 @@ export default function StudentSchoolTree({
                           </div>
                         ) : (
                           mod.topics.map((topic) => {
-                            const isDownloading = (activeDownloadingId === topic.id) || (localDownloadingId === topic.id);
+                            const isDownloading = Boolean(downloadingIds[topic.id] || (activeDownloadingId === topic.id) || topicDownloadProgress.isDownloading(topic.id));
                             const hasError = (openErrorNoteId === topic.id) || (localErrorId === topic.id);
-                            const isAnyDownloading = Boolean(activeDownloadingId) || Boolean(localDownloadingId);
                             const targetClass = className || student.classGrade || (topic.note as any).classGrade || "";
                             const targetSubj = subj.subject || (topic.note as any).subject || "";
                             const chapterNo = mod.moduleNo || (topic.note as any).chapterNo || 1;
@@ -357,7 +335,7 @@ export default function StudentSchoolTree({
                               const isRetry = hasError;
                               setLocalErrorId(null);
                               setLocalErrorMsg("");
-                              setLocalDownloadingId(topic.id);
+                              setDownloadingIds((prev) => ({ ...prev, [topic.id]: true }));
 
                               const topicId = topic.id;
                               const topicName = topic.topicName || topic.topicLabel || (topic.note as any)?.topicTitle || (topic as any).name || "";
@@ -397,7 +375,11 @@ export default function StudentSchoolTree({
                                   setLocalErrorId((curr) => (curr === topic.id ? null : curr));
                                 }, 5000);
                               } finally {
-                                setLocalDownloadingId(null);
+                                setDownloadingIds((prev) => {
+                                  const next = { ...prev };
+                                  delete next[topic.id];
+                                  return next;
+                                });
                               }
                             };
 
@@ -430,7 +412,12 @@ export default function StudentSchoolTree({
                                         {topic.topicName}
                                       </span>
 
-                                      {isDownloading && <AnimatedDownloadingIndicator />}
+                                      {isDownloading && (
+                                        <TopicDownloadProgressBar
+                                          topicId={topic.id}
+                                          storageKey={topic.note?.storagePath || (topic.note as any)?.storageKey}
+                                        />
+                                      )}
 
                                       {hasError && !isDownloading && (
                                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 text-[11px] font-bold shrink-0 animate-fadeIn">

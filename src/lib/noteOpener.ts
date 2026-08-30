@@ -19,6 +19,7 @@ export interface NoteOpeningTarget {
   subject?: string;
   noteId?: string;
   title?: string;
+  onProgress?: (percent: number | null, statusText?: string) => void;
 }
 
 /**
@@ -218,17 +219,22 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
   const fileType = typeof target === "object" && target !== null ? target.fileType : undefined;
 
   // 1. Strict Sequential Pipeline: Download & Verify Document First
-  const verifiedNote = await fetchNoteBlobWithCache({
-    storageKey,
-    storagePath: storageKey,
-    noteId: typeof target === "object" && target !== null ? target.noteId : undefined,
-    title: typeof target === "object" && target !== null ? target.title : undefined,
-    fileName,
-    pdfFileName: fileName,
-    mimeType,
-    fileType,
-    url: typeof target === "object" && target !== null ? target.url : undefined,
-  });
+  const onProgress = typeof target === "object" && target !== null ? target.onProgress : undefined;
+  const verifiedNote = await fetchNoteBlobWithCache(
+    {
+      storageKey,
+      storagePath: storageKey,
+      noteId: typeof target === "object" && target !== null ? target.noteId : undefined,
+      title: typeof target === "object" && target !== null ? target.title : undefined,
+      fileName,
+      pdfFileName: fileName,
+      mimeType,
+      fileType,
+      url: typeof target === "object" && target !== null ? target.url : undefined,
+    },
+    undefined,
+    onProgress ? (pct) => onProgress(pct) : undefined
+  );
 
   if (!verifiedNote || !verifiedNote.objectUrl || !verifiedNote.blob || verifiedNote.blob.size <= 0) {
     throw new Error("Failed to verify document.");

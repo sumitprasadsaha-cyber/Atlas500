@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { ClassNote, ChapterNote } from "../../types";
 import { isImageFile } from "../../lib/nativePdfService";
+import { TopicDownloadProgressBar } from "./TopicDownloadProgressBar";
 
 interface TopicCardProps {
   note: ClassNote | ChapterNote;
@@ -51,29 +52,6 @@ function formatDate(dateStr?: string): string {
   } catch {
     return dateStr;
   }
-}
-
-/**
- * Animated three-dot loading indicator: "Downloading." -> "Downloading.." -> "Downloading..."
- */
-function AnimatedDownloadingIndicator() {
-  const [dotCount, setDotCount] = useState(1);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDotCount((prev) => (prev >= 3 ? 1 : prev + 1));
-    }, 350);
-    return () => clearInterval(interval);
-  }, []);
-
-  const dots = ".".repeat(dotCount);
-
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/70 border border-blue-200/80 dark:border-blue-800/70 text-[11px] font-bold text-blue-700 dark:text-blue-300 shrink-0 select-none shadow-2xs">
-      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping shrink-0" />
-      <span>Downloading{dots}</span>
-    </span>
-  );
 }
 
 export default function TopicCard({
@@ -155,7 +133,12 @@ export default function TopicCard({
               {displayTitle}
             </h4>
 
-            {activeDownloading && <AnimatedDownloadingIndicator />}
+            {activeDownloading && (
+              <TopicDownloadProgressBar
+                topicId={note.id}
+                storageKey={note.storagePath || (note as any).storageKey}
+              />
+            )}
 
             {hasError && !activeDownloading && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 text-[11px] font-bold shrink-0 animate-fadeIn">

@@ -9,6 +9,7 @@ import { Browser } from "@capacitor/browser";
 import { openNote, resolveDirectNoteUrl, getNoteMimeType, NoteOpeningTarget } from "./noteOpener";
 import { notesCacheService } from "./notesCacheService";
 import { notesLogger } from "./notesLogger";
+import { topicDownloadProgress } from "./topicDownloadProgress";
 import { ClassNote } from "../types";
 
 export { openNote, resolveDirectNoteUrl, getNoteMimeType };
@@ -293,9 +294,20 @@ export async function fetchNoteBlobWithCache(
   console.log("Topic Name:", options.title || fileName || "Topic Note");
   console.log("Download URL:", targetUrl);
 
-  // 4. Download selected topic's file fresh (never reuse previous response, ArrayBuffer, or Blob)
+  // 4. Download selected topic's file fresh with real-time percentage progress
+  const topicId = options.noteId || storageKey || "topic-note";
+  topicDownloadProgress.setProgress(topicId, null);
+  if (options.noteId && storageKey && options.noteId !== storageKey) {
+    topicDownloadProgress.setProgress(storageKey, null);
+  }
+  if (onProgress) {
+    onProgress(0);
+  }
+
   const response = await fetch(targetUrl, { signal, cache: "no-store" });
   if (!response.ok || response.status !== 200) {
+    topicDownloadProgress.clearProgress(topicId);
+    if (options.noteId && storageKey) topicDownloadProgress.clearProgress(storageKey);
     notesLogger.error("DOWNLOAD_ERROR", { storageKey, fileName, status: response.status });
     if (response.status === 404) {
       throw new Error("File not found in cloud storage.");
@@ -304,8 +316,40 @@ export async function fetchNoteBlobWithCache(
   }
 
   const contentTypeHeader = response.headers.get("content-type");
-  const responseData = await response.arrayBuffer();
-  const blob = new Blob([responseData], { type: mimeType });
+  const contentLengthHeader = response.headers.get("content-length");
+  const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : 0;
+
+  let blob: Blob;
+
+  if (response.body && typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let receivedBytes = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        receivedBytes += value.length;
+
+        if (totalBytes > 0) {
+          const pct = Math.min(99, Math.round((receivedBytes / totalBytes) * 100));
+          topicDownloadProgress.setProgress(topicId, pct);
+          if (options.noteId && storageKey) topicDownloadProgress.setProgress(storageKey, pct);
+          if (onProgress) onProgress(pct);
+        } else {
+          topicDownloadProgress.setProgress(topicId, null);
+          if (options.noteId && storageKey) topicDownloadProgress.setProgress(storageKey, null);
+          if (onProgress) onProgress(null as any);
+        }
+      }
+    }
+    blob = new Blob(chunks, { type: mimeType });
+  } else {
+    const responseData = await response.arrayBuffer();
+    blob = new Blob([responseData], { type: mimeType });
+  }
 
   console.log("Blob Size:", blob.size);
   console.log("Blob Type:", blob.type);
@@ -314,6 +358,8 @@ export async function fetchNoteBlobWithCache(
   const verification = await verifyDocumentBlob(blob, options.fileType, fileName, contentTypeHeader);
 
   if (!verification.valid) {
+    topicDownloadProgress.clearProgress(topicId);
+    if (options.noteId && storageKey) topicDownloadProgress.clearProgress(storageKey);
     if (verification.isCloudflare) {
       notesLogger.warn("CLOUDFLARE_CHALLENGE_DETECTED", {
         storageKey,
@@ -344,6 +390,11 @@ export async function fetchNoteBlobWithCache(
     mimeType,
   });
 
+  // Set progress to 100% immediately before creating object URL and opening
+  topicDownloadProgress.setProgress(topicId, 100);
+  if (options.noteId && storageKey) topicDownloadProgress.setProgress(storageKey, 100);
+  if (onProgress) onProgress(100);
+
   // 6. Create fresh object URL
   const objectUrl = URL.createObjectURL(blob);
   previousBlobUrl = objectUrl;
@@ -354,7 +405,11 @@ export async function fetchNoteBlobWithCache(
     fileSize: blob.size,
   });
 
-  if (onProgress) onProgress(100);
+  // Clear download progress so the progress bar hides cleanly as the note opens
+  setTimeout(() => {
+    topicDownloadProgress.clearProgress(topicId);
+    if (options.noteId && storageKey) topicDownloadProgress.clearProgress(storageKey);
+  }, 400);
 
   return {
     blob,
