@@ -154,7 +154,7 @@ class NotesCacheService {
       const entry: CachedMetadataEntry = {
         key: METADATA_CACHE_KEY,
         notes,
-        version: "6.4.0",
+        version: "6.5.0",
         cachedAt: Date.now(),
       };
 
