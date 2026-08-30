@@ -13,6 +13,7 @@ import ProfilePictureModal from "./components/ProfilePictureModal";
 import StudyTimerModal from "./components/StudyTimerModal";
 import Settings from "./components/Settings";
 import Login from "./components/Login";
+import SplashVideo from "./components/SplashVideo";
 import StudentDashboard, { StudentMyTab } from "./components/StudentDashboard";
 import ErrorBoundary from "./components/ErrorBoundary";
 import LoadingProgressModal from "./components/LoadingProgressModal";
@@ -136,6 +137,25 @@ export default function App() {
     step: "Restoring Session…",
     percent: 25,
   });
+
+  // Cold-start splash screen video state
+  const [showSplash, setShowSplash] = useState<boolean>(() => {
+    try {
+      const splashShown = sessionStorage.getItem("app_splash_shown");
+      return !splashShown;
+    } catch {
+      return true;
+    }
+  });
+
+  const handleSplashComplete = () => {
+    try {
+      sessionStorage.setItem("app_splash_shown", "true");
+    } catch {
+      // ignore storage errors
+    }
+    setShowSplash(false);
+  };
 
   const safeSetLocalStorage = (key: string, val: string) => {
     safeLocalStorageSetItem(key, val);
@@ -1476,6 +1496,11 @@ export default function App() {
     setSelectedStudentId(null);
     setActiveSubject(null);
   };
+
+  // Render Splash screen video on cold start
+  if (showSplash) {
+    return <SplashVideo onComplete={handleSplashComplete} />;
+  }
 
   if (isAuthInitializing && !auth.isAuthenticated) {
     return (
