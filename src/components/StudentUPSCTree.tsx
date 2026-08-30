@@ -93,6 +93,7 @@ export default function StudentUPSCTree({
   const [, setTestBankTick] = useState(0);
   const [localOpeningId, setLocalOpeningId] = useState<string | null>(null);
   const [localErrorId, setLocalErrorId] = useState<string | null>(null);
+  const [localErrorMsg, setLocalErrorMsg] = useState<string>("");
 
   // Sync state to sessionStorage
   useEffect(() => {
@@ -358,6 +359,7 @@ export default function StudentUPSCTree({
                             const handleTopicClick = async () => {
                               if (isOpening || isAnyOpening) return;
                               setLocalErrorId(null);
+                              setLocalErrorMsg("");
                               setLocalOpeningId(topic.id);
 
                               try {
@@ -368,12 +370,19 @@ export default function StudentUPSCTree({
                                 if (result && typeof result.then === "function") {
                                   await result;
                                 }
-                              } catch (err) {
+                              } catch (err: any) {
                                 console.error("[StudentUPSCTree] Error opening note:", err);
                                 setLocalErrorId(topic.id);
+                                const isOffline = typeof navigator !== "undefined" && !navigator.onLine;
+                                const isOfflineMsg = (err?.message || "").includes("offline") || (err?.message || "").includes("internet");
+                                setLocalErrorMsg(
+                                  isOffline || isOfflineMsg
+                                    ? "This note is not available offline. Connect to the internet to download it."
+                                    : (err?.message || "Failed to open. Please try again.")
+                                );
                                 setTimeout(() => {
                                   setLocalErrorId((curr) => (curr === topic.id ? null : curr));
-                                }, 3000);
+                                }, 4000);
                               } finally {
                                 setLocalOpeningId(null);
                               }
@@ -437,7 +446,7 @@ export default function StudentUPSCTree({
                                   )}
                                 </div>
 
-                                {/* Inline Error Message (disappears after ~3 seconds) */}
+                                {/* Inline Error Message (disappears after ~4 seconds) */}
                                 {hasError && (
                                   <div className="px-3 pb-2 pt-0.5 animate-fadeIn">
                                     <div 
@@ -445,7 +454,7 @@ export default function StudentUPSCTree({
                                       role="alert"
                                     >
                                       <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-500" />
-                                      <span>Failed to open. Please try again.</span>
+                                      <span>{localErrorMsg || "Failed to open. Please try again."}</span>
                                     </div>
                                   </div>
                                 )}

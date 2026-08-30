@@ -80,11 +80,12 @@ export default defineConfig(({ command, mode }) => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           cleanupOutdatedCaches: true,
           clientsClaim: true,
           skipWaiting: true,
+          navigateFallback: '/index.html',
           navigateFallbackDenylist: [
             /^\/api\//,
             /\.(pdf|jpe?g|png|webp|gif|svg|bmp|heic|heif)$/i,
@@ -96,12 +97,48 @@ export default defineConfig(({ command, mode }) => {
           ],
           runtimeCaching: [
             {
+              urlPattern: ({ request }) => request.mode === 'navigate',
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'tuition-pwa-pages',
+                networkTimeoutSeconds: 3,
+                expiration: {
+                  maxEntries: 20,
+                  maxAgeSeconds: 30 * 24 * 60 * 60,
+                },
+              },
+            },
+            {
+              urlPattern: ({ request }) =>
+                request.destination === 'style' ||
+                request.destination === 'script' ||
+                request.destination === 'worker',
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'tuition-pwa-static-resources',
+                expiration: {
+                  maxEntries: 60,
+                  maxAgeSeconds: 30 * 24 * 60 * 60,
+                },
+              },
+            },
+            {
+              urlPattern: ({ request }) => request.destination === 'image' && !request.url.includes('/api/'),
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'tuition-pwa-images',
+                expiration: {
+                  maxEntries: 100,
+                  maxAgeSeconds: 30 * 24 * 60 * 60,
+                },
+              },
+            },
+            {
               urlPattern: ({ url }) =>
                 url.hostname.includes('r2.cloudflarestorage.com') ||
                 url.hostname.includes('r2.dev') ||
                 url.search.includes('X-Amz-') ||
-                url.pathname.startsWith('/api/') ||
-                /\.(pdf|jpe?g|png|webp|gif|svg|bmp|heic|heif)$/i.test(url.pathname),
+                url.pathname.startsWith('/api/'),
               handler: 'NetworkOnly',
             },
           ],

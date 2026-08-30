@@ -1795,18 +1795,14 @@ export function StudentMyTab({
 
   useEffect(() => {
     if (selectedSubject) {
-      console.log(`[PracticeTest] Study Space Loaded: { subject: "${selectedSubject}", classGrade: "${localStudent.classGrade || ''}" }`);
       preloadSubjectPracticeTests(localStudent.classGrade || "", selectedSubject, allClassNotes);
     }
 
-    fetchAllPracticeTests();
     if (student?.id) {
       fetchStudentTestAttempts(student.id, student.name);
     }
 
     const handlePracticeTestsUpdate = () => {
-      // Refresh the test bank to ensure deleted tests are removed
-      fetchAllPracticeTests();
       if (selectedSubject) {
         preloadSubjectPracticeTests(localStudent.classGrade || "", selectedSubject, allClassNotes);
       }
@@ -1833,7 +1829,7 @@ export function StudentMyTab({
         window.removeEventListener("storage", handleOtherUpdate);
       }
     };
-  }, [selectedSubject, localStudent, allClassNotes]);
+  }, [selectedSubject, localStudent?.id, localStudent?.classGrade, allClassNotes.length]);
 
   const handleSaveChapterProgress = async (status: string, remarks: string) => {
     if (!progressModalNote || !selectedSubject) return;
@@ -2099,7 +2095,8 @@ export function StudentMyTab({
       setOpenErrorNoteId(note.id);
       setTimeout(() => {
         setOpenErrorNoteId((current) => (current === note.id ? null : current));
-      }, 3000);
+      }, 4000);
+      throw err;
     } finally {
       clearTimeout(watchdogTimer);
       setOpeningNoteId(null);

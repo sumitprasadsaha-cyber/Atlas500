@@ -154,8 +154,8 @@ export async function fetchNoteBlobWithCache(
   }
 
   // 2. If offline and not in cache, throw helpful offline error
-  if (!notesCacheService.getOnlineStatus()) {
-    throw new Error("You are currently offline. This note has not been cached for offline reading yet.");
+  if (!notesCacheService.getOnlineStatus() || (typeof navigator !== "undefined" && !navigator.onLine)) {
+    throw new Error("This note is not available offline. Connect to the internet to download it.");
   }
 
   notesLogger.info("DOWNLOAD_START", { storageKey, fileName });

@@ -38,8 +38,20 @@ interface LoginProps {
 }
 
 function getFriendlyAuthErrorMessage(err: any): string {
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return "No internet connection. Please connect to the internet and try again.";
+  }
   const code = err?.code || "";
   const msg = (err?.message || "").toLowerCase();
+  if (
+    code === "auth/network-request-failed" ||
+    msg.includes("network-request-failed") ||
+    msg.includes("network error") ||
+    msg.includes("offline") ||
+    msg.includes("failed to fetch")
+  ) {
+    return "No internet connection. Please connect to the internet and try again.";
+  }
   if (
     code === "auth/wrong-password" ||
     code === "auth/user-not-found" ||
@@ -55,9 +67,6 @@ function getFriendlyAuthErrorMessage(err: any): string {
   }
   if (code === "auth/too-many-requests" || msg.includes("too-many-requests")) {
     return "Too many failed attempts. Please try again later.";
-  }
-  if (code === "auth/network-request-failed" || msg.includes("network-request-failed")) {
-    return "Network unavailable. Please try again.";
   }
   return "Incorrect email or password.";
 }
@@ -127,6 +136,11 @@ export default function Login({ onLoginSuccess, onInstitutionNameLoaded }: Login
 
     if (!emailInput || !passwordVal) {
       setError("Please enter email and password.");
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setError("No internet connection. Please connect to the internet and try again.");
       return;
     }
 
@@ -236,6 +250,11 @@ export default function Login({ onLoginSuccess, onInstitutionNameLoaded }: Login
 
     if (newPassword !== confirmNewPassword) {
       setError("Passwords do not match.");
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setError("No internet connection. Please connect to the internet and try again.");
       return;
     }
 

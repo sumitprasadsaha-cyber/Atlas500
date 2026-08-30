@@ -1,6 +1,7 @@
 import { getBucketName, sanitizeStoragePath } from "./storageService";
 import { getR2SignedUrlDetails, getR2PublicUrl } from "./r2Client";
 import { openDocumentInNativeApp, isCapacitorNative } from "./nativeFileOpener";
+import { notesCacheService } from "./notesCacheService";
 
 export interface NoteOpeningTarget {
   url?: string;
@@ -173,6 +174,67 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
   const isMobile =
     typeof navigator !== "undefined" &&
     /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  const isOnline = typeof navigator !== "undefined" ? navigator.onLine : true;
+
+  const storageKey =
+    typeof target === "string"
+      ? target
+      : target?.storageKey ||
+        target?.storagePath ||
+        (target as any)?.storage_path ||
+        (target as any)?.objectKey ||
+        (target as any)?.r2Key ||
+        target?.url ||
+        target?.pdfUrl ||
+        "";
+  const fileName =
+    typeof target === "object" && target !== null
+      ? target.fileName || target.pdfFileName || (target as any).filename || "note.pdf"
+      : "note.pdf";
+  const mimeType = getNoteMimeType(
+    fileName,
+    typeof target === "object" && target !== null ? target.mimeType : undefined,
+    typeof target === "object" && target !== null ? target.fileType : undefined
+  );
+
+  // 1. Check local offline IndexedDB cache first
+  const cached = await notesCacheService.getCachedBlob(storageKey);
+  if (cached && cached.blob) {
+    const objectUrl = URL.createObjectURL(cached.blob);
+    console.log(`[openNote] Opening cached document from IndexedDB: ${fileName} (${cached.blob.size} bytes)`);
+
+    if (isCapacitor) {
+      const openedNative = await openDocumentInNativeApp({
+        url: objectUrl,
+        fileName: cached.fileName || fileName,
+        mimeType: cached.mimeType || mimeType,
+      });
+      if (openedNative) return objectUrl;
+    }
+
+    // Direct viewing / download of cached blob
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    if (isPWA || isMobile) {
+      a.download = cached.fileName || fileName;
+    }
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try {
+        document.body.removeChild(a);
+      } catch {}
+    }, 1000);
+
+    return objectUrl;
+  }
+
+  // 2. If offline and note has never been cached locally, reject with friendly offline guidance
+  if (!isOnline || !notesCacheService.getOnlineStatus()) {
+    throw new Error("This note is not available offline. Connect to the internet to download it.");
+  }
 
   // In desktop browser environments, pre-allocate window synchronously within the user gesture window
   let preAllocatedWindow: Window | null = null;
@@ -196,16 +258,6 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
     if (!directUrl) {
       throw new Error("Invalid note URL.");
     }
-
-    const fileName =
-      typeof target === "object" && target !== null
-        ? target.fileName || target.pdfFileName || (target as any).filename || "note.pdf"
-        : "note.pdf";
-    const mimeType = getNoteMimeType(
-      fileName,
-      typeof target === "object" && target !== null ? target.mimeType : undefined,
-      typeof target === "object" && target !== null ? target.fileType : undefined
-    );
 
     console.log(`[openNote] Successfully resolved note URL:`, {
       directUrl,
