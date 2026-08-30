@@ -7,7 +7,8 @@ import {
   Image as ImageIcon, 
   Search, 
   X, 
-  FlaskConical 
+  FlaskConical,
+  AlertCircle 
 } from "lucide-react";
 import { Student, ClassNote, ChapterNote } from "../types";
 import { StudentUPSCGSPaper, StudentUPSCSubject, StudentUPSCModule } from "../utils/studentUPSCHierarchyHelper";
@@ -21,10 +22,33 @@ import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
 import { getTopicTestStats } from "../utils/testStatsHelper";
 import StudentTestScoreButton from "./StudentTestScoreButton";
 
+/**
+ * Animated three-dot loading indicator: "Opening." -> "Opening.." -> "Opening..."
+ */
+function AnimatedOpeningIndicator() {
+  const [dotCount, setDotCount] = useState(1);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDotCount((prev) => (prev >= 3 ? 1 : prev + 1));
+    }, 350);
+    return () => clearInterval(interval);
+  }, []);
+
+  const dots = ".".repeat(dotCount);
+
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/70 border border-blue-200/80 dark:border-blue-800/70 text-[11px] font-bold text-blue-700 dark:text-blue-300 shrink-0 select-none shadow-2xs">
+      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping shrink-0" />
+      <span>Opening{dots}</span>
+    </span>
+  );
+}
+
 interface StudentUPSCTreeProps {
   paper: StudentUPSCGSPaper;
   student: Student;
-  onPreviewNote: (note: ClassNote | ChapterNote) => void;
+  onPreviewNote: (note: ClassNote | ChapterNote) => void | Promise<any>;
   onToggleTopicCompletion?: (note: ClassNote | ChapterNote, subject: string, isCompleted: boolean) => void;
   onOpenPracticeTest?: (testTarget: {
     classGrade: string;
@@ -35,6 +59,7 @@ interface StudentUPSCTreeProps {
     testType: "topic" | "full_chapter";
   }) => void;
   openingNoteId?: string | null;
+  openErrorNoteId?: string | null;
   isAdmin?: boolean;
 }
 
@@ -44,11 +69,14 @@ export default function StudentUPSCTree({
   onPreviewNote,
   onOpenPracticeTest,
   openingNoteId,
+  openErrorNoteId,
   isAdmin = false,
 }: StudentUPSCTreeProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({});
   const [, setTestBankTick] = useState(0);
+  const [localOpeningId, setLocalOpeningId] = useState<string | null>(null);
+  const [localErrorId, setLocalErrorId] = useState<string | null>(null);
 
   // Fetch student test attempts and subscribe to real-time practice test & score changes
   useEffect(() => {
@@ -255,7 +283,9 @@ export default function StudentUPSCTree({
                           </div>
                         ) : (
                           mod.topics.map((topic) => {
-                            const isOpening = openingNoteId === topic.id;
+                            const isOpening = (openingNoteId === topic.id) || (localOpeningId === topic.id);
+                            const hasError = (openErrorNoteId === topic.id) || (localErrorId === topic.id);
+                            const isAnyOpening = Boolean(openingNoteId) || Boolean(localOpeningId);
                             const targetClass = "UPSC";
                             const targetSubj = subj.subject || (topic.note as any).subject || "";
                             const chapterNo = mod.moduleNo || (topic.note as any).chapterNo || 1;
@@ -290,54 +320,96 @@ export default function StudentUPSCTree({
                                 topic.topicName || topic.topicLabel
                               );
 
+                            const handleTopicClick = async () => {
+                              if (isOpening || isAnyOpening) return;
+                              setLocalErrorId(null);
+                              setLocalOpeningId(topic.id);
+
+                              try {
+                                const result = onPreviewNote(topic.note);
+                                if (result && typeof result.then === "function") {
+                                  await result;
+                                }
+                              } catch (err) {
+                                console.error("[StudentUPSCTree] Error opening note:", err);
+                                setLocalErrorId(topic.id);
+                                setTimeout(() => {
+                                  setLocalErrorId((curr) => (curr === topic.id ? null : curr));
+                                }, 3000);
+                              } finally {
+                                setLocalOpeningId(null);
+                              }
+                            };
+
                             return (
                               <div
                                 key={`upsc-topic-${topic.id}`}
-                                onClick={() => onPreviewNote(topic.note)}
-                                className={`group flex items-center justify-between gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-100/90 dark:hover:bg-slate-800/70 transition-colors cursor-pointer select-none ${
-                                  isOpening ? "opacity-75 bg-blue-50/50 dark:bg-blue-950/30" : ""
-                                }`}
+                                onClick={handleTopicClick}
+                                className={`group flex flex-col rounded-lg transition-all select-none ${
+                                  isOpening
+                                    ? "opacity-90 bg-blue-50/70 dark:bg-blue-950/40 cursor-wait pointer-events-none"
+                                    : "hover:bg-slate-100/90 dark:hover:bg-slate-800/70 cursor-pointer"
+                                } ${hasError ? "bg-rose-50/40 dark:bg-rose-950/20 border border-rose-200/60 dark:border-rose-900/40" : ""}`}
                                 id={`upsc-topic-${topic.id}`}
-                                title="Tap to open note in browser"
+                                title={isOpening ? "Opening note..." : "Tap to open note in browser"}
                               >
-                                <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                  {topic.fileType === "image" ? (
-                                    <ImageIcon className="w-4 h-4 text-amber-500 shrink-0" />
-                                  ) : (
-                                    <FileText className="w-4 h-4 text-blue-500 shrink-0" />
-                                  )}
-
-                                  <span className="truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                                    {topic.topicName}
-                                  </span>
-
-                                  {isOpening && (
-                                    <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 animate-pulse shrink-0">
-                                      Opening...
+                                {/* Main Topic Content Row */}
+                                <div className="flex items-start sm:items-center justify-between gap-2.5 px-3 py-2">
+                                  {/* Left: Icon, Full Topic Name (wrapped on mobile, no ellipsis truncation), and Animated Opening Indicator */}
+                                  <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
+                                    <span className="mt-0.5 sm:mt-0 shrink-0">
+                                      {topic.fileType === "image" ? (
+                                        <ImageIcon className="w-4 h-4 text-amber-500" />
+                                      ) : (
+                                        <FileText className="w-4 h-4 text-blue-500" />
+                                      )}
                                     </span>
+
+                                    <div className="min-w-0 flex-1 flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+                                      <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors break-words whitespace-normal leading-relaxed">
+                                        {topic.topicName}
+                                      </span>
+
+                                      {isOpening && <AnimatedOpeningIndicator />}
+                                    </div>
+                                  </div>
+
+                                  {/* Right: Attached Test Button / Obtained Score */}
+                                  {hasTest && (
+                                    <div className="shrink-0 self-start sm:self-center">
+                                      <StudentTestScoreButton
+                                        stats={stats}
+                                        hasTest={hasTest}
+                                        topicName={topic.topicName}
+                                        onPreload={() => {
+                                          getTopicPracticeTest(targetClass, targetSubj, mod.moduleNo, topic.topicName);
+                                        }}
+                                        onOpenTest={() => {
+                                          onOpenPracticeTest?.({
+                                            classGrade: targetClass,
+                                            subject: targetSubj,
+                                            chapterNo: mod.moduleNo,
+                                            chapterName: mod.moduleName,
+                                            topicName: topic.topicName,
+                                            testType: "topic",
+                                          });
+                                        }}
+                                      />
+                                    </div>
                                   )}
                                 </div>
 
-                                {/* Attached Test Button / Obtained Score */}
-                                {hasTest && (
-                                  <StudentTestScoreButton
-                                    stats={stats}
-                                    hasTest={hasTest}
-                                    topicName={topic.topicName}
-                                    onPreload={() => {
-                                      getTopicPracticeTest(targetClass, targetSubj, mod.moduleNo, topic.topicName);
-                                    }}
-                                    onOpenTest={() => {
-                                      onOpenPracticeTest?.({
-                                        classGrade: targetClass,
-                                        subject: targetSubj,
-                                        chapterNo: mod.moduleNo,
-                                        chapterName: mod.moduleName,
-                                        topicName: topic.topicName,
-                                        testType: "topic",
-                                      });
-                                    }}
-                                  />
+                                {/* Inline Error Message (disappears after ~3 seconds) */}
+                                {hasError && (
+                                  <div className="px-3 pb-2 pt-0.5 animate-fadeIn">
+                                    <div 
+                                      className="flex items-center gap-1.5 text-[11px] font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/60 px-2.5 py-1 rounded-md"
+                                      role="alert"
+                                    >
+                                      <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-500" />
+                                      <span>Failed to open. Please try again.</span>
+                                    </div>
+                                  </div>
                                 )}
                               </div>
                             );

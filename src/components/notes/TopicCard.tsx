@@ -50,6 +50,29 @@ function formatDate(dateStr?: string): string {
   }
 }
 
+/**
+ * Animated three-dot loading indicator: "Opening." -> "Opening.." -> "Opening..."
+ */
+function AnimatedOpeningIndicator() {
+  const [dotCount, setDotCount] = useState(1);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDotCount((prev) => (prev >= 3 ? 1 : prev + 1));
+    }, 350);
+    return () => clearInterval(interval);
+  }, []);
+
+  const dots = ".".repeat(dotCount);
+
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/70 border border-blue-200/80 dark:border-blue-800/70 text-[11px] font-bold text-blue-700 dark:text-blue-300 shrink-0 select-none shadow-2xs">
+      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping shrink-0" />
+      <span>Opening{dots}</span>
+    </span>
+  );
+}
+
 export default function TopicCard({
   note,
   topicNumber,
@@ -116,12 +139,14 @@ export default function TopicCard({
         {/* Title + Metadata (horizontal on desktop, compact 2-line on small mobile) */}
         <div className="min-w-0 flex-1 flex flex-col md:flex-row md:items-center md:gap-2.5">
           {/* Title */}
-          <div className="flex items-center gap-1.5 min-w-0">
-            <h4 className="text-xs sm:text-[13px] font-bold text-slate-800 dark:text-slate-200 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate leading-tight">
+          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+            <h4 className="text-xs sm:text-[13px] font-bold text-slate-800 dark:text-slate-200 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors break-words whitespace-normal leading-snug">
               {displayTitle}
             </h4>
 
-            {hasPracticeTest && (
+            {isOpening && <AnimatedOpeningIndicator />}
+
+            {hasPracticeTest && !isOpening && (
               <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/70 shrink-0">
                 <FileCheck className="w-2.5 h-2.5 text-emerald-600" />
                 <span>Test Ready</span>

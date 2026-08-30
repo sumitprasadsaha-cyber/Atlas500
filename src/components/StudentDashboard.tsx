@@ -1718,6 +1718,7 @@ export function StudentMyTab({
   const [editingRemarkId, setEditingRemarkId] = useState<string | null>(null);
   const [remarkDrafts, setRemarkDrafts] = useState<Record<string, string>>({});
   const [openingNoteId, setOpeningNoteId] = useState<string | null>(null);
+  const [openErrorNoteId, setOpenErrorNoteId] = useState<string | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
   const [progressModalNote, setProgressModalNote] = useState<ChapterNote | null>(null);
   const [reportModalData, setReportModalData] = useState<SubjectReportData | null>(null);
@@ -1959,6 +1960,8 @@ export function StudentMyTab({
     // Single Tap Protection: Ignore taps while a note is currently opening/downloading
     if (openingNoteId) return;
 
+    setOpenErrorNoteId(null);
+
     if (!isAdmin) {
       if (currentTabServiceStatus === "paused") {
         alert("Your learning services are temporarily paused. Please contact the academy for assistance.");
@@ -1970,7 +1973,10 @@ export function StudentMyTab({
       }
     }
     if (!note.pdfUrl && !note.storagePath && !(note as any).storage_path && !(note as any).objectKey) {
-      alert("This note has no file attached.");
+      setOpenErrorNoteId(note.id);
+      setTimeout(() => {
+        setOpenErrorNoteId((current) => (current === note.id ? null : current));
+      }, 3000);
       return;
     }
 
@@ -2027,7 +2033,10 @@ export function StudentMyTab({
       });
     } catch (err: any) {
       console.error("[StudentDashboard] Error opening note natively:", err);
-      alert(err?.message || "Unable to open note. Please check your network connection.");
+      setOpenErrorNoteId(note.id);
+      setTimeout(() => {
+        setOpenErrorNoteId((current) => (current === note.id ? null : current));
+      }, 3000);
     } finally {
       clearTimeout(watchdogTimer);
       setOpeningNoteId(null);
@@ -2309,6 +2318,7 @@ export function StudentMyTab({
                     onToggleTopicCompletion={handleToggleTopicCompletion}
                     onOpenPracticeTest={(target) => setStudentTestTarget(target)}
                     openingNoteId={openingNoteId}
+                    openErrorNoteId={openErrorNoteId}
                     isAdmin={isAdmin}
                   />
                 </div>
@@ -2364,6 +2374,7 @@ export function StudentMyTab({
                   onToggleTopicCompletion={handleToggleTopicCompletion}
                   onOpenPracticeTest={(target) => setStudentTestTarget(target)}
                   openingNoteId={openingNoteId}
+                  openErrorNoteId={openErrorNoteId}
                   isAdmin={isAdmin}
                 />
               </div>
