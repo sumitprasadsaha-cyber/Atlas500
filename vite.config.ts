@@ -80,6 +80,7 @@ export default defineConfig(({ command, mode }) => {
           ],
         },
         workbox: {
+          cacheId: `tuition-pwa-v${versionInfo.version}`,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           cleanupOutdatedCaches: true,
@@ -100,7 +101,7 @@ export default defineConfig(({ command, mode }) => {
               urlPattern: ({ request }) => request.mode === 'navigate',
               handler: 'NetworkFirst',
               options: {
-                cacheName: 'tuition-pwa-pages',
+                cacheName: `tuition-pwa-pages-v${versionInfo.version}`,
                 networkTimeoutSeconds: 3,
                 expiration: {
                   maxEntries: 20,
@@ -115,7 +116,7 @@ export default defineConfig(({ command, mode }) => {
                 request.destination === 'worker',
               handler: 'StaleWhileRevalidate',
               options: {
-                cacheName: 'tuition-pwa-static-resources',
+                cacheName: `tuition-pwa-static-resources-v${versionInfo.version}`,
                 expiration: {
                   maxEntries: 60,
                   maxAgeSeconds: 30 * 24 * 60 * 60,
@@ -126,7 +127,7 @@ export default defineConfig(({ command, mode }) => {
               urlPattern: ({ request }) => request.destination === 'image' && !request.url.includes('/api/'),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'tuition-pwa-images',
+                cacheName: `tuition-pwa-images-v${versionInfo.version}`,
                 expiration: {
                   maxEntries: 100,
                   maxAgeSeconds: 30 * 24 * 60 * 60,
