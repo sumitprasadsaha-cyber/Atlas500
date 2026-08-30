@@ -29,6 +29,10 @@ export type NotesLogEvent =
   | "DOWNLOAD_PROGRESS"
   | "DOWNLOAD_SUCCESS"
   | "DOWNLOAD_ERROR"
+  | "VERIFICATION_PASSED"
+  | "VERIFICATION_FAILED"
+  | "CLOUDFLARE_CHALLENGE_DETECTED"
+  | "INVALID_CONTENT_DETECTED"
   | "VIEW_OPEN"
   | "VIEW_CLOSE"
   | "CACHE_HIT"
@@ -82,6 +86,11 @@ class NotesLogger {
     delete (safe as any).secret;
     delete (safe as any).password;
     delete (safe as any).token;
+    delete (safe as any).url;
+    delete (safe as any).signedUrl;
+    if (safe.storageKey && typeof safe.storageKey === "string") {
+      safe.storageKey = safe.storageKey.split("?")[0];
+    }
     return safe;
   }
 
@@ -89,7 +98,7 @@ class NotesLogger {
     const parts = [`[Atlas Notes ${event}]`];
     if (payload?.noteId) parts.push(`id=${payload.noteId}`);
     if (payload?.fileName) parts.push(`file="${payload.fileName}"`);
-    if (payload?.storageKey) parts.push(`key="${payload.storageKey}"`);
+    if (payload?.storageKey) parts.push(`key="${payload.storageKey.split("?")[0]}"`);
     if (payload?.durationMs !== undefined) parts.push(`${payload.durationMs}ms`);
     return parts.join(" ");
   }

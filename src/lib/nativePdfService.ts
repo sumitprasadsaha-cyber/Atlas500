@@ -120,8 +120,126 @@ export function getMimeType(fileNameOrUrl: string, mimeType?: string, isImg?: bo
   return getNoteMimeType(fileNameOrUrl, mimeType, isImg ? "image" : undefined);
 }
 
+export interface DocumentVerificationResult {
+  valid: boolean;
+  reason?: string;
+  isCloudflare?: boolean;
+}
+
 /**
- * Fetches note binary data with intelligent IndexedDB cache and AbortSignal support.
+ * Strictly verifies that a downloaded binary blob is a genuine document (PDF or image)
+ * and NOT a Cloudflare challenge page, HTML error page, empty body, or security check.
+ */
+export async function verifyDocumentBlob(
+  blob: Blob,
+  expectedType?: string,
+  fileName?: string,
+  contentTypeHeader?: string | null
+): Promise<DocumentVerificationResult> {
+  if (!blob || blob.size <= 0) {
+    return { valid: false, reason: "File is empty (0 bytes)" };
+  }
+
+  // A genuine document/image payload is at least 32 bytes
+  if (blob.size < 32) {
+    return { valid: false, reason: "File size is too small to be a valid document" };
+  }
+
+  // Inspect the header bytes for HTML / Cloudflare challenge markers
+  const headerSlice = blob.slice(0, 2048);
+  const headerText = await headerSlice.text();
+  const lowerText = headerText.toLowerCase();
+
+  // Cloudflare Challenge / HTML verification check
+  const isHtml =
+    lowerText.includes("<!doctype html") ||
+    lowerText.includes("<html") ||
+    lowerText.includes("<head") ||
+    lowerText.includes("<title>") ||
+    lowerText.includes("<script") ||
+    lowerText.includes("challenge-platform") ||
+    lowerText.includes("cf-browser-verification") ||
+    lowerText.includes("cf-chl-") ||
+    lowerText.includes("__cf_chl_") ||
+    lowerText.includes("cf-turnstile") ||
+    lowerText.includes("just a moment...") ||
+    lowerText.includes("attention required! | cloudflare") ||
+    lowerText.includes("cloudflare ray id") ||
+    lowerText.includes("enable javascript and cookies to continue") ||
+    lowerText.includes("access denied") ||
+    lowerText.includes("error 403") ||
+    lowerText.includes("error 404") ||
+    lowerText.includes("error 500") ||
+    lowerText.includes("403 forbidden") ||
+    lowerText.includes("404 not found") ||
+    (lowerText.startsWith("<?xml") && lowerText.includes("<error>"));
+
+  if (isHtml) {
+    const isCloudflare =
+      lowerText.includes("cloudflare") ||
+      lowerText.includes("challenge") ||
+      lowerText.includes("cf-") ||
+      lowerText.includes("just a moment");
+    return {
+      valid: false,
+      isCloudflare,
+      reason: isCloudflare
+        ? "Cloudflare verification challenge detected"
+        : "HTML or error response returned instead of document",
+    };
+  }
+
+  // Validate Content-Type header if present
+  if (contentTypeHeader) {
+    const ct = contentTypeHeader.toLowerCase();
+    if (ct.includes("text/html") || ct.includes("application/xhtml+xml")) {
+      return { valid: false, reason: `Unsupported content-type: ${contentTypeHeader}` };
+    }
+  }
+
+  const isImg = isImageFile(fileName, undefined, blob.type, expectedType);
+
+  if (isImg) {
+    const buffer = await headerSlice.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const isPng = bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+    const isGif = headerText.startsWith("GIF87a") || headerText.startsWith("GIF89a");
+    const isWebp = headerText.startsWith("RIFF") && headerText.includes("WEBP");
+    const isSvg = headerText.includes("<svg");
+    const isBmp = bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d;
+
+    if (isJpeg || isPng || isGif || isWebp || isSvg || isBmp) {
+      return { valid: true };
+    }
+  }
+
+  // Check PDF signature (%PDF-)
+  if (headerText.includes("%PDF-") || headerText.startsWith("%PDF")) {
+    return { valid: true };
+  }
+
+  if (blob.type.includes("pdf") && (headerText.includes("%PDF") || blob.size > 100)) {
+    return { valid: true };
+  }
+
+  // Check for non-HTML binary data
+  const buffer = await headerSlice.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let nonAscii = 0;
+  for (let i = 0; i < Math.min(bytes.length, 64); i++) {
+    if (bytes[i] === 0 || bytes[i] > 127) nonAscii++;
+  }
+  if (nonAscii > 2 && !headerText.startsWith("<")) {
+    return { valid: true };
+  }
+
+  return { valid: false, reason: "Document signature verification failed" };
+}
+
+/**
+ * Fetches and strictly verifies note binary data with intelligent IndexedDB cache
+ * and AbortSignal support.
  */
 export async function fetchNoteBlobWithCache(
   options: OpenPdfOptions,
@@ -140,17 +258,24 @@ export async function fetchNoteBlobWithCache(
 
   // 1. Check offline / IndexedDB cache first
   const cached = await notesCacheService.getCachedBlob(storageKey);
-  if (cached) {
-    notesLogger.info("DOWNLOAD_CACHED", { storageKey, fileName });
-    if (onProgress) onProgress(100);
-    const objectUrl = URL.createObjectURL(cached.blob);
-    return {
-      blob: cached.blob,
-      mimeType: cached.mimeType || mimeType,
-      fileName: cached.fileName || fileName,
-      objectUrl,
-      cached: true,
-    };
+  if (cached && cached.blob && cached.blob.size > 0) {
+    const check = await verifyDocumentBlob(cached.blob, options.fileType, fileName, cached.mimeType);
+    if (check.valid) {
+      notesLogger.info("VERIFICATION_PASSED", { storageKey, fileName, fileSize: cached.blob.size, cached: true });
+      notesLogger.info("DOWNLOAD_CACHED", { storageKey, fileName });
+      if (onProgress) onProgress(100);
+      const objectUrl = URL.createObjectURL(cached.blob);
+      return {
+        blob: cached.blob,
+        mimeType: cached.mimeType || mimeType,
+        fileName: cached.fileName || fileName,
+        objectUrl,
+        cached: true,
+      };
+    } else {
+      // Invalidate corrupted/invalid cache
+      await notesCacheService.invalidateBlobCache(storageKey);
+    }
   }
 
   // 2. If offline and not in cache, throw helpful offline error
@@ -171,13 +296,15 @@ export async function fetchNoteBlobWithCache(
 
   // 4. Stream response with real progress and abort support
   const response = await fetch(targetUrl, { signal });
-  if (!response.ok) {
+  if (!response.ok || response.status !== 200) {
+    notesLogger.error("DOWNLOAD_ERROR", { storageKey, fileName, status: response.status });
     if (response.status === 404) {
       throw new Error("File not found in cloud storage.");
     }
     throw new Error(`Failed to load note (Server returned status ${response.status}).`);
   }
 
+  const contentTypeHeader = response.headers.get("content-type");
   const contentLength = Number(response.headers.get("content-length") || 0);
   let blob: Blob;
 
@@ -203,7 +330,41 @@ export async function fetchNoteBlobWithCache(
     blob = await response.blob();
   }
 
-  // 5. Store in local cache for instant future retrieval & offline access
+  // 5. Strict Document Verification Pipeline
+  const verification = await verifyDocumentBlob(blob, options.fileType, fileName, contentTypeHeader);
+
+  if (!verification.valid) {
+    if (verification.isCloudflare) {
+      notesLogger.warn("CLOUDFLARE_CHALLENGE_DETECTED", {
+        storageKey,
+        fileName,
+        fileSize: blob.size,
+        extra: { reason: verification.reason },
+      });
+    } else {
+      notesLogger.warn("INVALID_CONTENT_DETECTED", {
+        storageKey,
+        fileName,
+        fileSize: blob.size,
+        extra: { reason: verification.reason },
+      });
+    }
+    notesLogger.error("VERIFICATION_FAILED", {
+      storageKey,
+      fileName,
+      error: verification.reason || "Verification failed",
+    });
+    throw new Error(verification.reason || "Verification failed");
+  }
+
+  notesLogger.info("VERIFICATION_PASSED", {
+    storageKey,
+    fileName,
+    fileSize: blob.size,
+    mimeType,
+  });
+
+  // 6. Store in local cache for instant future retrieval & offline access
   await notesCacheService.setCachedBlob({
     key: storageKey,
     blob,

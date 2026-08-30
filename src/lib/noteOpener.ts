@@ -2,6 +2,8 @@ import { getBucketName, sanitizeStoragePath } from "./storageService";
 import { getR2SignedUrlDetails, getR2PublicUrl } from "./r2Client";
 import { openDocumentInNativeApp, isCapacitorNative } from "./nativeFileOpener";
 import { notesCacheService } from "./notesCacheService";
+import { notesLogger } from "./notesLogger";
+import { fetchNoteBlobWithCache } from "./nativePdfService";
 
 export interface NoteOpeningTarget {
   url?: string;
@@ -162,7 +164,10 @@ export async function resolveDirectNoteUrl(target: string | NoteOpeningTarget): 
 
 /**
  * Universal Note Opener for Desktop, Android, iOS, and installed PWAs.
- * Immediately captures user gesture activation, resolves URL in single pass, and opens viewer.
+ * Implements a strict sequential pipeline:
+ * 1. Asynchronously downloads and verifies document (status 200, valid MIME, not Cloudflare/HTML challenge, size > 0).
+ * 2. Only opens viewer after 100% verification passes.
+ * 3. Never freezes UI, keeps scrolling non-blocking.
  */
 export async function openNote(target: string | NoteOpeningTarget): Promise<string> {
   const isCapacitor = isCapacitorNative();
@@ -174,7 +179,6 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
   const isMobile =
     typeof navigator !== "undefined" &&
     /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-  const isOnline = typeof navigator !== "undefined" ? navigator.onLine : true;
 
   const storageKey =
     typeof target === "string"
@@ -187,144 +191,86 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
         target?.url ||
         target?.pdfUrl ||
         "";
+
   const fileName =
     typeof target === "object" && target !== null
       ? target.fileName || target.pdfFileName || (target as any).filename || "note.pdf"
       : "note.pdf";
+
   const mimeType = getNoteMimeType(
     fileName,
     typeof target === "object" && target !== null ? target.mimeType : undefined,
     typeof target === "object" && target !== null ? target.fileType : undefined
   );
 
-  // 1. Check local offline IndexedDB cache first
-  const cached = await notesCacheService.getCachedBlob(storageKey);
-  if (cached && cached.blob) {
-    const objectUrl = URL.createObjectURL(cached.blob);
-    console.log(`[openNote] Opening cached document from IndexedDB: ${fileName} (${cached.blob.size} bytes)`);
+  const fileType = typeof target === "object" && target !== null ? target.fileType : undefined;
 
-    if (isCapacitor) {
-      const openedNative = await openDocumentInNativeApp({
-        url: objectUrl,
-        fileName: cached.fileName || fileName,
-        mimeType: cached.mimeType || mimeType,
-      });
-      if (openedNative) return objectUrl;
-    }
+  // 1. Strict Sequential Pipeline: Download & Verify Document First
+  const verifiedNote = await fetchNoteBlobWithCache({
+    storageKey,
+    storagePath: storageKey,
+    fileName,
+    pdfFileName: fileName,
+    mimeType,
+    fileType,
+    url: typeof target === "object" && target !== null ? target.url : undefined,
+  });
 
-    // Direct viewing / download of cached blob
-    const a = document.createElement("a");
-    a.href = objectUrl;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    if (isPWA || isMobile) {
-      a.download = cached.fileName || fileName;
-    }
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      try {
-        document.body.removeChild(a);
-      } catch {}
-    }, 1000);
-
-    return objectUrl;
+  if (!verifiedNote || !verifiedNote.objectUrl || !verifiedNote.blob || verifiedNote.blob.size <= 0) {
+    throw new Error("Failed to verify document.");
   }
 
-  // 2. If offline and note has never been cached locally, reject with friendly offline guidance
-  if (!isOnline || !notesCacheService.getOnlineStatus()) {
-    throw new Error("This note is not available offline. Connect to the internet to download it.");
+  // 2. Track study progress asynchronously in background
+  if (typeof target === "object" && target !== null && target.studentId) {
+    import("../utils/chapterProgressHelper")
+      .then(({ recordNoteOpenedOrDownloaded }) => {
+        recordNoteOpenedOrDownloaded(
+          target.studentId!,
+          target.subject,
+          target.noteId || target.storageKey || target.storagePath || ""
+        );
+      })
+      .catch(() => {});
   }
 
-  // In desktop browser environments, pre-allocate window synchronously within the user gesture window
-  let preAllocatedWindow: Window | null = null;
-  if (!isCapacitor && !isPWA && !isMobile && typeof window !== "undefined") {
-    try {
-      preAllocatedWindow = window.open("about:blank", "_blank");
-    } catch {
-      preAllocatedWindow = null;
-    }
-  }
-
-  try {
-    // Single-pass O(1) URL resolution with 8s timeout guard
-    const resolvePromise = resolveDirectNoteUrl(target);
-    const timeoutPromise = new Promise<string>((_, reject) =>
-      setTimeout(() => reject(new Error("Document URL resolution timed out (8s limit).")), 8000)
-    );
-
-    const directUrl = await Promise.race([resolvePromise, timeoutPromise]);
-
-    if (!directUrl) {
-      throw new Error("Invalid note URL.");
-    }
-
-    console.log(`[openNote] Successfully resolved note URL:`, {
-      directUrl,
-      fileName,
-      mimeType,
-      platform: isCapacitor ? "Capacitor" : isPWA ? "PWA" : isMobile ? "Mobile Web" : "Desktop Web",
+  // 3. Open Viewer Only After Verification Passes
+  if (isCapacitor) {
+    const openedNative = await openDocumentInNativeApp({
+      url: verifiedNote.objectUrl,
+      fileName: verifiedNote.fileName,
+      mimeType: verifiedNote.mimeType,
     });
-
-    // Track study progress asynchronously in background
-    if (typeof target === "object" && target !== null && target.studentId) {
-      import("../utils/chapterProgressHelper")
-        .then(({ recordNoteOpenedOrDownloaded }) => {
-          recordNoteOpenedOrDownloaded(
-            target.studentId!,
-            target.subject,
-            target.noteId || target.storageKey || target.storagePath || ""
-          );
-        })
-        .catch(() => {});
-    }
-
-    // 1. If running on native mobile container (Capacitor Android/iOS), open directly via native FileOpener / intent
-    if (isCapacitor) {
-      const openedNative = await openDocumentInNativeApp({
-        url: directUrl,
-        fileName,
-        mimeType,
+    if (openedNative) {
+      notesLogger.info("VIEW_OPEN", {
+        fileName: verifiedNote.fileName,
+        storageKey,
+        extra: { platform: "Capacitor" },
       });
-
-      if (openedNative) {
-        if (preAllocatedWindow && !preAllocatedWindow.closed) {
-          preAllocatedWindow.close();
-        }
-        return directUrl;
-      }
+      return verifiedNote.objectUrl;
     }
-
-    // 2. If running inside installed PWA: Navigate current window directly to download/view endpoint (no popup window)
-    if (isPWA) {
-      if (preAllocatedWindow && !preAllocatedWindow.closed) {
-        preAllocatedWindow.close();
-      }
-      window.location.assign(directUrl);
-      return directUrl;
-    }
-
-    // 3. Desktop / Standard Web Browser handoff
-    if (preAllocatedWindow && !preAllocatedWindow.closed) {
-      preAllocatedWindow.location.href = directUrl;
-    } else if (isMobile) {
-      window.location.assign(directUrl);
-    } else {
-      const a = document.createElement("a");
-      a.href = directUrl;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
-
-    return directUrl;
-  } catch (err: any) {
-    if (preAllocatedWindow && !preAllocatedWindow.closed) {
-      preAllocatedWindow.close();
-    }
-    console.error("[openNote] Note opening failed:", err);
-    throw err;
   }
+
+  // Web / PWA / Browser Viewer Trigger with verified blob
+  const a = document.createElement("a");
+  a.href = verifiedNote.objectUrl;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  if (isPWA || isMobile) {
+    a.download = verifiedNote.fileName;
+  }
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    try {
+      document.body.removeChild(a);
+    } catch {}
+  }, 1000);
+
+  notesLogger.info("VIEW_OPEN", {
+    fileName: verifiedNote.fileName,
+    storageKey,
+    extra: { platform: isPWA ? "PWA" : isMobile ? "Mobile" : "Desktop" },
+  });
+
+  return verifiedNote.objectUrl;
 }

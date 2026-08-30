@@ -21,6 +21,7 @@ import { getAllTestAttempts } from "../utils/assessmentParser";
 import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
 import { getTopicTestStats } from "../utils/testStatsHelper";
 import StudentTestScoreButton from "./StudentTestScoreButton";
+import { notesLogger } from "../lib/notesLogger";
 
 /**
  * Animated three-dot loading indicator: "Opening." -> "Opening.." -> "Opening..."
@@ -357,10 +358,20 @@ export default function StudentUPSCTree({
                               );
 
                             const handleTopicClick = async () => {
-                              if (isOpening || isAnyOpening) return;
+                              if (isOpening) return;
+                              const isRetry = hasError;
                               setLocalErrorId(null);
                               setLocalErrorMsg("");
                               setLocalOpeningId(topic.id);
+
+                              if (isRetry) {
+                                notesLogger.info("RETRY_ATTEMPT", {
+                                  noteId: topic.id,
+                                  topicTitle: topic.topicName,
+                                  subject: targetSubj,
+                                  chapterNumber: chapterNo,
+                                });
+                              }
 
                               try {
                                 if (typeof window !== "undefined") {
@@ -382,7 +393,7 @@ export default function StudentUPSCTree({
                                 );
                                 setTimeout(() => {
                                   setLocalErrorId((curr) => (curr === topic.id ? null : curr));
-                                }, 4000);
+                                }, 5000);
                               } finally {
                                 setLocalOpeningId(null);
                               }
@@ -396,13 +407,13 @@ export default function StudentUPSCTree({
                                   isOpening
                                     ? "opacity-90 bg-blue-50/70 dark:bg-blue-950/40 cursor-wait pointer-events-none"
                                     : "hover:bg-slate-100/90 dark:hover:bg-slate-800/70 cursor-pointer"
-                                } ${hasError ? "bg-rose-50/40 dark:bg-rose-950/20 border border-rose-200/60 dark:border-rose-900/40" : ""}`}
+                                } ${hasError ? "bg-rose-50/50 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/60" : ""}`}
                                 id={`upsc-topic-${topic.id}`}
-                                title={isOpening ? "Opening note..." : "Tap to open note in browser"}
+                                title={isOpening ? "Opening note..." : hasError ? "Failed to load. Tap to try again" : "Tap to open note in browser"}
                               >
                                 {/* Main Topic Content Row */}
                                 <div className="flex items-start sm:items-center justify-between gap-2.5 px-3 py-2">
-                                  {/* Left: Icon, Full Topic Name (wrapped on mobile, no ellipsis truncation), and Animated Opening Indicator */}
+                                  {/* Left: Icon, Full Topic Name, and Opening / Try Again Indicator */}
                                   <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
                                     <span className="mt-0.5 sm:mt-0 shrink-0">
                                       {topic.fileType === "image" ? (
@@ -418,6 +429,12 @@ export default function StudentUPSCTree({
                                       </span>
 
                                       {isOpening && <AnimatedOpeningIndicator />}
+
+                                      {hasError && !isOpening && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 text-[11px] font-bold shrink-0 animate-fadeIn">
+                                          Try Again
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
 
@@ -446,7 +463,7 @@ export default function StudentUPSCTree({
                                   )}
                                 </div>
 
-                                {/* Inline Error Message (disappears after ~4 seconds) */}
+                                {/* Inline Error Message */}
                                 {hasError && (
                                   <div className="px-3 pb-2 pt-0.5 animate-fadeIn">
                                     <div 
@@ -454,7 +471,7 @@ export default function StudentUPSCTree({
                                       role="alert"
                                     >
                                       <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-500" />
-                                      <span>{localErrorMsg || "Failed to open. Please try again."}</span>
+                                      <span>{localErrorMsg || "Failed to open. Tap to try again."}</span>
                                     </div>
                                   </div>
                                 )}
