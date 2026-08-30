@@ -967,6 +967,45 @@ export async function listR2Nodes(params?: {
 }
 
 /**
+ * Discovers and lists all topic notes from Cloudflare R2 bucket.
+ */
+export async function discoverR2Topics(params?: {
+  bucket?: string;
+  category?: "school" | "upsc" | "all";
+  classGrade?: string;
+  className?: string;
+  gsPaper?: string;
+  generalStudiesPaper?: string;
+  subject?: string;
+  chapterNo?: number | string;
+  moduleNo?: number | string;
+  prefix?: string;
+}): Promise<{ success: boolean; count: number; topics: any[] }> {
+  const bucket = getR2BucketName(params?.bucket);
+  const baseUrl = getApiBaseUrl();
+
+  const response = await fetch(`${baseUrl}/api/storage?action=discover-topics`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      bucket,
+      ...params,
+    }),
+  });
+
+  if (!response.ok) {
+    let errMessage = `HTTP ${response.status}`;
+    try {
+      const parsed = await response.json();
+      errMessage = parsed.error || parsed.message || errMessage;
+    } catch {}
+    throw new Error(`Failed to discover topics from R2: ${errMessage}`);
+  }
+
+  return await response.json();
+}
+
+/**
  * Deletes a hierarchy node and cascades deletion to child objects in Cloudflare R2.
  */
 export async function deleteR2Node(params: {

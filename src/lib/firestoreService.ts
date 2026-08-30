@@ -15,6 +15,7 @@ import { migrateNoteToHierarchy } from "../utils/notesHierarchyHelper";
 import { notesCacheService } from "./notesCacheService";
 import { notesLogger } from "./notesLogger";
 import { sortNotesByTopicNumber } from "../utils/notesValidation";
+import { discoverTopicNotesFromR2 } from "./topicDiscoveryService";
 import { 
   safeLocalStorageSetItem as safeSetStorage, 
   safeLocalStorageGetItem as safeGetStorage,
@@ -1409,6 +1410,7 @@ function ensureSingleFirestoreNotesSubscription() {
 
       let classNotesRemote: ClassNote[] = [];
       let upscNotesRemote: ClassNote[] = [];
+      let r2DiscoveredNotes: ClassNote[] = [];
 
       const mergeAndSave = () => {
         const mergedMap = new Map<string, ClassNote>();
@@ -1420,10 +1422,33 @@ function ensureSingleFirestoreNotesSubscription() {
         for (const n of upscNotesRemote) {
           if (n && n.id) mergedMap.set(n.id, n);
         }
+        // Merge R2 discovered topic notes (match by storageKey, storagePath, or r2Key or id)
+        for (const n of r2DiscoveredNotes) {
+          if (n && n.id) {
+            const alreadyExists = Array.from(mergedMap.values()).some(
+              (existing) =>
+                existing.id === n.id ||
+                (existing.storageKey && n.storageKey && existing.storageKey === n.storageKey) ||
+                (existing.storagePath && n.storagePath && existing.storagePath === n.storagePath) ||
+                (existing.r2Key && n.r2Key && existing.r2Key === n.r2Key)
+            );
+            if (!alreadyExists) {
+              mergedMap.set(n.id, n);
+            }
+          }
+        }
 
         const mergedList = Array.from(mergedMap.values());
         saveLocalClassNotes(mergedList);
       };
+
+      // Trigger background R2 discovery
+      discoverTopicNotesFromR2().then((discovered) => {
+        if (discovered && discovered.length > 0) {
+          r2DiscoveredNotes = discovered;
+          mergeAndSave();
+        }
+      }).catch(() => {});
 
       const classColRef = collection(db, "class_notes");
       activeFirestoreClassNotesUnsub = onSnapshot(
@@ -1575,6 +1600,27 @@ export async function fetchAllClassNotesFromFirestore(): Promise<ClassNote[]> {
       });
     } catch (err) {
       console.warn("[Firestore] Failed to read upsc_notes collection:", err);
+    }
+
+    // Discover any additional notes physically present in Cloudflare R2 bucket
+    try {
+      const r2Notes = await discoverTopicNotesFromR2();
+      for (const rn of r2Notes) {
+        if (rn && rn.id) {
+          const alreadyExists = Array.from(notesMap.values()).some(
+            (existing) =>
+              existing.id === rn.id ||
+              (existing.storageKey && rn.storageKey && existing.storageKey === rn.storageKey) ||
+              (existing.storagePath && rn.storagePath && existing.storagePath === rn.storagePath) ||
+              (existing.r2Key && rn.r2Key && existing.r2Key === rn.r2Key)
+          );
+          if (!alreadyExists) {
+            notesMap.set(rn.id, rn);
+          }
+        }
+      }
+    } catch (r2Err) {
+      console.warn("[Firestore] R2 topic discovery notice:", r2Err);
     }
 
     if (notesMap.size > 0) {

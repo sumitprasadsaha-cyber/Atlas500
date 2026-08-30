@@ -109,7 +109,7 @@ export function extractSchoolDetails(note: ClassNote | ChapterNote): {
   const className = (note as any).className || note.classGrade || (note as any).class || "Class 10";
   const subject = (note as any).subjectName || note.subject || "General";
   
-  const rawChNo = (note as any).chapterNumber ?? note.chapterNo ?? 1;
+  const rawChNo = (note as any).chapterNumber ?? (note as any).chapterNo ?? note.chapterNo ?? 1;
   const moduleNo = typeof rawChNo === "number" ? rawChNo : parseInt(String(rawChNo).replace(/\D/g, ""), 10) || 1;
   const rawChName = (note as any).chapterTitle || (note as any).chapterName || note.chapterName || `Chapter ${moduleNo}`;
   const moduleName = rawChName.trim();
@@ -118,8 +118,11 @@ export function extractSchoolDetails(note: ClassNote | ChapterNote): {
     : `Chapter ${moduleNo}: ${moduleName}`;
 
   const parsed = parseNotePartInfo(note, 0);
-  const topicNo = parsed.topicNo || parsed.partNumber || 1;
-  const topicName = parsed.topicName || parsed.partLabel || (note as any).topicTitle || `Part ${topicNo}`;
+  const topicNo = (note as any).topicNumber ?? note.topicNo ?? parsed.topicNo ?? parsed.partNumber ?? 1;
+  const rawTopicName = (note as any).topicName || (note as any).name || (note as any).topicTitle || parsed.topicName || parsed.partLabel || `Topic ${topicNo}`;
+  const topicName = typeof rawTopicName === "string" 
+    ? rawTopicName.replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/gi, "").replace(/_/g, " ").trim() || rawTopicName
+    : String(rawTopicName);
   const topicLabel = getFormattedTopicLabel(note) || (parsed.topicLabel ? parsed.topicLabel : `Topic ${topicNo}: ${topicName}`);
 
   return {

@@ -34,6 +34,7 @@ const ALLOWED_ACTIONS = [
   "create-node",
   "get-node",
   "list-nodes",
+  "discover-topics",
   "migrate-hierarchy",
 ] as const;
 
@@ -686,13 +687,18 @@ export default async function handler(req: any, res: any) {
         const folderPath = metadataKey.replace(/\/metadata\.json$/, "");
         const pathParts = folderPath.split("/").filter(Boolean);
         const nodeName = pathParts[pathParts.length - 1] || "Node";
+        const cleanNodeTitle = nodeName
+          .replace(/^[\(\[\{-]?\s*(?:chapter|ch|module|mod|topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+          .replace(/^[\(\[\{-]?\s*(?:chapter|ch|module|mod|topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+          .replace(/_/g, " ")
+          .trim() || nodeName.replace(/_/g, " ");
 
         return sendSuccess(res, {
           success: true,
           storageKey: metadataKey,
           node: {
             id: folderPath,
-            name: nodeName.replace(/^Chapter_\d+_|^Topic_\d+_|^Module_\d+_/, "").replace(/_/g, " "),
+            name: cleanNodeTitle,
             folderPath,
             storageKey: metadataKey,
           },
@@ -728,14 +734,33 @@ export default async function handler(req: any, res: any) {
             });
 
             for (const item of listRes.objects || []) {
-              const parts = item.key.split("/");
-              if (parts.length >= 2) {
-                const folderPath = parts.slice(0, -1).join("/");
+              const cleanItemKey = item.key.replace(/^\/+/, "").replace(/\/+$/, "");
+              const parts = cleanItemKey.split("/").filter(Boolean);
+
+              // Enumerate all ancestor folder levels
+              for (let i = 1; i <= parts.length; i++) {
+                const isLeaf = i === parts.length;
+                const isFile = isLeaf && /\.[a-z0-9]+$/i.test(parts[parts.length - 1]);
+                if (isFile) continue; // files are not folder nodes
+
+                const currentFolderParts = parts.slice(0, i);
+                const folderPath = currentFolderParts.join("/");
+                const segment = currentFolderParts[currentFolderParts.length - 1];
+
                 if (!nodesMap.has(folderPath)) {
+                  let cleanName = segment
+                    .replace(/^[\(\[\{-]?\s*(?:chapter|ch|module|mod|topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+                    .replace(/^[\(\[\{-]?\s*(?:chapter|ch|module|mod|topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+                    .replace(/_/g, " ")
+                    .trim();
+                  if (!cleanName) cleanName = segment.replace(/_/g, " ");
+
                   nodesMap.set(folderPath, {
+                    id: folderPath,
                     folderPath,
                     storageKey: `${folderPath}/metadata.json`,
-                    name: parts[parts.length - 2]?.replace(/^Chapter_\d+_|^Topic_\d+_|^Module_\d+_/, "").replace(/_/g, " ") || folderPath,
+                    name: cleanName,
+                    rawName: segment,
                     lastModified: item.lastModified,
                   });
                 }
@@ -755,7 +780,139 @@ export default async function handler(req: any, res: any) {
         });
       }
 
-      // 12. DELETE HIERARCHY NODE
+      // 12. DISCOVER TOPICS (Direct Topic Enumeration for Chapter/Module)
+      case "discover-topics": {
+        const category = params.category || "school";
+        const classGrade = params.classGrade || params.className || "";
+        const gsPaper = params.gsPaper || params.generalStudiesPaper || "";
+        const subject = params.subject || "";
+        const chapterNo = params.chapterNo !== undefined ? Number(params.chapterNo) : undefined;
+        const moduleNo = params.moduleNo !== undefined ? Number(params.moduleNo) : undefined;
+        const requestedPrefix = params.prefix ? sanitizeKey(params.prefix, actualBucket) : "";
+
+        // Build candidate search prefixes
+        const searchPrefixes: string[] = [];
+        if (requestedPrefix) {
+          searchPrefixes.push(requestedPrefix);
+        } else if (category === "upsc" || gsPaper) {
+          const gsFolder = gsPaper ? (gsPaper.includes("4") ? "GS4" : gsPaper.includes("3") ? "GS3" : gsPaper.includes("2") ? "GS2" : "GS1") : "";
+          if (gsFolder && subject) {
+            searchPrefixes.push(`upsc/${gsFolder}/${subject.replace(/\s+/g, "_")}/`);
+            searchPrefixes.push(`upsc/${gsFolder}/${subject}/`);
+          } else if (gsFolder) {
+            searchPrefixes.push(`upsc/${gsFolder}/`);
+          } else {
+            searchPrefixes.push("upsc/");
+          }
+        } else {
+          const classFolder = classGrade ? `Class_${String(classGrade).replace(/\D/g, "").padStart(2, "0")}` : "";
+          if (classFolder && subject) {
+            searchPrefixes.push(`class_notes/${classFolder}/${subject.replace(/\s+/g, "_")}/`);
+            searchPrefixes.push(`class_notes/${classFolder}/${subject}/`);
+          } else if (classFolder) {
+            searchPrefixes.push(`class_notes/${classFolder}/`);
+          } else {
+            searchPrefixes.push("class_notes/");
+          }
+        }
+
+        const discoveredTopicsMap = new Map<string, any>();
+        for (const prefix of searchPrefixes) {
+          let token: string | undefined = undefined;
+          do {
+            const listRes = await listObjectsFromR2({
+              bucket: actualBucket,
+              prefix,
+              maxKeys: 1000,
+              continuationToken: token,
+            });
+
+            for (const item of listRes.objects || []) {
+              const cleanKey = item.key.replace(/^\/+/, "");
+              if (cleanKey.endsWith("/metadata.json")) continue;
+
+              const parts = cleanKey.split("/").filter(Boolean);
+              // Expected structures:
+              // class_notes/Class_10/History/Chapter_02_Nationalism_in_India/Topic_01_Rise_of_Mass_Nationalism/file.pdf
+              // upsc/GS1/History/Module_01_Ancient_India/Topic_01_Harappan_Civilization/file.pdf
+              let foundTopicSegment = "";
+              let foundChapterSegment = "";
+              let foundClassSegment = "";
+              let foundSubjectSegment = "";
+
+              for (const part of parts) {
+                if (/^Topic[_.\s-]/i.test(part)) {
+                  foundTopicSegment = part;
+                } else if (/^(?:Chapter|Ch|Module|Mod)[_.\s-]/i.test(part)) {
+                  foundChapterSegment = part;
+                } else if (/^Class[_.\s-]/i.test(part)) {
+                  foundClassSegment = part;
+                } else if (part !== "class_notes" && part !== "upsc" && !foundSubjectSegment && !/\.[a-z0-9]+$/i.test(part)) {
+                  foundSubjectSegment = part;
+                }
+              }
+
+              if (foundTopicSegment) {
+                const topicNoMatch = foundTopicSegment.match(/^(?:Topic|Part|Pt)[_.\s-]*(\d+)/i);
+                const parsedTopicNo = topicNoMatch ? parseInt(topicNoMatch[1], 10) : undefined;
+                const cleanTopicName = foundTopicSegment
+                  .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+                  .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+                  .replace(/_/g, " ")
+                  .trim();
+
+                const chNoMatch = foundChapterSegment.match(/^(?:Chapter|Ch|Module|Mod)[_.\s-]*(\d+)/i);
+                const parsedChNo = chNoMatch ? parseInt(chNoMatch[1], 10) : undefined;
+                const cleanChName = foundChapterSegment
+                  .replace(/^[\(\[\{-]?\s*(?:chapter|ch|module|mod)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+                  .replace(/^[\(\[\{-]?\s*(?:chapter|ch|module|mod)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+                  .replace(/_/g, " ")
+                  .trim();
+
+                const topicKey = `${foundClassSegment || "School"}/${foundSubjectSegment || "Subject"}/${foundChapterSegment || "Chapter"}/${foundTopicSegment}`;
+                const existing = discoveredTopicsMap.get(topicKey);
+
+                const isFile = /\.[a-z0-9]+$/i.test(parts[parts.length - 1]);
+                const fileName = isFile ? parts[parts.length - 1] : "";
+                const fileType = isFile ? (/\.(jpg|jpeg|png|webp)$/i.test(fileName) ? "image" : "pdf") : "pdf";
+
+                if (!existing || (!existing.storagePath && isFile)) {
+                  discoveredTopicsMap.set(topicKey, {
+                    id: topicKey.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase(),
+                    topicFolder: foundTopicSegment,
+                    topicNo: parsedTopicNo,
+                    topicName: cleanTopicName,
+                    topicLabel: parsedTopicNo && cleanTopicName ? `Topic ${parsedTopicNo} : ${cleanTopicName}` : (cleanTopicName || `Topic ${parsedTopicNo || 1}`),
+                    chapterNo: parsedChNo,
+                    chapterName: cleanChName,
+                    chapterFolder: foundChapterSegment,
+                    classGrade: foundClassSegment.replace(/_/g, " "),
+                    subject: foundSubjectSegment.replace(/_/g, " "),
+                    storagePath: cleanKey,
+                    objectKey: cleanKey,
+                    fileName,
+                    fileSize: item.size || 0,
+                    fileType,
+                    lastModified: item.lastModified,
+                    downloadUrl: `/api/storage?action=download&bucket=${encodeURIComponent(actualBucket)}&key=${encodeURIComponent(cleanKey)}`,
+                  });
+                }
+              }
+            }
+
+            token = listRes.nextContinuationToken;
+          } while (token);
+        }
+
+        const topics = Array.from(discoveredTopicsMap.values());
+        return sendSuccess(res, {
+          success: true,
+          count: topics.length,
+          topics,
+        });
+      }
+
+      // 13. DELETE HIERARCHY NODE
       case "delete-node": {
         const cleanKey = resolveStorageKey(params, actualBucket);
         const folderPrefix = params.folderPath ? sanitizeKey(params.folderPath, actualBucket) : "";

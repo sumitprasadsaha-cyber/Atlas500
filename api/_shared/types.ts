@@ -30,6 +30,7 @@ export type StorageAction =
   | "create-node"
   | "get-node"
   | "list-nodes"
+  | "discover-topics"
   | "migrate-hierarchy";
 
 export interface StorageNodeRequest {

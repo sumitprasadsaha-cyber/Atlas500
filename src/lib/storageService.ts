@@ -1550,3 +1550,6 @@ export async function migrateStorageMetadata(notes?: ClassNote[]): Promise<{
   return res;
 }
 
+export { discoverTopicNotesFromR2 } from "./topicDiscoveryService";
+export { discoverR2Topics } from "./r2Client";
+

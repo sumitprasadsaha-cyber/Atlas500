@@ -341,7 +341,11 @@ export function formatGSPaperFolder(paper?: string): { gsPaper: string; gsPaperF
  */
 export function formatChapterFolder(chapterNumber: number, chapterName: string): string {
   const padded = formatPaddedNumber(chapterNumber);
-  const cleanName = sanitizeFolderName(chapterName.replace(/^(?:chapter|ch)\s*\.?\s*\d+\s*(?:[:–\-]|–|-)?\s*/i, ""));
+  const cleanName = sanitizeFolderName(
+    chapterName
+      .replace(/^[\(\[\{-]?\s*(?:chapter|ch)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+      .replace(/^[\(\[\{-]?\s*(?:chapter|ch)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+  );
   return `Chapter_${padded}_${cleanName}`;
 }
 
@@ -350,7 +354,11 @@ export function formatChapterFolder(chapterNumber: number, chapterName: string):
  */
 export function formatModuleFolder(moduleNumber: number, moduleName: string): string {
   const padded = formatPaddedNumber(moduleNumber);
-  const cleanName = sanitizeFolderName(moduleName.replace(/^(?:module|mod)\s*\.?\s*\d+\s*(?:[:–\-]|–|-)?\s*/i, ""));
+  const cleanName = sanitizeFolderName(
+    moduleName
+      .replace(/^[\(\[\{-]?\s*(?:module|mod)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+      .replace(/^[\(\[\{-]?\s*(?:module|mod)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+  );
   return `Module_${padded}_${cleanName}`;
 }
 
@@ -360,7 +368,11 @@ export function formatModuleFolder(moduleNumber: number, moduleName: string): st
  */
 export function formatTopicFolder(topicNumber?: number, topicName?: string): string | undefined {
   const hasNum = topicNumber !== undefined && !isNaN(topicNumber) && topicNumber > 0;
-  const rawName = (topicName || "").trim().replace(/^(?:topic|part|pt)\s*\.?\s*\d+\s*(?:[:–\-]|–|-)?\s*/i, "").trim();
+  const rawName = (topicName || "")
+    .trim()
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+    .trim();
   const hasName = Boolean(rawName);
 
   if (!hasNum && !hasName) {
@@ -527,7 +539,10 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
   let parsedTopicName: string | undefined = undefined;
   const rawTopicName = (input.topicName || input.topicTitle || input.topic_name || "").trim();
   if (rawTopicName) {
-    parsedTopicName = rawTopicName.replace(/^(?:topic|part|pt)\s*\.?\s*\d+\s*(?:[:–\-]|–|-)?\s*/i, "").trim() || rawTopicName;
+    parsedTopicName = rawTopicName
+      .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+      .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+      .trim() || rawTopicName;
   } else if (input.partLabel && typeof input.partLabel === "string" && !/^\d+$/.test(input.partLabel)) {
     parsedTopicName = input.partLabel.trim();
   }
@@ -546,7 +561,10 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
     const rawModNo = input.moduleNumber ?? input.moduleNo ?? input.module_number ?? input.chapterNumber ?? input.chapterNo ?? 1;
     const moduleNumber = typeof rawModNo === "number" ? rawModNo : parseInt(String(rawModNo).replace(/\D/g, ""), 10) || 1;
     let rawModName = (input.moduleName || input.moduleTitle || input.module_name || input.chapterName || input.chapterTitle || "Module 1").trim();
-    rawModName = rawModName.replace(/^(?:module|mod)\s*\.?\s*\d+\s*(?:[:–\-]|–|-)?\s*/i, "").trim() || rawModName;
+    rawModName = rawModName
+      .replace(/^[\(\[\{-]?\s*(?:module|mod)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+      .replace(/^[\(\[\{-]?\s*(?:module|mod)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+      .trim() || rawModName;
 
     const moduleFolder = formatModuleFolder(moduleNumber, rawModName);
     const paths = generateUPSCStoragePaths({
@@ -624,7 +642,10 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
     const rawChNo = input.chapterNumber ?? input.chapterNo ?? 1;
     const chapterNumber = typeof rawChNo === "number" ? rawChNo : parseInt(String(rawChNo).replace(/\D/g, ""), 10) || 1;
     let rawChName = (input.chapterName || input.chapterTitle || "Chapter 1").trim();
-    rawChName = rawChName.replace(/^(?:chapter|ch)\s*\.?\s*\d+\s*(?:[:–\-]|–|-)?\s*/i, "").trim() || rawChName;
+    rawChName = rawChName
+      .replace(/^[\(\[\{-]?\s*(?:chapter|ch)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+      .replace(/^[\(\[\{-]?\s*(?:chapter|ch)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+      .trim() || rawChName;
 
     const chapterFolder = formatChapterFolder(chapterNumber, rawChName);
     const paths = generateSchoolStoragePaths({

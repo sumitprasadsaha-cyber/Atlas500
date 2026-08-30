@@ -166,14 +166,20 @@ export function formatClassSegment(classGrade?: string | null): string {
  */
 export function formatChapterSegment(chNo: number | string, chName?: string | null): string {
   const padded = pad2(chNo);
-  const rawName = (chName || "").replace(/^(?:chapter|ch|module|mod)\s*\.?\s*\d+\s*(?:[:–\-]|–|-)?\s*/i, "").trim();
+  const rawName = (chName || "")
+    .replace(/^[\(\[\{-]?\s*(?:chapter|ch|module|mod)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+    .replace(/^[\(\[\{-]?\s*(?:chapter|ch|module|mod)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+    .trim();
   const cleanName = sanitizeFolderSegment(rawName, "");
   return cleanName ? `Chapter_${padded}_${cleanName}` : `Chapter_${padded}`;
 }
 
 export function formatModuleSegment(modNo: number | string, modName?: string | null): string {
   const padded = pad2(modNo);
-  const rawName = (modName || "").replace(/^(?:module|mod|chapter|ch)\s*\.?\s*\d+\s*(?:[:–\-]|–|-)?\s*/i, "").trim();
+  const rawName = (modName || "")
+    .replace(/^[\(\[\{-]?\s*(?:module|mod|chapter|ch)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+    .replace(/^[\(\[\{-]?\s*(?:module|mod|chapter|ch)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+    .trim();
   const cleanName = sanitizeFolderSegment(rawName, "");
   return cleanName ? `Module_${padded}_${cleanName}` : `Module_${padded}`;
 }
@@ -183,7 +189,10 @@ export function formatModuleSegment(modNo: number | string, modName?: string | n
  */
 export function formatTopicSegment(topicNo?: number | string | null, topicName?: string | null): string | undefined {
   const rawNo = topicNo !== undefined && topicNo !== null && String(topicNo).trim() !== "" ? String(topicNo).trim() : "";
-  const rawName = (topicName || "").replace(/^(?:topic|part|pt)\s*\.?\s*\d+\s*(?:[:–\-]|–|-)?\s*/i, "").trim();
+  const rawName = (topicName || "")
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+    .trim();
 
   if (!rawNo && !rawName) return undefined;
 

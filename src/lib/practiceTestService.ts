@@ -397,7 +397,8 @@ function cleanTopicText(raw: string): string {
     .toLowerCase()
     .replace(/&/g, "and")
     .replace(/\+/g, "and")
-    .replace(/^(?:topic|part|pt|ch|chapter|unit)?\s*\d*\s*[:\–\-]?\s*/i, "")
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt|ch|chapter|unit)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt|ch|chapter|unit)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
     .replace(/[^a-z0-9]/g, "")
     .trim();
 }

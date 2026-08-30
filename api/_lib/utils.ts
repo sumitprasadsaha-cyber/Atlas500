@@ -649,7 +649,10 @@ export function slugifyChapter(chapterNo?: number | string, chapterName?: string
     if (!isNaN(parsed) && parsed > 0) num = parsed;
   }
   let nameClean = (chapterName || "").trim();
-  nameClean = nameClean.replace(/^(?:chapter|ch)\s*\d+[\s:-]*/i, "").trim();
+  nameClean = nameClean
+    .replace(/^[\(\[\{-]?\s*(?:chapter|ch)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+    .replace(/^[\(\[\{-]?\s*(?:chapter|ch)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+    .trim();
   const nameSlug = slugify(nameClean);
   if (nameSlug) {
     return `chapter-${num}-${nameSlug}`;
@@ -664,7 +667,10 @@ export function slugifyModule(moduleNo?: number | string, moduleName?: string): 
     if (!isNaN(parsed) && parsed > 0) num = parsed;
   }
   let nameClean = (moduleName || "").trim();
-  nameClean = nameClean.replace(/^(?:module|mod)\s*\d+[\s:-]*/i, "").trim();
+  nameClean = nameClean
+    .replace(/^[\(\[\{-]?\s*(?:module|mod)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+    .replace(/^[\(\[\{-]?\s*(?:module|mod)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+    .trim();
   const nameSlug = slugify(nameClean);
   if (nameSlug) {
     return `module-${num}-${nameSlug}`;
@@ -675,11 +681,14 @@ export function slugifyModule(moduleNo?: number | string, moduleName?: string): 
 export function slugifyTopic(topicNo?: number | string, topicName?: string): string {
   let numStr = "1";
   if (topicNo !== undefined && topicNo !== null && String(topicNo).trim() !== "") {
-    const cleanNum = String(topicNo).trim().replace(/^(?:topic|part|t)\s*/i, "").trim();
+    const cleanNum = String(topicNo).trim().replace(/^(?:topic|part|pt)\b\s*/i, "").trim();
     if (cleanNum) numStr = cleanNum;
   }
   let nameClean = (topicName || "").trim();
-  nameClean = nameClean.replace(/^(?:topic|part)\s*\d+[\s:-]*/i, "").trim();
+  nameClean = nameClean
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+    .trim();
   const nameSlug = slugify(nameClean);
   const safeNumSlug = slugify(numStr);
   if (nameSlug) {
@@ -710,8 +719,13 @@ export function generateHierarchicalNotePaths(params: {
   const rawTopicNo = params.topicNo || params.partLabel || "1";
   const rawTopicName = params.topicName || (typeof params.partLabel === "string" && !/^\d+$/.test(params.partLabel) ? params.partLabel : "");
   const topicSlug = slugifyTopic(rawTopicNo, rawTopicName);
-  const topicNumber = String(rawTopicNo).replace(/^(?:topic|part)\s*/i, "").trim() || "1";
-  const topicTitle = rawTopicName || `Topic ${topicNumber}`;
+  const topicNumber = String(rawTopicNo).replace(/^(?:topic|part|pt)\b\s*/i, "").trim() || "1";
+  const topicTitle = rawTopicName
+    ? rawTopicName
+        .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+        .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+        .trim() || rawTopicName
+    : `Topic ${topicNumber}`;
 
   if (isUPSC) {
     const rawGSPaper = params.generalStudiesPaper || "General Studies Paper I";
@@ -720,7 +734,10 @@ export function generateHierarchicalNotePaths(params: {
     const modName = params.moduleName || params.chapterName || `Module ${modNo}`;
     const moduleSlug = slugifyModule(modNo, modName);
     const moduleNumber = typeof modNo === "number" ? modNo : parseInt(String(modNo), 10) || 1;
-    const moduleTitle = modName.replace(/^(?:module|mod)\s*\d+[\s:-]*/i, "").trim() || `Module ${moduleNumber}`;
+    const moduleTitle = modName
+      .replace(/^[\(\[\{-]?\s*(?:module|mod)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+      .replace(/^[\(\[\{-]?\s*(?:module|mod)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+      .trim() || `Module ${moduleNumber}`;
 
     const folderPath = `notes/upsc/${gsPaperSlug}/${subjectSlug}/${moduleSlug}/${topicSlug}`;
     const documentId = `topic_upsc_${gsPaperSlug}_${subjectSlug}_${moduleSlug}_${topicSlug}`;
@@ -753,7 +770,10 @@ export function generateHierarchicalNotePaths(params: {
     const chName = params.chapterName || `Chapter ${chNo}`;
     const chapterSlug = slugifyChapter(chNo, chName);
     const chapterNumber = typeof chNo === "number" ? chNo : parseInt(String(chNo), 10) || 1;
-    const chapterTitle = chName.replace(/^(?:chapter|ch)\s*\d+[\s:-]*/i, "").trim() || `Chapter ${chapterNumber}`;
+    const chapterTitle = chName
+      .replace(/^[\(\[\{-]?\s*(?:chapter|ch)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/i, "")
+      .replace(/^[\(\[\{-]?\s*(?:chapter|ch)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/i, "")
+      .trim() || `Chapter ${chapterNumber}`;
 
     const folderPath = `notes/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}`;
     const documentId = `topic_${classSlug}_${subjectSlug}_${chapterSlug}_${topicSlug}`;

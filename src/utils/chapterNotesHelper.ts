@@ -18,17 +18,19 @@ export interface ChapterGroup {
 /**
  * Strips topic/part indicators like "(Topic 1)", "Topic 1", "(Part 1)", "Part 1", "- Topic 1", Pt. 1
  * from chapter titles to get the clean umbrella chapter name.
+ * Ensures whole-word matching so words like "Participation" or "Particular" are never truncated.
  */
 export function getCleanChapterTitle(title: string): string {
   if (!title) return "";
-  let clean = title
-    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\.?\s*\d*\s*[\)\]\}]?\s*[:–\-]?\s*/gi, "")
-    .replace(/[\(\[\{-]?\s*(?:topic|part|pt)\.?\s*\d+\s*[\)\]\}]?\s*[:–\-]?\s*/gi, "")
+  const cleanTitle = title
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/gi, "")
+    .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/gi, "")
+    .replace(/[\(\[\{-]\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]\s*[:–\-]?\s*/gi, "")
     .replace(/\s*-\s*$/g, "")
     .replace(/\s*:\s*$/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  return clean || title;
+  return cleanTitle || title;
 }
 
 /**
@@ -45,22 +47,23 @@ export function getFormattedTopicLabel(note: {
   chapterName?: string;
 }): string {
   let topicNo: number | string = note.topicNo ?? "";
-  let topicName: string = note.topicName || "";
+  let topicName: string = (note.topicName || "").trim();
 
   // Check if topicLabel or partLabel contains info
-  const existingLabel = note.topicLabel || note.partLabel || "";
+  const existingLabel = (note.topicLabel || note.partLabel || "").trim();
   if (existingLabel) {
-    const partMatch = existingLabel.match(/(?:part|topic|pt)\.?\s*(\d+)\s*(?::|–|-)?\s*(.*)/i);
+    const partMatch = existingLabel.match(/^(?:part|topic|pt)\b\.?[\s_]*(\d+)[\s_.:–\-]*(.*)/i);
     if (partMatch) {
       if (!topicNo) topicNo = parseInt(partMatch[1], 10);
       if (!topicName && partMatch[2]) {
-        const potentialName = partMatch[2].trim();
+        const potentialName = partMatch[2].replace(/_/g, " ").trim();
         if (!/^\d+$/.test(potentialName)) {
           topicName = potentialName;
         }
       }
     } else if (!topicName) {
-      const clean = existingLabel.replace(/^(?:part|topic|pt)\.?\s*/i, "").trim();
+      // Only strip if it is an explicit prefix with punctuation or colon
+      const clean = existingLabel.replace(/^(?:part|topic|pt)\b\.?[\s_]*[:–\-]\s*/i, "").trim();
       if (!/^\d+$/.test(clean)) {
         topicName = clean;
       }
@@ -70,10 +73,13 @@ export function getFormattedTopicLabel(note: {
   // If topicName is missing or purely numeric, try extracting from pdfFileName or fileName
   if ((!topicName || /^\d+$/.test(topicName)) && (note.pdfFileName || note.fileName)) {
     const fname = note.pdfFileName || note.fileName || "";
-    const cleanFileName = fname.replace(/\.[^/.]+$/, "").trim();
+    const cleanFileName = fname.replace(/\.[^/.]+$/, "").replace(/_/g, " ").trim();
     const isGeneric = /^(?:\d+|part\s*\d+|topic\s*\d+)$/i.test(cleanFileName);
     if (!isGeneric) {
-      const stripped = cleanFileName.replace(/^(?:topic|part|pt)\.?\s*\d*\s*[:–\-]?\s*/gi, "").trim();
+      const stripped = cleanFileName
+        .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/gi, "")
+        .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/gi, "")
+        .trim();
       if (stripped && !/^(?:part|topic|\d+)\s*\d*$/i.test(stripped)) {
         topicName = stripped;
       }
@@ -82,13 +88,18 @@ export function getFormattedTopicLabel(note: {
 
   // Ensure topicNo defaults if missing
   if (!topicNo) {
-    const fileMatch = (note.pdfFileName || note.fileName || existingLabel || "").match(/(\d+)/);
+    const fileMatch = (note.pdfFileName || note.fileName || existingLabel || "").match(/\b(?:topic|part|pt)[_.\s-]*(\d+)\b/i) ||
+                      (note.pdfFileName || note.fileName || existingLabel || "").match(/(\d+)/);
     if (fileMatch) topicNo = fileMatch[1];
   }
 
   // Clean topicName to avoid redundant "Topic 1 : Topic 1 : Name" or numeric "1"
   if (topicName) {
-    topicName = topicName.replace(/^(?:topic|part|pt)\.?\s*\d*\s*[:–\-]?\s*/gi, "").trim();
+    topicName = topicName
+      .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/gi, "")
+      .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/gi, "")
+      .replace(/_/g, " ")
+      .trim();
     if (/^\d+$/.test(topicName) || String(topicName).trim() === String(topicNo).trim()) {
       topicName = "";
     }
@@ -127,21 +138,21 @@ export function parseNotePartInfo(note: ChapterNote, fallbackIndex: number): {
   topicLabel: string;
 } {
   let topicNo: number | string = note.topicNo ?? "";
-  let topicName: string = note.topicName || "";
+  let topicName: string = (note.topicName || "").trim();
 
   // If topicNo & topicName are missing, check partLabel
   if (!topicNo && !topicName && note.partLabel) {
-    const partMatch = note.partLabel.match(/(?:part|topic|pt)\.?\s*(\d+)\s*(?::|–|-)?\s*(.*)/i);
+    const partMatch = note.partLabel.match(/^(?:part|topic|pt)\b\.?[\s_]*(\d+)[\s_.:–\-]*(.*)/i);
     if (partMatch) {
       topicNo = parseInt(partMatch[1], 10);
-      if (partMatch[2]) topicName = partMatch[2].trim();
+      if (partMatch[2]) topicName = partMatch[2].replace(/_/g, " ").trim();
     } else {
-      const cleanLabel = note.partLabel.replace(/^Part\s*/i, "Topic ");
+      const cleanLabel = note.partLabel.replace(/^Part\s+/i, "Topic ");
       if (cleanLabel.toLowerCase().startsWith("topic ")) {
-        const subMatch = cleanLabel.match(/^Topic\s*(\d+)\s*(?::|–|-)?\s*(.*)/i);
+        const subMatch = cleanLabel.match(/^Topic\s*(\d+)[\s.:–\-]*(.*)/i);
         if (subMatch) {
           topicNo = parseInt(subMatch[1], 10);
-          if (subMatch[2]) topicName = subMatch[2].trim();
+          if (subMatch[2]) topicName = subMatch[2].replace(/_/g, " ").trim();
         } else {
           topicName = cleanLabel;
         }
@@ -155,7 +166,7 @@ export function parseNotePartInfo(note: ChapterNote, fallbackIndex: number): {
   let partNumber = typeof topicNo === "number" ? topicNo : parseInt(String(topicNo), 10);
   if (isNaN(partNumber) || !partNumber) {
     const nameToSearch = `${note.chapterName || ""} ${note.pdfFileName || ""}`;
-    const topicMatch = nameToSearch.match(/(?:topic|part|pt)\.?\s*(\d+)/i);
+    const topicMatch = nameToSearch.match(/\b(?:topic|part|pt)[_.\s-]*(\d+)\b/i) || nameToSearch.match(/(?:topic|part|pt)\.?\s*(\d+)/i);
     if (topicMatch && topicMatch[1]) {
       partNumber = parseInt(topicMatch[1], 10);
       topicNo = partNumber;
@@ -167,7 +178,11 @@ export function parseNotePartInfo(note: ChapterNote, fallbackIndex: number): {
 
   // Strip leading "Topic X" prefix from topicName to avoid redundant "Topic 1 – Topic 1 – Name"
   if (topicName) {
-    topicName = topicName.replace(/^(?:topic|part|pt)\.?\s*\d*\s*[:–\-]?\s*/gi, "").trim();
+    topicName = topicName
+      .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\s_]*\d+[\)\]\}]?[\s_.:–\-]*\s*/gi, "")
+      .replace(/^[\(\[\{-]?\s*(?:topic|part|pt)\b\.?[\)\]\}]?[\s_]*[:–\-]\s*/gi, "")
+      .replace(/_/g, " ")
+      .trim();
   }
 
   const formattedLabel = getFormattedTopicLabel({
