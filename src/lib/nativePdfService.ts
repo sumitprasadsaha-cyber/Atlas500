@@ -256,8 +256,22 @@ export async function fetchNoteBlobWithCache(
   const fileName = options.fileName || options.pdfFileName || options.filename || "note.pdf";
   const mimeType = getNoteMimeType(fileName, options.mimeType, options.fileType);
 
-  // 1. Check offline / IndexedDB cache first
-  const cached = await notesCacheService.getCachedBlob(storageKey);
+  const candidateKeys = [
+    storageKey,
+    options.storagePath,
+    options.storage_path,
+    options.objectKey,
+    options.r2Key,
+    options.key,
+    options.noteId,
+    fileName,
+    options.url,
+    options.downloadUrl,
+    options.publicUrl,
+  ].filter((k): k is string => typeof k === "string" && k.trim().length > 0);
+
+  // 1. Check offline / IndexedDB cache first across all candidate keys
+  const cached = await notesCacheService.getCachedBlobByKeys(candidateKeys);
   if (cached && cached.blob && cached.blob.size > 0) {
     const check = await verifyDocumentBlob(cached.blob, options.fileType, fileName, cached.mimeType);
     if (check.valid) {
@@ -274,7 +288,9 @@ export async function fetchNoteBlobWithCache(
       };
     } else {
       // Invalidate corrupted/invalid cache
-      await notesCacheService.invalidateBlobCache(storageKey);
+      for (const k of candidateKeys) {
+        await notesCacheService.invalidateBlobCache(k);
+      }
     }
   }
 
@@ -366,10 +382,11 @@ export async function fetchNoteBlobWithCache(
 
   // 6. Store in local cache for instant future retrieval & offline access
   await notesCacheService.setCachedBlob({
-    key: storageKey,
+    key: storageKey || fileName,
     blob,
     mimeType,
     fileName,
+    aliases: candidateKeys,
   });
 
   const objectUrl = URL.createObjectURL(blob);

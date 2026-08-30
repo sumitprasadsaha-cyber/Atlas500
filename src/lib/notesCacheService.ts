@@ -190,6 +190,33 @@ class NotesCacheService {
     return keyOrUrl.replace(/^https?:\/\/[^\/]+/, "").replace(/^\/+/, "").split("?")[0].trim();
   }
 
+  public async isLocallyCached(keys: (string | undefined | null)[]): Promise<boolean> {
+    const validKeys = keys.filter((k): k is string => typeof k === "string" && k.trim().length > 0);
+    for (const k of validKeys) {
+      const cleanKey = this.normalizeStorageKey(k);
+      if (!cleanKey) continue;
+      if (this.memoryBlobCache.has(cleanKey)) return true;
+    }
+
+    try {
+      const cached = await this.getCachedBlobByKeys(validKeys);
+      return Boolean(cached && cached.blob && cached.blob.size > 0);
+    } catch {
+      return false;
+    }
+  }
+
+  public async getCachedBlobByKeys(keys: (string | undefined | null)[]): Promise<{ blob: Blob; mimeType: string; fileName: string } | null> {
+    const validKeys = keys.filter((k): k is string => typeof k === "string" && k.trim().length > 0);
+    for (const k of validKeys) {
+      const found = await this.getCachedBlob(k);
+      if (found && found.blob && found.blob.size > 0) {
+        return found;
+      }
+    }
+    return null;
+  }
+
   public async getCachedBlob(keyOrUrl: string): Promise<{ blob: Blob; mimeType: string; fileName: string } | null> {
     const cleanKey = this.normalizeStorageKey(keyOrUrl);
     if (!cleanKey) return null;
@@ -251,41 +278,57 @@ class NotesCacheService {
     blob: Blob;
     mimeType: string;
     fileName: string;
+    aliases?: string[];
   }): Promise<void> {
     const cleanKey = this.normalizeStorageKey(params.key);
     if (!cleanKey || !params.blob) return;
 
+    const allKeys = new Set<string>([cleanKey]);
+    if (Array.isArray(params.aliases)) {
+      for (const a of params.aliases) {
+        if (a) {
+          const ca = this.normalizeStorageKey(a);
+          if (ca) allKeys.add(ca);
+        }
+      }
+    }
+
     // 1. Store in memory
-    this.memoryBlobCache.set(cleanKey, {
-      blob: params.blob,
-      mimeType: params.mimeType,
-      fileName: params.fileName,
-      timestamp: Date.now(),
-    });
+    for (const k of allKeys) {
+      this.memoryBlobCache.set(k, {
+        blob: params.blob,
+        mimeType: params.mimeType,
+        fileName: params.fileName,
+        timestamp: Date.now(),
+      });
+    }
 
     // 2. Persist to IndexedDB with LRU management
     try {
       const db = await this.initDb();
       if (!db) return;
 
-      const entry: CachedBlobEntry = {
-        key: cleanKey,
-        blob: params.blob,
-        mimeType: params.mimeType,
-        fileName: params.fileName,
-        size: params.blob.size,
-        cachedAt: Date.now(),
-        lastAccessed: Date.now(),
-      };
-
       const tx = db.transaction(STORE_BLOBS, "readwrite");
       const store = tx.objectStore(STORE_BLOBS);
-      store.put(entry);
+
+      for (const k of allKeys) {
+        const entry: CachedBlobEntry = {
+          key: k,
+          blob: params.blob,
+          mimeType: params.mimeType,
+          fileName: params.fileName,
+          size: params.blob.size,
+          cachedAt: Date.now(),
+          lastAccessed: Date.now(),
+        };
+        store.put(entry);
+      }
 
       notesLogger.info("CACHE_STORE", {
         storageKey: cleanKey,
         fileSize: params.blob.size,
         mimeType: params.mimeType,
+        extra: { aliasesCount: allKeys.size },
       });
 
       // Periodic LRU Eviction check

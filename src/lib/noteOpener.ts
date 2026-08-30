@@ -1,6 +1,6 @@
 import { getBucketName, sanitizeStoragePath } from "./storageService";
 import { getR2SignedUrlDetails, getR2PublicUrl } from "./r2Client";
-import { openDocumentInNativeApp, isCapacitorNative } from "./nativeFileOpener";
+import { launchFileInNativeViewer, openDocumentInNativeApp, isCapacitorNative } from "./nativeFileOpener";
 import { notesCacheService } from "./notesCacheService";
 import { notesLogger } from "./notesLogger";
 import { fetchNoteBlobWithCache } from "./nativePdfService";
@@ -245,43 +245,22 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
       .catch(() => {});
   }
 
-  // 3. Open Viewer Only After Verification Passes
-  if (isCapacitor) {
-    const openedNative = await openDocumentInNativeApp({
-      url: verifiedNote.objectUrl,
-      fileName: verifiedNote.fileName,
-      mimeType: verifiedNote.mimeType,
-    });
-    if (openedNative) {
-      notesLogger.info("VIEW_OPEN", {
-        fileName: verifiedNote.fileName,
-        storageKey,
-        extra: { platform: "Capacitor" },
-      });
-      return verifiedNote.objectUrl;
-    }
-  }
-
-  // Web / PWA / Browser Viewer Trigger with verified blob
-  const a = document.createElement("a");
-  a.href = verifiedNote.objectUrl;
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
-  if (isPWA || isMobile) {
-    a.download = verifiedNote.fileName;
-  }
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    try {
-      document.body.removeChild(a);
-    } catch {}
-  }, 1000);
+  // 3. Launch directly into native mobile app chooser or default OS viewer
+  const launched = await launchFileInNativeViewer({
+    blob: verifiedNote.blob,
+    fileName: verifiedNote.fileName,
+    mimeType: verifiedNote.mimeType,
+    objectUrl: verifiedNote.objectUrl,
+  });
 
   notesLogger.info("VIEW_OPEN", {
     fileName: verifiedNote.fileName,
     storageKey,
-    extra: { platform: isPWA ? "PWA" : isMobile ? "Mobile" : "Desktop" },
+    extra: {
+      platform: isCapacitor ? "Capacitor" : isPWA ? "PWA" : isMobile ? "Mobile" : "Desktop",
+      launched,
+      cached: verifiedNote.cached,
+    },
   });
 
   return verifiedNote.objectUrl;

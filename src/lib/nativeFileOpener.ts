@@ -40,12 +40,139 @@ async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Opens a remote or local document directly in the device's native viewer application.
- *
- * MIME Type routing:
- * - application/pdf -> Device Native PDF Viewer (Google PDF Viewer, Adobe Acrobat, Apple QuickLook)
- * - image/* -> Native Image Viewer / Gallery
- * - other -> OS Default Application
+ * Sanitizes a file name and ensures the extension matches the MIME type.
+ */
+export function sanitizeFileNameWithExtension(fileName: string, mimeType: string): string {
+  let clean = (fileName || "").trim().replace(/[^a-zA-Z0-9._ -]/g, "_");
+  if (!clean) {
+    clean = "document";
+  }
+  const lower = clean.toLowerCase();
+  if (mimeType.includes("pdf") && !lower.endsWith(".pdf")) {
+    clean += ".pdf";
+  } else if (mimeType.includes("png") && !lower.endsWith(".png")) {
+    clean += ".png";
+  } else if ((mimeType.includes("jpeg") || mimeType.includes("jpg")) && !lower.endsWith(".jpg") && !lower.endsWith(".jpeg")) {
+    clean += ".jpg";
+  } else if (mimeType.includes("webp") && !lower.endsWith(".webp")) {
+    clean += ".webp";
+  }
+  return clean;
+}
+
+export interface LaunchNativeFileParams {
+  blob: Blob;
+  fileName: string;
+  mimeType: string;
+  objectUrl?: string;
+}
+
+/**
+ * Launches a downloaded or cached document directly into Android/iOS native app chooser or default viewer.
+ * 
+ * Flow:
+ * 1. Capacitor Native (Android/iOS): Uses FileOpener to trigger ACTION_VIEW Intent.
+ * 2. Android Chrome / Installed PWA: Uses Web Share API (navigator.share with File) to invoke the native Android App Chooser (Drive PDF Viewer, Adobe, Gallery, etc.).
+ * 3. Browser / Desktop: Opens directly in a clean external tab/viewer without 'download' attribute (preventing duplicate download dialogs).
+ */
+export async function launchFileInNativeViewer(params: LaunchNativeFileParams): Promise<boolean> {
+  const { blob, fileName, mimeType } = params;
+  const cleanName = sanitizeFileNameWithExtension(fileName, mimeType);
+  const objectUrl = params.objectUrl || URL.createObjectURL(blob);
+
+  // Strategy 1: Capacitor Native Mobile (Android / iOS)
+  // Launches Android Intent ACTION_VIEW or iOS QuickLook
+  if (isCapacitorNative()) {
+    try {
+      const base64Data = await blobToBase64(blob);
+      await Filesystem.writeFile({
+        path: cleanName,
+        data: base64Data,
+        directory: Directory.Cache,
+      });
+      const fileUriResult = await Filesystem.getUri({
+        path: cleanName,
+        directory: Directory.Cache,
+      });
+      await FileOpener.open({
+        filePath: fileUriResult.uri,
+        contentType: mimeType,
+      });
+      console.log(`[NativeFileOpener] Launched native ACTION_VIEW via FileOpener for ${cleanName}`);
+      return true;
+    } catch (capErr: any) {
+      console.warn("[NativeFileOpener] Capacitor FileOpener notice:", capErr?.message || capErr);
+      try {
+        await Browser.open({ url: objectUrl });
+        return true;
+      } catch (browserErr) {
+        console.warn("[NativeFileOpener] Browser.open fallback failed:", browserErr);
+      }
+    }
+  }
+
+  // Strategy 2: Web Share API with File (Standard PWA -> Android Native App Chooser)
+  // In Android Chrome and installed Android PWAs, sharing a File triggers the Android system
+  // app chooser (ACTION_VIEW / ACTION_SEND equivalent) with PDF Viewer, Adobe, Gallery, etc.
+  if (typeof navigator !== "undefined" && typeof navigator.canShare === "function" && typeof File !== "undefined") {
+    try {
+      const file = new File([blob], cleanName, { type: mimeType, lastModified: Date.now() });
+      if (navigator.canShare({ files: [file] })) {
+        console.log(`[NativeFileOpener] Invoking Web Share API for native app launch: ${cleanName}`);
+        await navigator.share({
+          files: [file],
+          title: cleanName,
+        });
+        return true;
+      }
+    } catch (shareErr: any) {
+      // User dismissing or completing the Android share sheet is a normal interaction
+      if (shareErr?.name === "AbortError") {
+        console.log(`[NativeFileOpener] User interacted with native app chooser`);
+        return true;
+      }
+      console.warn("[NativeFileOpener] Web Share API notice:", shareErr?.message || shareErr);
+    }
+  }
+
+  // Strategy 3: Direct Native Window/Tab Launch (WITHOUT download attribute!)
+  // Opening the blob URL in a new window/target allows the browser's built-in PDF/image viewer
+  // or OS default app to render it directly without asking "Download file again?"
+  try {
+    const win = window.open(objectUrl, "_blank", "noopener,noreferrer");
+    if (win && !win.closed) {
+      console.log(`[NativeFileOpener] Launched file viewer via window.open: ${cleanName}`);
+      return true;
+    }
+  } catch (winErr) {
+    console.warn("[NativeFileOpener] window.open blocked/failed:", winErr);
+  }
+
+  // Strategy 4: Anchor Click Fallback (Without download attribute)
+  try {
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    // Strictly omit a.download to avoid triggering Chrome's "Download file again?" prompt!
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try {
+        document.body.removeChild(a);
+      } catch {}
+    }, 1000);
+    console.log(`[NativeFileOpener] Launched file viewer via anchor target=_blank: ${cleanName}`);
+    return true;
+  } catch (anchorErr) {
+    console.error("[NativeFileOpener] Anchor fallback failed:", anchorErr);
+  }
+
+  return false;
+}
+
+/**
+ * Legacy wrapper for backward compatibility with remote URLs.
  */
 export async function openDocumentInNativeApp(params: {
   url: string;
@@ -57,39 +184,12 @@ export async function openDocumentInNativeApp(params: {
   if (isCapacitorNative()) {
     try {
       console.log(`[NativeFileOpener] Opening natively on mobile: fileName="${fileName}", mimeType="${mimeType}"`);
-
-      // 1. Fetch binary data
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`Failed to download document (HTTP ${response.status})`);
       }
       const blob = await response.blob();
-      const base64Data = await blobToBase64(blob);
-
-      // 2. Clean filename
-      const cleanName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_") || `document_${Date.now()}.${mimeType === "application/pdf" ? "pdf" : "dat"}`;
-
-      // 3. Save to device temporary cache directory
-      await Filesystem.writeFile({
-        path: cleanName,
-        data: base64Data,
-        directory: Directory.Cache,
-      });
-
-      // 4. Retrieve native file URI
-      const fileUriResult = await Filesystem.getUri({
-        path: cleanName,
-        directory: Directory.Cache,
-      });
-
-      // 5. Open via native OS intent
-      await FileOpener.open({
-        filePath: fileUriResult.uri,
-        contentType: mimeType || "application/pdf",
-      });
-
-      console.log(`[NativeFileOpener] Successfully launched native viewer intent for ${cleanName}`);
-      return true;
+      return await launchFileInNativeViewer({ blob, fileName, mimeType, objectUrl: url });
     } catch (err: any) {
       console.warn("[NativeFileOpener] FileOpener failed, falling back to in-app browser:", err?.message || err);
       try {

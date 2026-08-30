@@ -25,9 +25,9 @@ import StudentTestScoreButton from "./StudentTestScoreButton";
 import { notesLogger } from "../lib/notesLogger";
 
 /**
- * Animated three-dot loading indicator: "Opening." -> "Opening.." -> "Opening..."
+ * Animated three-dot loading indicator: "Downloading." -> "Downloading.." -> "Downloading..."
  */
-function AnimatedOpeningIndicator() {
+function AnimatedDownloadingIndicator() {
   const [dotCount, setDotCount] = useState(1);
 
   useEffect(() => {
@@ -42,7 +42,7 @@ function AnimatedOpeningIndicator() {
   return (
     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/70 border border-blue-200/80 dark:border-blue-800/70 text-[11px] font-bold text-blue-700 dark:text-blue-300 shrink-0 select-none shadow-2xs">
       <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping shrink-0" />
-      <span>Opening{dots}</span>
+      <span>Downloading{dots}</span>
     </span>
   );
 }
@@ -61,6 +61,7 @@ interface StudentSchoolTreeProps {
     topicName: string;
     testType: "topic" | "full_chapter";
   }) => void;
+  downloadingNoteId?: string | null;
   openingNoteId?: string | null;
   openErrorNoteId?: string | null;
   isAdmin?: boolean;
@@ -72,10 +73,12 @@ export default function StudentSchoolTree({
   student,
   onPreviewNote,
   onOpenPracticeTest,
+  downloadingNoteId,
   openingNoteId,
   openErrorNoteId,
   isAdmin = false,
 }: StudentSchoolTreeProps) {
+  const activeDownloadingId = downloadingNoteId || openingNoteId;
   const storageKeyPrefix = `school_tree_${className || student?.classGrade || "def"}_${student?.id || "anon"}`;
 
   const [searchQuery, setSearchQuery] = useState(() => {
@@ -95,7 +98,7 @@ export default function StudentSchoolTree({
   });
 
   const [, setTestBankTick] = useState(0);
-  const [localOpeningId, setLocalOpeningId] = useState<string | null>(null);
+  const [localDownloadingId, setLocalDownloadingId] = useState<string | null>(null);
   const [localErrorId, setLocalErrorId] = useState<string | null>(null);
   const [localErrorMsg, setLocalErrorMsg] = useState<string>("");
 
@@ -321,9 +324,9 @@ export default function StudentSchoolTree({
                           </div>
                         ) : (
                           mod.topics.map((topic) => {
-                            const isOpening = (openingNoteId === topic.id) || (localOpeningId === topic.id);
+                            const isDownloading = (activeDownloadingId === topic.id) || (localDownloadingId === topic.id);
                             const hasError = (openErrorNoteId === topic.id) || (localErrorId === topic.id);
-                            const isAnyOpening = Boolean(openingNoteId) || Boolean(localOpeningId);
+                            const isAnyDownloading = Boolean(activeDownloadingId) || Boolean(localDownloadingId);
                             const targetClass = className || student.classGrade || (topic.note as any).classGrade || "";
                             const targetSubj = subj.subject || (topic.note as any).subject || "";
                             const chapterNo = mod.moduleNo || (topic.note as any).chapterNo || 1;
@@ -350,11 +353,11 @@ export default function StudentSchoolTree({
                             );
 
                             const handleTopicClick = async () => {
-                              if (isOpening) return;
+                              if (isDownloading) return;
                               const isRetry = hasError;
                               setLocalErrorId(null);
                               setLocalErrorMsg("");
-                              setLocalOpeningId(topic.id);
+                              setLocalDownloadingId(topic.id);
 
                               if (isRetry) {
                                 notesLogger.info("RETRY_ATTEMPT", {
@@ -387,7 +390,7 @@ export default function StudentSchoolTree({
                                   setLocalErrorId((curr) => (curr === topic.id ? null : curr));
                                 }, 5000);
                               } finally {
-                                setLocalOpeningId(null);
+                                setLocalDownloadingId(null);
                               }
                             };
 
@@ -396,16 +399,16 @@ export default function StudentSchoolTree({
                                 key={topic.id}
                                 onClick={handleTopicClick}
                                 className={`group flex flex-col rounded-lg transition-all select-none ${
-                                  isOpening
+                                  isDownloading
                                     ? "opacity-90 bg-blue-50/70 dark:bg-blue-950/40 cursor-wait pointer-events-none"
                                     : "hover:bg-slate-100/90 dark:hover:bg-slate-800/70 cursor-pointer"
                                 } ${hasError ? "bg-rose-50/50 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/60" : ""}`}
                                 id={`school-topic-${topic.id}`}
-                                title={isOpening ? "Opening note..." : hasError ? "Failed to load. Tap to try again" : "Tap to open note in browser"}
+                                title={isDownloading ? "Downloading note..." : hasError ? "Failed to load. Tap to try again" : "Tap to open note in browser"}
                               >
                                 {/* Main Topic Content Row */}
                                 <div className="flex items-start sm:items-center justify-between gap-2.5 px-3 py-2">
-                                  {/* Left: Icon, Full Topic Name, and Opening / Try Again Indicator */}
+                                  {/* Left: Icon, Full Topic Name, and Downloading / Try Again Indicator */}
                                   <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
                                     <span className="mt-0.5 sm:mt-0 shrink-0">
                                       {topic.fileType === "image" ? (
@@ -420,9 +423,9 @@ export default function StudentSchoolTree({
                                         {topic.topicName}
                                       </span>
 
-                                      {isOpening && <AnimatedOpeningIndicator />}
+                                      {isDownloading && <AnimatedDownloadingIndicator />}
 
-                                      {hasError && !isOpening && (
+                                      {hasError && !isDownloading && (
                                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 text-[11px] font-bold shrink-0 animate-fadeIn">
                                           Try Again
                                         </span>

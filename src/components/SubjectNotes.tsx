@@ -32,6 +32,7 @@ import {
 import { ChapterNote, Student, TestAttemptRecord } from "../types";
 import { uploadPdfToStorage, sanitizeStoragePath, getBucketName } from "../lib/storageService";
 import { isImageFile, openNoteInNativeViewer } from "../lib/nativePdfService";
+import { notesCacheService } from "../lib/notesCacheService";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import SelectStudentsModal from "./SelectStudentsModal";
 import { groupAndSortChapterNotes, getFormattedTopicLabel, isFileNameRedundant } from "../utils/chapterNotesHelper";
@@ -454,21 +455,37 @@ export default function SubjectNotes({
     const topicFormatted = getFormattedTopicLabel(note);
     const title = topicFormatted || `Chapter ${note.chapterNo} - ${note.chapterName}`;
 
-    setOpeningNoteId(note.id);
+    const finalStorageKey =
+      (note as any).storageKey ||
+      storagePath ||
+      (note as any).storage_path ||
+      (note as any).objectKey ||
+      (note as any).r2Key ||
+      (note as any).key ||
+      url;
+
+    // Check if already locally cached
+    const candidateKeys = [
+      finalStorageKey,
+      storagePath,
+      (note as any).storage_path,
+      (note as any).objectKey,
+      (note as any).r2Key,
+      note.id,
+      note.pdfFileName,
+      note.fileName,
+      url,
+    ].filter((k): k is string => typeof k === "string" && k.trim().length > 0);
+
+    const isAlreadyCached = await notesCacheService.isLocallyCached(candidateKeys);
+    if (!isAlreadyCached) {
+      setOpeningNoteId(note.id);
+    }
     const watchdogTimer = setTimeout(() => {
       setOpeningNoteId((current) => (current === note.id ? null : current));
-    }, 10000);
+    }, 15000);
 
     try {
-      const finalStorageKey =
-        (note as any).storageKey ||
-        storagePath ||
-        (note as any).storage_path ||
-        (note as any).objectKey ||
-        (note as any).r2Key ||
-        (note as any).key ||
-        url;
-
       await openNoteInNativeViewer({
         storageKey: finalStorageKey,
         storagePath: finalStorageKey,

@@ -27,6 +27,7 @@ interface TopicCardProps {
   onDelete?: (note: ClassNote | ChapterNote) => void;
   onOpenPracticeTest?: (note: ClassNote | ChapterNote) => void;
   hasPracticeTest?: boolean;
+  isDownloading?: boolean;
   isOpening?: boolean;
   hasError?: boolean;
   errorMessage?: string;
@@ -53,9 +54,9 @@ function formatDate(dateStr?: string): string {
 }
 
 /**
- * Animated three-dot loading indicator: "Opening." -> "Opening.." -> "Opening..."
+ * Animated three-dot loading indicator: "Downloading." -> "Downloading.." -> "Downloading..."
  */
-function AnimatedOpeningIndicator() {
+function AnimatedDownloadingIndicator() {
   const [dotCount, setDotCount] = useState(1);
 
   useEffect(() => {
@@ -70,7 +71,7 @@ function AnimatedOpeningIndicator() {
   return (
     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/70 border border-blue-200/80 dark:border-blue-800/70 text-[11px] font-bold text-blue-700 dark:text-blue-300 shrink-0 select-none shadow-2xs">
       <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping shrink-0" />
-      <span>Opening{dots}</span>
+      <span>Downloading{dots}</span>
     </span>
   );
 }
@@ -86,11 +87,13 @@ export default function TopicCard({
   onDelete,
   onOpenPracticeTest,
   hasPracticeTest = false,
+  isDownloading = false,
   isOpening = false,
   hasError = false,
   errorMessage = "",
   className = "",
 }: TopicCardProps) {
+  const activeDownloading = isDownloading || isOpening;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -124,7 +127,7 @@ export default function TopicCard({
   return (
     <div
       className={`group relative rounded-xl border bg-white dark:bg-slate-900 px-2.5 py-2 sm:px-3 sm:py-2 transition-all duration-150 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 w-full min-w-0 ${
-        isOpening
+        activeDownloading
           ? "border-blue-300 dark:border-blue-800 ring-2 ring-blue-500/50 pointer-events-none opacity-90"
           : hasError
           ? "border-rose-300 dark:border-rose-900/70 bg-rose-50/40 dark:bg-rose-950/20"
@@ -152,15 +155,15 @@ export default function TopicCard({
               {displayTitle}
             </h4>
 
-            {isOpening && <AnimatedOpeningIndicator />}
+            {activeDownloading && <AnimatedDownloadingIndicator />}
 
-            {hasError && !isOpening && (
+            {hasError && !activeDownloading && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 text-[11px] font-bold shrink-0 animate-fadeIn">
                 Try Again
               </span>
             )}
 
-            {hasPracticeTest && !isOpening && !hasError && (
+            {hasPracticeTest && !activeDownloading && !hasError && (
               <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/70 shrink-0">
                 <FileCheck className="w-2.5 h-2.5 text-emerald-600" />
                 <span>Test Ready</span>

@@ -75,6 +75,7 @@ import { groupAndSortChapterNotes, getFormattedTopicLabel, isFileNameRedundant }
 import { subscribeToAnnouncements, saveStudentDoc, subscribeToClassNotes, getLocalClassNotes, areClassNotesEqual, updateStudentPresence } from "../lib/firestoreService";
 import { uploadReportToStorage, getBucketName, sanitizeStoragePath } from "../lib/storageService";
 import { openNoteInNativeViewer } from "../lib/nativePdfService";
+import { notesCacheService } from "../lib/notesCacheService";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import { getPdfDownloadUrl } from "../lib/pdfService";
 import { dataUrlToBlob } from "../utils/pdfUtils";
@@ -2029,11 +2030,6 @@ export function StudentMyTab({
       return;
     }
 
-    setOpeningNoteId(note.id);
-    const watchdogTimer = setTimeout(() => {
-      setOpeningNoteId((current) => (current === note.id ? null : current));
-    }, 10000);
-
     let url = note.pdfUrl || (note as any).publicUrl || (note as any).fileUrl || (note as any).downloadUrl || "";
     let storagePath = note.storagePath || (note as any).storage_path || (note as any).objectKey || (note as any).r2Key || (note as any).key;
     let bucket = note.bucket;
@@ -2047,6 +2043,37 @@ export function StudentMyTab({
         // ignore
       }
     }
+
+    const finalStorageKey =
+      (note as any).storageKey ||
+      storagePath ||
+      (note as any).storage_path ||
+      (note as any).objectKey ||
+      (note as any).r2Key ||
+      (note as any).key ||
+      url;
+
+    // Check if already in cache to skip downloading indicator
+    const candidateKeys = [
+      finalStorageKey,
+      storagePath,
+      (note as any).storage_path,
+      (note as any).objectKey,
+      (note as any).r2Key,
+      note.id,
+      note.pdfFileName,
+      note.fileName,
+      url,
+    ].filter((k): k is string => typeof k === "string" && k.trim().length > 0);
+
+    const isAlreadyCached = await notesCacheService.isLocallyCached(candidateKeys);
+    if (!isAlreadyCached) {
+      setOpeningNoteId(note.id);
+    }
+    const watchdogTimer = setTimeout(() => {
+      setOpeningNoteId((current) => (current === note.id ? null : current));
+    }, 15000);
+
     if (localStudent?.id) {
       updateStudentPresence(localStudent.id);
     }
@@ -2054,15 +2081,6 @@ export function StudentMyTab({
     const title = topicFormatted || `Chapter ${note.chapterNo} – ${note.chapterName}`;
 
     try {
-      const finalStorageKey =
-        (note as any).storageKey ||
-        storagePath ||
-        (note as any).storage_path ||
-        (note as any).objectKey ||
-        (note as any).r2Key ||
-        (note as any).key ||
-        url;
-
       if (typeof window !== "undefined") {
         try {
           sessionStorage.setItem("student_last_scroll_y", String(window.scrollY));
