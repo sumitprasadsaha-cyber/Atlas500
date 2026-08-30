@@ -523,7 +523,22 @@ export default function App() {
   };
 
   // --- Navigation States ---
-  const [activeTab, setActiveTab] = useState<"Dashboard" | "LiveStudents" | "Notes" | "Students" | "My" | "Settings">("Dashboard");
+  const [activeTab, setActiveTab] = useState<"Dashboard" | "LiveStudents" | "Notes" | "Students" | "My" | "Settings">(() => {
+    try {
+      const saved = sessionStorage.getItem("portal_active_tab");
+      if (saved && ["Dashboard", "LiveStudents", "Notes", "Students", "My", "Settings"].includes(saved)) {
+        return saved as any;
+      }
+    } catch {}
+    return "Dashboard";
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("portal_active_tab", activeTab);
+    } catch {}
+  }, [activeTab]);
+
   const [classNotes, setClassNotes] = useState<ClassNote[]>(() => getLocalClassNotes());
 
   // Subscribe to central class notes real-time updates
@@ -544,7 +559,23 @@ export default function App() {
     }
     return null;
   });
-  const [activeSubject, setActiveSubject] = useState<string | null>(null);
+  const [activeSubject, setActiveSubject] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem("portal_active_subject") || null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      if (activeSubject) {
+        sessionStorage.setItem("portal_active_subject", activeSubject);
+      } else {
+        sessionStorage.removeItem("portal_active_subject");
+      }
+    } catch {}
+  }, [activeSubject]);
   const [studentFilter, setStudentFilter] = useState<"All" | "Pending">("All");
 
   // --- Display Theme State ---

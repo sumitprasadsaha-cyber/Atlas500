@@ -75,11 +75,44 @@ export default function StudentSchoolTree({
   openErrorNoteId,
   isAdmin = false,
 }: StudentSchoolTreeProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({});
+  const storageKeyPrefix = `school_tree_${className || student?.classGrade || "def"}_${student?.id || "anon"}`;
+
+  const [searchQuery, setSearchQuery] = useState(() => {
+    try {
+      return sessionStorage.getItem(`${storageKeyPrefix}_search`) || "";
+    } catch {
+      return "";
+    }
+  });
+
+  const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = sessionStorage.getItem(`${storageKeyPrefix}_expanded`);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {};
+  });
+
   const [, setTestBankTick] = useState(0);
   const [localOpeningId, setLocalOpeningId] = useState<string | null>(null);
   const [localErrorId, setLocalErrorId] = useState<string | null>(null);
+
+  // Sync state to sessionStorage
+  useEffect(() => {
+    try {
+      if (searchQuery) {
+        sessionStorage.setItem(`${storageKeyPrefix}_search`, searchQuery);
+      } else {
+        sessionStorage.removeItem(`${storageKeyPrefix}_search`);
+      }
+    } catch {}
+  }, [searchQuery, storageKeyPrefix]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(`${storageKeyPrefix}_expanded`, JSON.stringify(expandedModules));
+    } catch {}
+  }, [expandedModules, storageKeyPrefix]);
 
   // Fetch student test attempts and subscribe to real-time practice test & score changes
   useEffect(() => {
@@ -259,18 +292,18 @@ export default function StudentSchoolTree({
                     {/* Chapter Header (Collapsible) */}
                     <div
                       onClick={() => toggleModule(modKey)}
-                      className="flex items-center justify-between px-3.5 py-2.5 bg-slate-50/70 dark:bg-slate-850/50 hover:bg-slate-100/80 dark:hover:bg-slate-800/70 cursor-pointer select-none transition-colors border-b border-slate-100 dark:border-slate-800/60"
+                      className="flex items-center justify-between px-3.5 py-2.5 bg-slate-50/70 dark:bg-slate-855/50 hover:bg-slate-100/80 dark:hover:bg-slate-800/70 cursor-pointer select-none transition-colors border-b border-slate-100 dark:border-slate-800/60"
                     >
-                      <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
                         <span className="text-slate-400 shrink-0">
                           {isModExpanded ? <ChevronDown className="w-4 h-4 text-slate-600 dark:text-slate-300" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}
                         </span>
-                        <h5 className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                        <h5 className="text-xs font-bold text-slate-900 dark:text-slate-100 break-words whitespace-normal leading-snug">
                           {mod.moduleTitle}
                         </h5>
                       </div>
 
-                      <div className="shrink-0">
+                      <div className="shrink-0 ml-2 self-center">
                         <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                           {mod.totalTopics} {mod.totalTopics === 1 ? "Topic" : "Topics"}
                         </span>
@@ -293,12 +326,14 @@ export default function StudentSchoolTree({
                             const targetSubj = subj.subject || (topic.note as any).subject || "";
                             const chapterNo = mod.moduleNo || (topic.note as any).chapterNo || 1;
 
-                            // Check if an attached practice test exists for this topic
+                            // Check if an attached practice test actually exists with uploaded questions
                             const topicTest =
                               getTopicPracticeTestSync(targetClass, targetSubj, chapterNo, topic.topicName) ||
                               getTopicPracticeTestSync(targetClass, targetSubj, chapterNo, topic.topicLabel) ||
                               getTopicPracticeTestSync(targetClass, targetSubj, chapterNo, (topic.note as any).topicTitle || "") ||
-                              ((topic.note as any).hasPracticeTest ? { questions: [{ id: "1" }] } : null);
+                              (Array.isArray((topic.note as any).practiceTestQuestions) && (topic.note as any).practiceTestQuestions.length > 0
+                                ? { questions: (topic.note as any).practiceTestQuestions }
+                                : null);
 
                             const hasTest = !!(topicTest && Array.isArray(topicTest.questions) && topicTest.questions.length > 0);
 
@@ -318,6 +353,9 @@ export default function StudentSchoolTree({
                               setLocalOpeningId(topic.id);
 
                               try {
+                                if (typeof window !== "undefined") {
+                                  sessionStorage.setItem("student_last_scroll_y", String(window.scrollY));
+                                }
                                 const result = onPreviewNote(topic.note);
                                 if (result && typeof result.then === "function") {
                                   await result;

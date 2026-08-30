@@ -1712,9 +1712,62 @@ export function StudentMyTab({
     return getStudentSubjects(localStudent, allClassNotes);
   }, [localStudent, allClassNotes]);
 
+  const subjectStorageKey = `student_selected_subject_${localStudent?.id || "anon"}`;
+
   const [selectedSubject, setSelectedSubject] = useState<string | null>(() => {
+    try {
+      const savedSubj = sessionStorage.getItem(subjectStorageKey);
+      const available = getStudentSubjects(localStudent, allClassNotes);
+      if (savedSubj && available.includes(savedSubj)) {
+        return savedSubj;
+      }
+    } catch {}
     return initialSubject || getStudentSubjects(localStudent, allClassNotes)[0] || null;
   });
+
+  useEffect(() => {
+    try {
+      if (selectedSubject) {
+        sessionStorage.setItem(subjectStorageKey, selectedSubject);
+      }
+    } catch {}
+  }, [selectedSubject, subjectStorageKey]);
+
+  // Restore scroll positions when mounting or returning from note preview
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const timer = setTimeout(() => {
+      try {
+        const savedScrollY = sessionStorage.getItem("student_last_scroll_y");
+        if (savedScrollY) {
+          const y = Number(savedScrollY);
+          if (!isNaN(y) && y > 0) {
+            window.scrollTo({ top: y, behavior: "instant" as any });
+          }
+        }
+
+        const savedMainScroll = sessionStorage.getItem("student_main_scroll_top");
+        if (savedMainScroll) {
+          const mainEl = document.getElementById("main-content-scroll");
+          if (mainEl) {
+            mainEl.scrollTop = Number(savedMainScroll);
+          }
+        }
+
+        const savedTreeScroll = sessionStorage.getItem("student_tree_scroll_top");
+        if (savedTreeScroll) {
+          const treeEl = document.getElementById("study-tree-scroll-container");
+          if (treeEl) {
+            treeEl.scrollTop = Number(savedTreeScroll);
+          }
+        }
+      } catch {}
+    }, 80);
+
+    return () => clearTimeout(timer);
+  }, [selectedSubject]);
+
   const [editingRemarkId, setEditingRemarkId] = useState<string | null>(null);
   const [remarkDrafts, setRemarkDrafts] = useState<Record<string, string>>({});
   const [openingNoteId, setOpeningNoteId] = useState<string | null>(null);
@@ -2014,6 +2067,16 @@ export function StudentMyTab({
         (note as any).key ||
         url;
 
+      if (typeof window !== "undefined") {
+        try {
+          sessionStorage.setItem("student_last_scroll_y", String(window.scrollY));
+          const mainEl = document.getElementById("main-content-scroll");
+          if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainEl.scrollTop));
+          const treeEl = document.getElementById("study-tree-scroll-container");
+          if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeEl.scrollTop));
+        } catch {}
+      }
+
       await openNoteInNativeViewer({
         storageKey: finalStorageKey,
         storagePath: finalStorageKey,
@@ -2310,7 +2373,7 @@ export function StudentMyTab({
                 </div>
 
                 {/* UPSC Collapsible Tree */}
-                <div className="flex-1 overflow-y-auto pr-1">
+                <div className="flex-1 overflow-y-auto pr-1" id="study-tree-scroll-container">
                   <StudentUPSCTree
                     paper={activePaper}
                     student={localStudent}
@@ -2332,9 +2395,9 @@ export function StudentMyTab({
             <div className="flex flex-col h-full min-h-0">
               {/* Header for School Selected Subject */}
               <div className="border-b border-slate-100 dark:border-slate-800 pb-3 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0" id="study-right-header">
-                <div className="truncate">
+                <div className="min-w-0 flex-1 pr-2">
                   <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">Selected Subject</p>
-                  <h3 className="text-lg font-black text-slate-800 dark:text-slate-100 truncate pr-2">{activeSchoolSubject.subject}</h3>
+                  <h3 className="text-lg font-black text-slate-800 dark:text-slate-100 break-words whitespace-normal leading-snug">{activeSchoolSubject.subject}</h3>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
@@ -2365,7 +2428,7 @@ export function StudentMyTab({
               </div>
 
               {/* School Collapsible 4-tier Tree */}
-              <div className="flex-1 overflow-y-auto pr-1">
+              <div className="flex-1 overflow-y-auto pr-1" id="study-tree-scroll-container">
                 <StudentSchoolTree
                   className={localStudent.classGrade}
                   subjects={[activeSchoolSubject]}
