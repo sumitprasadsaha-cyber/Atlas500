@@ -47,19 +47,22 @@ export const SplashVideo: React.FC<SplashVideoProps> = ({ onComplete }) => {
           video.muted = true;
           video.play().catch((playErr) => {
             console.warn("[SplashVideo] Autoplay completely blocked or failed:", playErr);
-            handleFinish();
+            // If playback fails, advance to app after a short timeout instead of getting stuck
+            setTimeout(() => {
+              handleFinish();
+            }, 800);
           });
         }
       });
     }
 
-    // Watchdog fallback timer (e.g. 10s max duration) in case video hangs, fails, or cannot load
+    // Watchdog safety timer in case video hangs, stalls, or cannot load
     const safetyTimeout = setTimeout(() => {
       if (!completedRef.current) {
         console.warn("[SplashVideo] Splash screen safety timeout reached");
         handleFinish();
       }
-    }, 10000);
+    }, 6000);
 
     return () => {
       clearTimeout(safetyTimeout);
@@ -82,13 +85,15 @@ export const SplashVideo: React.FC<SplashVideoProps> = ({ onComplete }) => {
   return (
     <div
       id="splash-video-container"
-      className="fixed inset-0 z-[999999] w-screen h-screen bg-black flex items-center justify-center overflow-hidden select-none pointer-events-none"
+      className="fixed inset-0 z-[999999] w-screen h-[100dvh] bg-black flex items-center justify-center overflow-hidden select-none pointer-events-none"
       style={{
         position: "fixed",
         top: 0,
         left: 0,
         right: 0,
         bottom: 0,
+        width: "100vw",
+        height: "100dvh",
         zIndex: 999999,
         backgroundColor: "#000000",
         pointerEvents: "none",
@@ -115,7 +120,13 @@ export const SplashVideo: React.FC<SplashVideoProps> = ({ onComplete }) => {
         onEnded={handleFinish}
         onError={(e) => {
           console.warn("[SplashVideo] Video playback error:", e);
-          handleFinish();
+          // Advance after brief moment on error
+          setTimeout(() => {
+            handleFinish();
+          }, 300);
+        }}
+        onStalled={() => {
+          console.warn("[SplashVideo] Video stalled");
         }}
       />
     </div>
