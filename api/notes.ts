@@ -1,7 +1,7 @@
 import path from "path";
 import { handleOptions, sendSuccess, sendError } from "./_lib/responses.js";
 import { sanitizeKey, getMimeType, extractUploadPayload, parseRequestBody, buildCanonicalFilename, extractCleanExtension } from "./_lib/utils.js";
-import { uploadObjectToR2, deleteObjectFromR2, headObjectFromR2, getR2ServerConfig } from "./_lib/r2.js";
+import { uploadObjectToR2, deleteObjectFromR2, headObjectFromR2, listObjectsFromR2, getR2ServerConfig } from "./_lib/r2.js";
 import { buildCanonicalNoteMetadata, validateCanonicalNoteMetadata, NoteMetadata } from "../src/domain/notes/types.js";
 import { getHierarchyLineage } from "../src/utils/canonicalStorageKey.js";
 
@@ -386,6 +386,18 @@ export default async function handler(req: any, res: any) {
           try {
             console.log(`[API Notes] Deleting note object: key="${storageKey}", bucket="${bucket}"`);
             await deleteObjectFromR2({ bucket, key: storageKey });
+
+            // If storageKey is inside a specific Topic folder, also purge any ancillary metadata or files in that exact Topic folder
+            const match = storageKey.match(/^(.+\/Topic_[^\/]+)\//i);
+            if (match && match[1]) {
+              const topicPrefix = `${match[1]}/`;
+              const listRes = await listObjectsFromR2({ bucket, prefix: topicPrefix, maxKeys: 100 });
+              if (listRes.objects && listRes.objects.length > 0) {
+                for (const obj of listRes.objects) {
+                  await deleteObjectFromR2({ bucket, key: obj.key }).catch(() => {});
+                }
+              }
+            }
           } catch (delErr: any) {
             console.warn("[API Notes] R2 delete warning (proceeding):", delErr?.message);
           }

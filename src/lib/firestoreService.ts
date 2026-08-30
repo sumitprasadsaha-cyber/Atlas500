@@ -1286,15 +1286,40 @@ export async function deleteAnnouncementDoc(id: string): Promise<void> {
 // CLASS NOTES CENTRALIZED STORAGE API (STABLE & DEDUPLICATED)
 // ----------------------------------------------------
 const STORAGE_KEY_CLASS_NOTES = "tuition_class_notes";
+const STORAGE_KEY_R2_DISCOVERED = "tuition_r2_discovered_notes";
 
 type ClassNotesListener = (notes: ClassNote[]) => void;
 const classNotesListeners = new Set<ClassNotesListener>();
 
 let inMemoryClassNotesCache: ClassNote[] | null = null;
+let globalR2DiscoveredNotes = new Map<string, ClassNote>();
+let classNotesRemote: ClassNote[] = [];
+let upscNotesRemote: ClassNote[] = [];
 let activeFirestoreClassNotesUnsub: (() => void) | null = null;
 let activeFirestoreUpscNotesUnsub: (() => void) | null = null;
 let isFirestoreClassNotesSubscribed = false;
 let isClassNotesFetchInProgress = false;
+let isR2DiscoveryInProgress = false;
+
+function initR2DiscoveredCache() {
+  if (typeof window === "undefined") return;
+  if (globalR2DiscoveredNotes.size === 0) {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_R2_DISCOVERED);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          for (const n of parsed) {
+            if (n && (n.id || n.storageKey || n.storagePath)) {
+              const key = n.storageKey || n.storagePath || n.id;
+              globalR2DiscoveredNotes.set(key, n);
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+}
 
 /**
  * Deep structural equality comparator for ClassNote arrays to prevent unnecessary UI re-renders
@@ -1340,12 +1365,14 @@ export function getLocalClassNotes(): ClassNote[] {
   }
   if (typeof window === "undefined") return inMemoryClassNotesCache || [];
 
+  initR2DiscoveredCache();
+
   // Try local memory/storage first
   const cached = localStorage.getItem(STORAGE_KEY_CLASS_NOTES);
   if (cached !== null) {
     try {
       const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed)) {
+      if (Array.isArray(parsed) && parsed.length > 0) {
         inMemoryClassNotesCache = parsed.map(migrateNoteToHierarchy).sort(sortNotesByTopicNumber);
         return inMemoryClassNotesCache;
       }
@@ -1354,10 +1381,16 @@ export function getLocalClassNotes(): ClassNote[] {
     }
   }
 
+  // If R2 discovered notes exist locally, populate immediately
+  if (globalR2DiscoveredNotes.size > 0) {
+    inMemoryClassNotesCache = Array.from(globalR2DiscoveredNotes.values()).map(migrateNoteToHierarchy).sort(sortNotesByTopicNumber);
+    return inMemoryClassNotesCache;
+  }
+
   // Background hydrate from IndexedDB cache
   notesCacheService.getCachedNotes().then((idbNotes) => {
     if (idbNotes && Array.isArray(idbNotes) && idbNotes.length > 0) {
-      if (inMemoryClassNotesCache === null) {
+      if (inMemoryClassNotesCache === null || inMemoryClassNotesCache.length === 0) {
         saveLocalClassNotes(idbNotes);
       }
     }
@@ -1396,7 +1429,107 @@ export function saveLocalClassNotes(notes: ClassNote[]) {
   }
 }
 
+/**
+ * Merges Firestore remote documents and Cloudflare R2 authoritative scanned folders.
+ * Guarantees that successful R2 folder scans are NEVER overwritten with empty states.
+ */
+function mergeAndSaveClassNotes() {
+  initR2DiscoveredCache();
+  const mergedMap = new Map<string, ClassNote>();
+
+  // 1. Add class notes from remote Firestore
+  for (const n of classNotesRemote) {
+    if (n && n.id) mergedMap.set(n.id, n);
+  }
+
+  // 2. Add upsc notes from remote Firestore
+  for (const n of upscNotesRemote) {
+    if (n && n.id) mergedMap.set(n.id, n);
+  }
+
+  // 3. Merge R2 discovered topic notes (authoritative storage source)
+  for (const [_, n] of globalR2DiscoveredNotes.entries()) {
+    if (!n || !n.id) continue;
+
+    // Check if there is an existing Firestore note matching by id, storageKey, storagePath, or r2Key
+    let matchedExistingId: string | null = null;
+    for (const [id, existing] of mergedMap.entries()) {
+      if (
+        id === n.id ||
+        (existing.storageKey && n.storageKey && existing.storageKey === n.storageKey) ||
+        (existing.storagePath && n.storagePath && existing.storagePath === n.storagePath) ||
+        (existing.r2Key && n.r2Key && existing.r2Key === n.r2Key) ||
+        (existing.objectKey && n.objectKey && existing.objectKey === n.objectKey)
+      ) {
+        matchedExistingId = id;
+        break;
+      }
+    }
+
+    if (matchedExistingId) {
+      const existing = mergedMap.get(matchedExistingId)!;
+      mergedMap.set(matchedExistingId, {
+        ...n,
+        ...existing,
+        storageKey: n.storageKey || existing.storageKey,
+        storagePath: n.storagePath || existing.storagePath,
+        objectKey: n.objectKey || existing.objectKey,
+        pdfUrl: n.pdfUrl || existing.pdfUrl,
+        downloadUrl: n.downloadUrl || existing.downloadUrl,
+        pdfFileName: n.pdfFileName || existing.pdfFileName || n.fileName || existing.fileName,
+        fileName: n.fileName || existing.fileName || n.pdfFileName || existing.pdfFileName,
+        fileSize: n.fileSize || existing.fileSize,
+        fileType: n.fileType || existing.fileType || "pdf",
+      });
+    } else {
+      // Direct R2 topic note discovered
+      mergedMap.set(n.id, n);
+    }
+  }
+
+  const mergedList = Array.from(mergedMap.values());
+  // Never overwrite with empty if we already have valid notes and Firestore hasn't loaded
+  if (mergedList.length > 0 || (classNotesRemote.length === 0 && upscNotesRemote.length === 0 && globalR2DiscoveredNotes.size === 0)) {
+    saveLocalClassNotes(mergedList);
+  }
+}
+
+/**
+ * Actively triggers discovery of topic folders directly from Cloudflare R2 bucket.
+ */
+export async function triggerR2TopicDiscovery(): Promise<ClassNote[]> {
+  if (isR2DiscoveryInProgress) return Array.from(globalR2DiscoveredNotes.values());
+  isR2DiscoveryInProgress = true;
+  try {
+    const discovered = await discoverTopicNotesFromR2({ category: "all" });
+    if (discovered && Array.isArray(discovered)) {
+      const nextR2Map = new Map<string, ClassNote>();
+      for (const n of discovered) {
+        if (n && n.id) {
+          const key = n.storageKey || n.storagePath || n.id;
+          nextR2Map.set(key, n);
+        }
+      }
+      globalR2DiscoveredNotes = nextR2Map;
+      if (typeof window !== "undefined") {
+        safeSetStorage(STORAGE_KEY_R2_DISCOVERED, JSON.stringify(Array.from(nextR2Map.values())));
+      }
+      mergeAndSaveClassNotes();
+    }
+  } catch (err) {
+    console.warn("[FirestoreService] triggerR2TopicDiscovery warning:", err);
+  } finally {
+    isR2DiscoveryInProgress = false;
+  }
+  return Array.from(globalR2DiscoveredNotes.values());
+}
+
 function ensureSingleFirestoreNotesSubscription() {
+  initR2DiscoveredCache();
+  
+  // Trigger background R2 discovery on every subscribe
+  triggerR2TopicDiscovery().catch(() => {});
+
   if (isFirestoreClassNotesSubscribed || isClassNotesFetchInProgress) return;
   isClassNotesFetchInProgress = true;
 
@@ -1407,48 +1540,6 @@ function ensureSingleFirestoreNotesSubscription() {
         isClassNotesFetchInProgress = false;
         return;
       }
-
-      let classNotesRemote: ClassNote[] = [];
-      let upscNotesRemote: ClassNote[] = [];
-      let r2DiscoveredNotes: ClassNote[] = [];
-
-      const mergeAndSave = () => {
-        const mergedMap = new Map<string, ClassNote>();
-        // Add class notes from remote
-        for (const n of classNotesRemote) {
-          if (n && n.id) mergedMap.set(n.id, n);
-        }
-        // Add upsc notes from remote
-        for (const n of upscNotesRemote) {
-          if (n && n.id) mergedMap.set(n.id, n);
-        }
-        // Merge R2 discovered topic notes (match by storageKey, storagePath, or r2Key or id)
-        for (const n of r2DiscoveredNotes) {
-          if (n && n.id) {
-            const alreadyExists = Array.from(mergedMap.values()).some(
-              (existing) =>
-                existing.id === n.id ||
-                (existing.storageKey && n.storageKey && existing.storageKey === n.storageKey) ||
-                (existing.storagePath && n.storagePath && existing.storagePath === n.storagePath) ||
-                (existing.r2Key && n.r2Key && existing.r2Key === n.r2Key)
-            );
-            if (!alreadyExists) {
-              mergedMap.set(n.id, n);
-            }
-          }
-        }
-
-        const mergedList = Array.from(mergedMap.values());
-        saveLocalClassNotes(mergedList);
-      };
-
-      // Trigger background R2 discovery
-      discoverTopicNotesFromR2().then((discovered) => {
-        if (discovered && discovered.length > 0) {
-          r2DiscoveredNotes = discovered;
-          mergeAndSave();
-        }
-      }).catch(() => {});
 
       const classColRef = collection(db, "class_notes");
       activeFirestoreClassNotesUnsub = onSnapshot(
@@ -1463,7 +1554,7 @@ function ensureSingleFirestoreNotesSubscription() {
               classNotesRemote.push(data);
             }
           });
-          mergeAndSave();
+          mergeAndSaveClassNotes();
         },
         (err) => {
           isClassNotesFetchInProgress = false;
@@ -1482,7 +1573,7 @@ function ensureSingleFirestoreNotesSubscription() {
               upscNotesRemote.push(data);
             }
           });
-          mergeAndSave();
+          mergeAndSaveClassNotes();
         },
         (err) => {
           console.warn("[Firestore] upsc_notes subscription notice:", err);
@@ -1512,7 +1603,7 @@ export function subscribeToClassNotes(
   // 2. Register UI subscriber
   classNotesListeners.add(onUpdate);
 
-  // 3. Ensure a single shared Firestore listener is active
+  // 3. Ensure a single shared Firestore listener is active & trigger R2 scan
   ensureSingleFirestoreNotesSubscription();
 
   return () => {
@@ -1537,6 +1628,17 @@ export function subscribeToClassNotes(
 }
 
 export async function saveClassNoteDoc(note: ClassNote): Promise<void> {
+  initR2DiscoveredCache();
+  
+  // Update local R2 map if note has storage key
+  if (note.storagePath || note.storageKey) {
+    const key = note.storageKey || note.storagePath || note.id;
+    globalR2DiscoveredNotes.set(key, note);
+    if (typeof window !== "undefined") {
+      safeSetStorage(STORAGE_KEY_R2_DISCOVERED, JSON.stringify(Array.from(globalR2DiscoveredNotes.values())));
+    }
+  }
+
   const currentLocal = getLocalClassNotes();
   const exists = currentLocal.some((n) => n.id === note.id);
   const updatedLocal = exists
@@ -1570,61 +1672,89 @@ export async function saveClassNoteDoc(note: ClassNote): Promise<void> {
 export async function fetchAllClassNotesFromFirestore(): Promise<ClassNote[]> {
   try {
     const db = await getFirebaseDb();
-    if (!db) {
-      return getLocalClassNotes();
-    }
-
     const notesMap = new Map<string, ClassNote>();
 
-    try {
-      const classCol = collection(db, "class_notes");
-      const classSnap = await getDocs(classCol);
-      classSnap.forEach((d) => {
-        const data = d.data() as ClassNote;
-        if (data && (data.id || d.id)) {
-          notesMap.set(data.id || d.id, { ...data, id: data.id || d.id });
-        }
-      });
-    } catch (err) {
-      console.warn("[Firestore] Failed to read class_notes collection:", err);
-    }
+    if (db) {
+      try {
+        const classCol = collection(db, "class_notes");
+        const classSnap = await getDocs(classCol);
+        classSnap.forEach((d) => {
+          const data = d.data() as ClassNote;
+          if (data && (data.id || d.id)) {
+            notesMap.set(data.id || d.id, { ...data, id: data.id || d.id });
+          }
+        });
+      } catch (err) {
+        console.warn("[Firestore] Failed to read class_notes collection:", err);
+      }
 
-    try {
-      const upscCol = collection(db, "upsc_notes");
-      const upscSnap = await getDocs(upscCol);
-      upscSnap.forEach((d) => {
-        const data = d.data() as ClassNote;
-        if (data && (data.id || d.id)) {
-          notesMap.set(data.id || d.id, { ...data, id: data.id || d.id });
-        }
-      });
-    } catch (err) {
-      console.warn("[Firestore] Failed to read upsc_notes collection:", err);
+      try {
+        const upscCol = collection(db, "upsc_notes");
+        const upscSnap = await getDocs(upscCol);
+        upscSnap.forEach((d) => {
+          const data = d.data() as ClassNote;
+          if (data && (data.id || d.id)) {
+            notesMap.set(data.id || d.id, { ...data, id: data.id || d.id });
+          }
+        });
+      } catch (err) {
+        console.warn("[Firestore] Failed to read upsc_notes collection:", err);
+      }
     }
 
     // Discover any additional notes physically present in Cloudflare R2 bucket
     try {
-      const r2Notes = await discoverTopicNotesFromR2();
+      const r2Notes = await discoverTopicNotesFromR2({ category: "all" });
       for (const rn of r2Notes) {
         if (rn && rn.id) {
-          const alreadyExists = Array.from(notesMap.values()).some(
-            (existing) =>
-              existing.id === rn.id ||
+          const key = rn.storageKey || rn.storagePath || rn.id;
+          globalR2DiscoveredNotes.set(key, rn);
+
+          let matchedExistingId: string | null = null;
+          for (const [id, existing] of notesMap.entries()) {
+            if (
+              id === rn.id ||
               (existing.storageKey && rn.storageKey && existing.storageKey === rn.storageKey) ||
               (existing.storagePath && rn.storagePath && existing.storagePath === rn.storagePath) ||
-              (existing.r2Key && rn.r2Key && existing.r2Key === rn.r2Key)
-          );
-          if (!alreadyExists) {
+              (existing.r2Key && rn.r2Key && existing.r2Key === rn.r2Key) ||
+              (existing.objectKey && rn.objectKey && existing.objectKey === rn.objectKey)
+            ) {
+              matchedExistingId = id;
+              break;
+            }
+          }
+
+          if (matchedExistingId) {
+            const existing = notesMap.get(matchedExistingId)!;
+            notesMap.set(matchedExistingId, {
+              ...rn,
+              ...existing,
+              storageKey: rn.storageKey || existing.storageKey,
+              storagePath: rn.storagePath || existing.storagePath,
+              objectKey: rn.objectKey || existing.objectKey,
+              pdfUrl: rn.pdfUrl || existing.pdfUrl,
+              downloadUrl: rn.downloadUrl || existing.downloadUrl,
+              pdfFileName: rn.pdfFileName || existing.pdfFileName || rn.fileName || existing.fileName,
+              fileName: rn.fileName || existing.fileName || rn.pdfFileName || existing.pdfFileName,
+              fileSize: rn.fileSize || existing.fileSize,
+              fileType: rn.fileType || existing.fileType || "pdf",
+            });
+          } else {
             notesMap.set(rn.id, rn);
           }
         }
+      }
+      if (typeof window !== "undefined") {
+        safeSetStorage(STORAGE_KEY_R2_DISCOVERED, JSON.stringify(Array.from(globalR2DiscoveredNotes.values())));
       }
     } catch (r2Err) {
       console.warn("[Firestore] R2 topic discovery notice:", r2Err);
     }
 
     if (notesMap.size > 0) {
-      return Array.from(notesMap.values());
+      const list = Array.from(notesMap.values());
+      saveLocalClassNotes(list);
+      return list;
     }
 
     return getLocalClassNotes();
@@ -1640,6 +1770,21 @@ export async function deleteClassNoteDoc(noteId: string): Promise<void> {
   const targetNote = currentLocal.find((n) => n.id === noteId);
   const updatedLocal = currentLocal.filter((n) => n.id !== noteId);
   saveLocalClassNotes(updatedLocal);
+
+  // Purge from globalR2DiscoveredNotes
+  initR2DiscoveredCache();
+  for (const [key, n] of globalR2DiscoveredNotes.entries()) {
+    if (
+      n.id === noteId ||
+      (targetNote?.storagePath && n.storagePath === targetNote.storagePath) ||
+      (targetNote?.storageKey && n.storageKey === targetNote.storageKey)
+    ) {
+      globalR2DiscoveredNotes.delete(key);
+    }
+  }
+  if (typeof window !== "undefined") {
+    safeSetStorage(STORAGE_KEY_R2_DISCOVERED, JSON.stringify(Array.from(globalR2DiscoveredNotes.values())));
+  }
 
   // Clean up legacy student.notes across all student records to prevent auto-migration from resurrecting it
   try {

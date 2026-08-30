@@ -361,7 +361,30 @@ export async function repairStorageIntegrity(
     const cleanKey = storageKey.replace(/^\/+/, "");
 
     try {
-      const head = await verifyR2ObjectExists({ bucket, key: cleanKey });
+      let head = await verifyR2ObjectExists({ bucket, key: cleanKey });
+
+      // If initial key not found, check standard prefix aliases
+      if (!head || !head.exists) {
+        const altKeys: string[] = [];
+        if (cleanKey.startsWith("class_notes/")) {
+          altKeys.push(cleanKey.replace(/^class_notes\//, ""));
+        } else {
+          altKeys.push(`class_notes/${cleanKey}`);
+        }
+        if (cleanKey.startsWith("upsc/")) {
+          altKeys.push(cleanKey.replace(/^upsc\//, ""));
+        } else {
+          altKeys.push(`upsc/${cleanKey}`);
+        }
+
+        for (const alt of altKeys) {
+          const altHead = await verifyR2ObjectExists({ bucket, key: alt });
+          if (altHead && altHead.exists) {
+            head = altHead;
+            break;
+          }
+        }
+      }
 
       if (!head || !head.exists) {
         console.warn(`[Storage Integrity Repair] Note "${note.id}" (key: "${cleanKey}") binary object not found in R2. Removing broken record.`);

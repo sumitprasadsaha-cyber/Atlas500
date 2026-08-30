@@ -780,9 +780,9 @@ export default async function handler(req: any, res: any) {
         });
       }
 
-      // 12. DISCOVER TOPICS (Direct Topic Enumeration for Chapter/Module)
+      // 12. DISCOVER TOPICS (Direct Topic Enumeration for Chapter/Module from R2 Authoritative Storage)
       case "discover-topics": {
-        const category = params.category || "school";
+        const category = params.category || "all";
         const classGrade = params.classGrade || params.className || "";
         const gsPaper = params.gsPaper || params.generalStudiesPaper || "";
         const subject = params.subject || "";
@@ -794,26 +794,33 @@ export default async function handler(req: any, res: any) {
         const searchPrefixes: string[] = [];
         if (requestedPrefix) {
           searchPrefixes.push(requestedPrefix);
-        } else if (category === "upsc" || gsPaper) {
+        } else if (category === "upsc" || (gsPaper && !classGrade)) {
           const gsFolder = gsPaper ? (gsPaper.includes("4") ? "GS4" : gsPaper.includes("3") ? "GS3" : gsPaper.includes("2") ? "GS2" : "GS1") : "";
           if (gsFolder && subject) {
             searchPrefixes.push(`upsc/${gsFolder}/${subject.replace(/\s+/g, "_")}/`);
             searchPrefixes.push(`upsc/${gsFolder}/${subject}/`);
+            searchPrefixes.push(`${gsFolder}/${subject.replace(/\s+/g, "_")}/`);
           } else if (gsFolder) {
             searchPrefixes.push(`upsc/${gsFolder}/`);
+            searchPrefixes.push(`${gsFolder}/`);
           } else {
-            searchPrefixes.push("upsc/");
+            searchPrefixes.push("upsc/", "GS1/", "GS2/", "GS3/", "GS4/");
           }
-        } else {
+        } else if (category === "school" || (classGrade && !gsPaper)) {
           const classFolder = classGrade ? `Class_${String(classGrade).replace(/\D/g, "").padStart(2, "0")}` : "";
           if (classFolder && subject) {
             searchPrefixes.push(`class_notes/${classFolder}/${subject.replace(/\s+/g, "_")}/`);
             searchPrefixes.push(`class_notes/${classFolder}/${subject}/`);
+            searchPrefixes.push(`${classFolder}/${subject.replace(/\s+/g, "_")}/`);
           } else if (classFolder) {
             searchPrefixes.push(`class_notes/${classFolder}/`);
+            searchPrefixes.push(`${classFolder}/`);
           } else {
             searchPrefixes.push("class_notes/");
           }
+        } else {
+          // "all" or unspecified - comprehensive search across all prefixes
+          searchPrefixes.push("class_notes/", "upsc/", "Class_09/", "Class_10/", "Class_11/", "Class_12/", "GS1/", "GS2/", "GS3/", "GS4/");
         }
 
         const discoveredTopicsMap = new Map<string, any>();
@@ -839,6 +846,8 @@ export default async function handler(req: any, res: any) {
               let foundChapterSegment = "";
               let foundClassSegment = "";
               let foundSubjectSegment = "";
+              let isUpscDetected = false;
+              let detectedGsPaper = "";
 
               for (const part of parts) {
                 if (/^Topic[_.\s-]/i.test(part)) {
@@ -847,7 +856,15 @@ export default async function handler(req: any, res: any) {
                   foundChapterSegment = part;
                 } else if (/^Class[_.\s-]/i.test(part)) {
                   foundClassSegment = part;
-                } else if (part !== "class_notes" && part !== "upsc" && !foundSubjectSegment && !/\.[a-z0-9]+$/i.test(part)) {
+                } else if (/^(?:GS[1-4]|General_Studies_Paper_[1-4]|Essay|CSAT)/i.test(part)) {
+                  isUpscDetected = true;
+                  foundClassSegment = "UPSC";
+                  const m = part.match(/GS([1-4])/i) || part.match(/Paper_([1-4])/i);
+                  detectedGsPaper = m ? `GS Paper ${m[1]}` : (part.toLowerCase().includes("essay") ? "Essay" : part.toLowerCase().includes("csat") ? "CSAT" : "GS Paper 1");
+                } else if (part.toLowerCase() === "upsc") {
+                  isUpscDetected = true;
+                  foundClassSegment = "UPSC";
+                } else if (part !== "class_notes" && !foundSubjectSegment && !/\.[a-z0-9]+$/i.test(part)) {
                   foundSubjectSegment = part;
                 }
               }
@@ -869,26 +886,45 @@ export default async function handler(req: any, res: any) {
                   .replace(/_/g, " ")
                   .trim();
 
+                const isFile = /\.[a-z0-9]+$/i.test(parts[parts.length - 1]);
+                const fileName = isFile ? parts[parts.length - 1] : "note.pdf";
+                const fileType = isFile ? (/\.(jpg|jpeg|png|webp)$/i.test(fileName) ? "image" : "pdf") : "pdf";
+
                 const topicKey = `${foundClassSegment || "School"}/${foundSubjectSegment || "Subject"}/${foundChapterSegment || "Chapter"}/${foundTopicSegment}`;
                 const existing = discoveredTopicsMap.get(topicKey);
 
-                const isFile = /\.[a-z0-9]+$/i.test(parts[parts.length - 1]);
-                const fileName = isFile ? parts[parts.length - 1] : "";
-                const fileType = isFile ? (/\.(jpg|jpeg|png|webp)$/i.test(fileName) ? "image" : "pdf") : "pdf";
-
-                if (!existing || (!existing.storagePath && isFile)) {
+                if (!existing || (!existing.storagePath && isFile) || (existing.storagePath && !existing.storagePath.includes(".") && isFile)) {
                   discoveredTopicsMap.set(topicKey, {
                     id: topicKey.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase(),
+                    isUPSC: isUpscDetected,
+                    type: isUpscDetected ? "upsc" : "school",
+                    category: isUpscDetected ? "upsc" : "school",
                     topicFolder: foundTopicSegment,
                     topicNo: parsedTopicNo,
+                    topicNumber: parsedTopicNo,
                     topicName: cleanTopicName,
+                    topicTitle: cleanTopicName,
                     topicLabel: parsedTopicNo && cleanTopicName ? `Topic ${parsedTopicNo} : ${cleanTopicName}` : (cleanTopicName || `Topic ${parsedTopicNo || 1}`),
+                    partLabel: parsedTopicNo && cleanTopicName ? `Topic ${parsedTopicNo} : ${cleanTopicName}` : (cleanTopicName || `Topic ${parsedTopicNo || 1}`),
                     chapterNo: parsedChNo,
+                    chapterNumber: parsedChNo,
                     chapterName: cleanChName,
+                    chapterTitle: cleanChName,
                     chapterFolder: foundChapterSegment,
-                    classGrade: foundClassSegment.replace(/_/g, " "),
-                    subject: foundSubjectSegment.replace(/_/g, " "),
+                    moduleNo: isUpscDetected ? parsedChNo : undefined,
+                    moduleNumber: isUpscDetected ? parsedChNo : undefined,
+                    moduleName: isUpscDetected ? cleanChName : undefined,
+                    moduleTitle: isUpscDetected ? cleanChName : undefined,
+                    moduleFolder: isUpscDetected ? foundChapterSegment : undefined,
+                    gsPaper: detectedGsPaper || (isUpscDetected ? "GS Paper 1" : undefined),
+                    generalStudiesPaper: detectedGsPaper || (isUpscDetected ? "GS Paper 1" : undefined),
+                    paper: detectedGsPaper || (isUpscDetected ? "GS Paper 1" : undefined),
+                    classGrade: isUpscDetected ? "UPSC" : (foundClassSegment.replace(/_/g, " ") || "Class 10"),
+                    className: isUpscDetected ? "UPSC" : (foundClassSegment.replace(/_/g, " ") || "Class 10"),
+                    subject: foundSubjectSegment.replace(/_/g, " ") || "General",
+                    subjectName: foundSubjectSegment.replace(/_/g, " ") || "General",
                     storagePath: cleanKey,
+                    storageKey: cleanKey,
                     objectKey: cleanKey,
                     fileName,
                     fileSize: item.size || 0,
