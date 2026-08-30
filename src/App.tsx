@@ -1504,7 +1504,16 @@ export default function App() {
 
   if (isAuthInitializing && !auth.isAuthenticated) {
     return (
-      <div className={`min-h-screen bg-slate-100 dark:bg-[#090d16] flex items-center justify-center p-4 font-sans antialiased theme-${visualTheme}`} id="app-auth-loading">
+      <div 
+        className={`h-[100dvh] min-h-[100dvh] max-h-[100dvh] w-full bg-slate-100 dark:bg-[#090d16] flex items-center justify-center p-4 font-sans antialiased theme-${visualTheme} overflow-hidden`} 
+        id="app-auth-loading"
+        style={{
+          paddingTop: "max(1rem, env(safe-area-inset-top, 0px))",
+          paddingBottom: "max(1rem, env(safe-area-inset-bottom, 0px))",
+          paddingLeft: "max(1rem, env(safe-area-inset-left, 0px))",
+          paddingRight: "max(1rem, env(safe-area-inset-right, 0px))",
+        }}
+      >
         <div className="w-full max-w-xs bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl shadow-xl p-5 flex flex-col items-center text-center">
           <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-100 dark:border-blue-900/40 flex items-center justify-center text-blue-600 dark:text-blue-400 mb-3 animate-pulse">
             <Sparkles className="w-5 h-5" />
@@ -1526,7 +1535,16 @@ export default function App() {
 
   if (!auth.isAuthenticated) {
     return (
-      <div className={`min-h-screen bg-slate-100 dark:bg-[#090d16] flex items-center justify-center p-4 font-sans antialiased selection:bg-blue-500 selection:text-white theme-${visualTheme}`} id="app-shell">
+      <div 
+        className={`h-[100dvh] min-h-[100dvh] max-h-[100dvh] w-full bg-slate-100 dark:bg-[#090d16] flex items-center justify-center p-4 font-sans antialiased selection:bg-blue-500 selection:text-white theme-${visualTheme} overflow-y-auto`} 
+        id="app-shell"
+        style={{
+          paddingTop: "max(1rem, env(safe-area-inset-top, 0px))",
+          paddingBottom: "max(1rem, env(safe-area-inset-bottom, 0px))",
+          paddingLeft: "max(1rem, env(safe-area-inset-left, 0px))",
+          paddingRight: "max(1rem, env(safe-area-inset-right, 0px))",
+        }}
+      >
         <Login
           onLoginSuccess={(role, studentId, userId) => {
             handleLogin(role.toLowerCase() as "admin" | "student", studentId);
@@ -1728,36 +1746,57 @@ export default function App() {
   };
 
   return (
-    <div className={`h-screen w-full bg-slate-100 dark:bg-[#090d16] flex flex-col font-sans antialiased selection:bg-blue-500 selection:text-white theme-${visualTheme}`} id="app-shell">
+    <div 
+      className={`h-[100dvh] min-h-[100dvh] max-h-[100dvh] w-full bg-slate-100 dark:bg-[#090d16] flex flex-col font-sans antialiased selection:bg-blue-500 selection:text-white theme-${visualTheme} overflow-hidden`} 
+      id="app-shell"
+      style={{
+        height: "100dvh",
+        minHeight: "100dvh",
+        maxHeight: "100dvh",
+      }}
+    >
       {/* 
         Sleek, responsive container.
         Takes full available screen height and flexes cleanly with fixed header, fixed bottom nav, and scrollable content.
       */}
       <div 
         id="main-frame"
-        className="relative w-full max-w-7xl h-full mx-auto bg-white dark:bg-[#111827] sm:border-x border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl overflow-hidden"
+        className="relative w-full max-w-7xl h-full flex-1 min-h-0 mx-auto bg-white dark:bg-[#111827] sm:border-x border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl overflow-hidden"
+        style={{
+          paddingLeft: "env(safe-area-inset-left, 0px)",
+          paddingRight: "env(safe-area-inset-right, 0px)",
+        }}
       >
         {/* Sleek top banner showing user role and logout (Fixed / shrink-0) */}
-        <header className="px-4 py-3 bg-slate-50 dark:bg-[#0d131f] border-b border-slate-200 dark:border-slate-800 flex items-center justify-between z-20 shrink-0" id="session-top-header">
-          <div className="flex items-center gap-2.5">
-            <span className="relative flex h-2.5 w-2.5">
+        <header 
+          className="w-full px-3.5 sm:px-6 bg-slate-50 dark:bg-[#0d131f] border-b border-slate-200 dark:border-slate-800 flex items-center justify-between z-20 shrink-0 select-none transition-colors" 
+          id="session-top-header"
+          style={{
+            paddingTop: "max(0.625rem, env(safe-area-inset-top, 0px))",
+            paddingBottom: "0.625rem",
+            paddingLeft: "max(0.875rem, env(safe-area-inset-left, 0px))",
+            paddingRight: "max(0.875rem, env(safe-area-inset-right, 0px))",
+          }}
+        >
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            <span className="relative flex h-2.5 w-2.5 shrink-0">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
             </span>
-            <span className="text-[10px] font-extrabold uppercase tracking-[0.32em] text-slate-600 dark:text-slate-300">
+            <span className="text-[10px] sm:text-xs font-extrabold uppercase tracking-[0.2em] sm:tracking-[0.32em] text-slate-600 dark:text-slate-300 truncate">
               {auth.role === "admin" ? "Admin Console" : "Student Portal"}
             </span>
             {auth.role === "admin" && (
-              <span className="rounded-full border border-slate-200/70 bg-white/80 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.2em] text-slate-500 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-400">
+              <span className="shrink-0 rounded-full border border-slate-200/70 bg-white/80 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.2em] text-slate-500 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-400">
                 v{APP_VERSION}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {auth.role !== "admin" && (
               <button
                 onClick={() => setIsTimerOpen(true)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer border ${
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer border ${
                   isTimerActive
                     ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 border-emerald-200 dark:border-emerald-800 shadow-sm"
                     : "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 border-blue-100 dark:border-blue-900/40"
@@ -1774,7 +1813,7 @@ export default function App() {
             )}
             <button
               onClick={handleLogout}
-              className="px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/20 hover:bg-rose-100 dark:hover:bg-rose-950/40 rounded-lg transition-all cursor-pointer border border-rose-100/30"
+              className="px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/20 hover:bg-rose-100 dark:hover:bg-rose-950/40 rounded-lg transition-all cursor-pointer border border-rose-100/30"
             >
               Logout
             </button>
@@ -1782,7 +1821,7 @@ export default function App() {
         </header>
 
         {/* Content Area (flex: 1, min-h-0) */}
-        <main className="flex-1 min-h-0 flex flex-col overflow-hidden relative" id="main-content-viewport">
+        <main className="flex-1 min-h-0 w-full flex flex-col overflow-hidden relative" id="main-content-viewport">
           <ErrorBoundary fallbackTitle="View Error">
             {activeTab === "Notes" && auth.role === "admin" ? (
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-0 sm:p-2 md:p-4">
@@ -1798,7 +1837,10 @@ export default function App() {
                 />
               </div>
             ) : (
-              <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pt-5 sm:pt-6 pb-6 scrollbar-thin" id="main-content-scroll">
+              <div 
+                className="flex-1 min-h-0 overflow-y-auto px-3.5 sm:px-6 pt-4 sm:pt-6 pb-4 sm:pb-6 scrollbar-thin overscroll-contain" 
+                id="main-content-scroll"
+              >
                 {renderMainContent()}
               </div>
             )}
@@ -1812,8 +1854,14 @@ export default function App() {
         */}
         {auth.role !== null && (
           <nav 
-            className="bg-white dark:bg-[#111827] border-t border-slate-200 dark:border-slate-800 py-2.5 px-4 sm:px-6 flex justify-around items-center z-30 shrink-0 shadow-lg"
+            className="w-full bg-white dark:bg-[#111827] border-t border-slate-200 dark:border-slate-800 px-2 sm:px-6 flex justify-around items-center z-30 shrink-0 shadow-lg select-none transition-colors"
             id="bottom-navigation-bar"
+            style={{
+              paddingTop: "0.5rem",
+              paddingBottom: "max(0.5rem, env(safe-area-inset-bottom, 0px))",
+              paddingLeft: "max(0.5rem, env(safe-area-inset-left, 0px))",
+              paddingRight: "max(0.5rem, env(safe-area-inset-right, 0px))",
+            }}
           >
             {/* Nav Tab 1: Dashboard */}
             <button
@@ -1824,16 +1872,16 @@ export default function App() {
                 }
                 setActiveSubject(null);
               }}
-              className={`flex flex-col items-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 ${
+              className={`flex flex-col items-center justify-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 min-h-[44px] ${
                 activeTab === "Dashboard" && (auth.role === "student" || !selectedStudentId)
                   ? "text-blue-600 dark:text-blue-400 scale-102 font-bold"
                   : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
               }`}
               id="nav-btn-dashboard"
             >
-              <LayoutDashboard className="w-5 h-5 stroke-[2]" />
-              <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5">
-                {auth.role === "student" ? "dashboard" : "Dashboard"}
+              <LayoutDashboard className="w-5 h-5 stroke-[2] shrink-0" />
+              <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 whitespace-nowrap">
+                {auth.role === "student" ? "Dashboard" : "Dashboard"}
               </span>
             </button>
 
@@ -1845,21 +1893,21 @@ export default function App() {
                   setSelectedStudentId(null);
                   setActiveSubject(null);
                 }}
-                className={`flex flex-col items-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 ${
+                className={`flex flex-col items-center justify-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 min-h-[44px] ${
                   activeTab === "LiveStudents"
                     ? "text-emerald-600 dark:text-emerald-400 scale-102 font-bold"
                     : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                 }`}
                 id="nav-btn-live-students"
               >
-                <div className="relative">
+                <div className="relative shrink-0">
                   <Radio className="w-5 h-5 stroke-[2]" />
                   <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
                   </span>
                 </div>
-                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 flex items-center gap-1">
+                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 whitespace-nowrap flex items-center gap-1">
                   🟢 Live
                 </span>
               </button>
@@ -1873,15 +1921,15 @@ export default function App() {
                   setSelectedStudentId(null);
                   setActiveSubject(null);
                 }}
-                className={`flex flex-col items-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 ${
+                className={`flex flex-col items-center justify-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 min-h-[44px] ${
                   activeTab === "Notes"
                     ? "text-blue-600 dark:text-blue-400 scale-102 font-bold"
                     : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                 }`}
                 id="nav-btn-notes"
               >
-                <FolderKanban className="w-5 h-5 stroke-[2]" />
-                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5">
+                <FolderKanban className="w-5 h-5 stroke-[2] shrink-0" />
+                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 whitespace-nowrap">
                   Notes
                 </span>
               </button>
@@ -1894,15 +1942,15 @@ export default function App() {
                   setActiveTab("My");
                   setActiveSubject(null);
                 }}
-                className={`flex flex-col items-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 ${
+                className={`flex flex-col items-center justify-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 min-h-[44px] ${
                   activeTab === "My"
                     ? "text-blue-600 dark:text-blue-400 scale-102 font-bold"
                     : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                 }`}
                 id="nav-btn-my"
               >
-                <BookOpen className="w-5 h-5 stroke-[2]" />
-                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5">
+                <BookOpen className="w-5 h-5 stroke-[2] shrink-0" />
+                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 whitespace-nowrap">
                   My Study Space
                 </span>
               </button>
@@ -1916,15 +1964,15 @@ export default function App() {
                   setSelectedStudentId(null);
                   setActiveSubject(null);
                 }}
-                className={`flex flex-col items-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 ${
+                className={`flex flex-col items-center justify-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 min-h-[44px] ${
                   (activeTab === "Students" || selectedStudentId)
                     ? "text-blue-600 dark:text-blue-400 scale-102 font-bold"
                     : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
                 }`}
                 id="nav-btn-students"
               >
-                <Users className="w-5 h-5 stroke-[2]" />
-                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5">
+                <Users className="w-5 h-5 stroke-[2] shrink-0" />
+                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 whitespace-nowrap">
                   Students
                 </span>
               </button>
@@ -1939,15 +1987,15 @@ export default function App() {
                 }
                 setActiveSubject(null);
               }}
-              className={`flex flex-col items-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 ${
+              className={`flex flex-col items-center justify-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 min-h-[44px] ${
                 activeTab === "Settings"
                   ? "text-blue-600 dark:text-blue-400 scale-102 font-bold"
                   : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
               }`}
               id="nav-btn-settings"
             >
-              <SettingsIcon className="w-5 h-5 stroke-[2]" />
-              <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5">
+              <SettingsIcon className="w-5 h-5 stroke-[2] shrink-0" />
+              <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 whitespace-nowrap">
                 Settings
               </span>
             </button>
