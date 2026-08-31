@@ -51,6 +51,9 @@ import {
   getUpscHierarchy,
   saveSchoolHierarchy,
   saveUpscHierarchy,
+  addSubjectPipeline,
+  addClassPipeline,
+  addChapterPipeline,
   subscribeToCurriculumHierarchy,
   getSavedNotesSelectionState,
   saveNotesSelectionState,
@@ -1799,82 +1802,61 @@ export default function AdminNotesDashboard({
           isOpen={Boolean(createNodeContext)}
           onClose={() => setCreateNodeContext(null)}
           context={createNodeContext}
-          onSubmit={(result) => {
+          onSubmit={async (result) => {
             if (result.nodeType === "new_class") {
-              updateSchoolHierarchy((prev) => ({
-                ...prev,
-                classes: Array.from(new Set([...prev.classes, result.name]))
-              }));
+              await addClassPipeline({ name: result.name, category: "school" });
+              setSchoolHierarchy(getSchoolHierarchy());
               setSelectedSchoolClass(result.name);
               showToast(`Class "${result.name}" created.`, "success");
-              // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
               createClassNode({ name: result.name, category: "school" }).catch((err) => {
                 console.warn("[AdminNotes] R2 class node creation warning:", err);
               });
             } else if (result.nodeType === "new_gs_paper") {
-              updateUpscHierarchy((prev) => ({
-                ...prev,
-                papers: Array.from(new Set([...prev.papers, result.name]))
-              }));
+              await addClassPipeline({ name: result.name, category: "upsc" });
+              setUpscHierarchy(getUpscHierarchy());
               setSelectedUpscPaper(result.name);
               showToast(`GS Paper "${result.name}" created.`, "success");
-              // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
               createClassNode({ name: result.name, category: "upsc" }).catch((err) => {
                 console.warn("[AdminNotes] R2 GS paper node creation warning:", err);
               });
             } else if (result.nodeType === "add_subject") {
               if (result.className) {
-                updateSchoolHierarchy((prev) => {
-                  const cur = prev.subjects[result.className!] || [];
-                  const updated = Array.from(new Set([...cur, result.name]));
-                  return {
-                    ...prev,
-                    subjects: { ...prev.subjects, [result.className!]: updated }
-                  };
+                await addSubjectPipeline({
+                  category: "school",
+                  className: result.className,
+                  name: result.name,
                 });
+                setSchoolHierarchy(getSchoolHierarchy());
                 setSelectedSchoolSubject(result.name);
                 showToast(`Subject "${result.name}" added to ${result.className}.`, "success");
-                // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
                 createSubjectNode({ className: result.className, name: result.name, category: "school" }).catch((err) => {
                   console.warn("[AdminNotes] R2 subject node creation warning:", err);
                 });
               } else if (result.gsPaper) {
-                updateUpscHierarchy((prev) => {
-                  const cur = prev.subjects[result.gsPaper!] || [];
-                  const updated = Array.from(new Set([...cur, result.name]));
-                  return {
-                    ...prev,
-                    subjects: { ...prev.subjects, [result.gsPaper!]: updated }
-                  };
+                await addSubjectPipeline({
+                  category: "upsc",
+                  gsPaper: result.gsPaper,
+                  name: result.name,
                 });
+                setUpscHierarchy(getUpscHierarchy());
                 setSelectedUpscSubject(result.name);
                 showToast(`Subject "${result.name}" added to ${result.gsPaper}.`, "success");
-                // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
                 createSubjectNode({ gsPaper: result.gsPaper, name: result.name, category: "upsc" }).catch((err) => {
                   console.warn("[AdminNotes] R2 UPSC subject node creation warning:", err);
                 });
               }
             } else if (result.nodeType === "add_chapter" && result.className && result.subject && result.number) {
-              updateSchoolHierarchy((prev) => {
-                const cur = prev.chapters[result.className!]?.[result.subject!] || [];
-                const updated = cur.filter((c) => c.number !== result.number);
-                updated.push({ number: result.number!, name: result.name });
-                updated.sort((a, b) => a.number - b.number);
-                return {
-                  ...prev,
-                  chapters: {
-                    ...prev.chapters,
-                    [result.className!]: {
-                      ...(prev.chapters[result.className!] || {}),
-                      [result.subject!]: updated
-                    }
-                  }
-                };
+              await addChapterPipeline({
+                category: "school",
+                className: result.className,
+                subject: result.subject,
+                number: result.number,
+                name: result.name,
               });
+              setSchoolHierarchy(getSchoolHierarchy());
               setSelectedSchoolChapterNo(result.number);
               setSelectedSchoolChapterName(result.name);
               showToast(`Chapter ${result.number}: ${result.name} created.`, "success");
-              // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
               createChapterNode({
                 className: result.className,
                 subject: result.subject!,
@@ -1885,26 +1867,17 @@ export default function AdminNotesDashboard({
                 console.warn("[AdminNotes] R2 chapter node creation warning:", err);
               });
             } else if (result.nodeType === "add_module" && result.gsPaper && result.subject && result.number) {
-              updateUpscHierarchy((prev) => {
-                const cur = prev.modules[result.gsPaper!]?.[result.subject!] || [];
-                const updated = cur.filter((m) => m.number !== result.number);
-                updated.push({ number: result.number!, name: result.name });
-                updated.sort((a, b) => a.number - b.number);
-                return {
-                  ...prev,
-                  modules: {
-                    ...prev.modules,
-                    [result.gsPaper!]: {
-                      ...(prev.modules[result.gsPaper!] || {}),
-                      [result.subject!]: updated
-                    }
-                  }
-                };
+              await addChapterPipeline({
+                category: "upsc",
+                gsPaper: result.gsPaper,
+                subject: result.subject,
+                number: result.number,
+                name: result.name,
               });
+              setUpscHierarchy(getUpscHierarchy());
               setSelectedUpscModuleNo(result.number);
               setSelectedUpscModuleName(result.name);
               showToast(`Module ${result.number}: ${result.name} created.`, "success");
-              // Atomic Cloudflare R2 hierarchy node creation & HeadObject verification
               createChapterNode({
                 gsPaper: result.gsPaper,
                 subject: result.subject!,

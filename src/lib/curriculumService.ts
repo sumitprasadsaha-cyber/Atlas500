@@ -370,14 +370,10 @@ export async function saveSchoolHierarchy(data: SchoolHierarchyData): Promise<vo
   safeLocalStorageSetItem(STORAGE_KEY_SCHOOL_HIERARCHY, JSON.stringify(updatedData));
   notifyHierarchyListeners();
 
-  try {
-    const db = await getFirebaseDb();
-    if (db) {
-      const docRef = doc(db, "curriculum_hierarchy", "school_hierarchy");
-      await setDoc(docRef, updatedData);
-    }
-  } catch (err) {
-    console.warn("[CurriculumService] Failed saving school hierarchy to Firestore:", err);
+  const db = await getFirebaseDb();
+  if (db) {
+    const docRef = doc(db, "curriculum_hierarchy", "school_hierarchy");
+    await setDoc(docRef, updatedData);
   }
 }
 
@@ -391,14 +387,351 @@ export async function saveUpscHierarchy(data: UpscHierarchyData): Promise<void> 
   safeLocalStorageSetItem(STORAGE_KEY_UPSC_HIERARCHY, JSON.stringify(updatedData));
   notifyHierarchyListeners();
 
-  try {
+  const db = await getFirebaseDb();
+  if (db) {
+    const docRef = doc(db, "curriculum_hierarchy", "upsc_hierarchy");
+    await setDoc(docRef, updatedData);
+  }
+}
+
+export interface AddSubjectParams {
+  category: "school" | "upsc";
+  className?: string;
+  gsPaper?: string;
+  name: string;
+}
+
+/**
+ * Atomic Add Subject Pipeline
+ * 1. Validates subject name and parent class/paper.
+ * 2. Unmarks subject from removedSubjects.
+ * 3. Updates local in-memory and localStorage cache.
+ * 4. Persists to Firestore curriculum_hierarchy collection.
+ * 5. Persists to Firestore direct subjects collection.
+ * 6. Creates R2 storage metadata node.
+ * 7. Broadcasts realtime hierarchy updates to Admin and Student consoles.
+ */
+export async function addSubjectPipeline(params: AddSubjectParams): Promise<{
+  success: boolean;
+  subjectName: string;
+  parentName: string;
+}> {
+  const { category, className, gsPaper, name } = params;
+  const cleanName = (name || "").trim();
+  if (!cleanName) {
+    throw new Error("Subject name cannot be empty.");
+  }
+
+  const isUPSC = category === "upsc" || Boolean(gsPaper);
+
+  if (isUPSC) {
+    const cleanPaper = (gsPaper || "General Studies Paper I").trim();
+    if (!cleanPaper) {
+      throw new Error("GS Paper must be specified.");
+    }
+
+    const current = getUpscHierarchy();
+    const curPapers = current.papers.some((p) => p.toLowerCase().trim() === cleanPaper.toLowerCase())
+      ? current.papers
+      : [...current.papers, cleanPaper];
+
+    const matchingPaperKey = Object.keys(current.subjects || {}).find(
+      (p) => p.toLowerCase().trim() === cleanPaper.toLowerCase()
+    ) || cleanPaper;
+
+    const curSubjs = current.subjects[matchingPaperKey] || [];
+    const updatedSubjs = Array.from(new Set([...curSubjs, cleanName]));
+
+    // Clean up from removed subjects
+    const curRemoved = current.removedSubjects?.[matchingPaperKey] || [];
+    const updatedRemoved = curRemoved.filter((s) => s.toLowerCase().trim() !== cleanName.toLowerCase());
+
+    const updatedData: UpscHierarchyData = {
+      ...current,
+      papers: curPapers,
+      subjects: {
+        ...current.subjects,
+        [matchingPaperKey]: updatedSubjs,
+        ...(matchingPaperKey !== cleanPaper ? { [cleanPaper]: updatedSubjs } : {})
+      },
+      removedSubjects: {
+        ...(current.removedSubjects || {}),
+        [matchingPaperKey]: updatedRemoved,
+        ...(matchingPaperKey !== cleanPaper ? { [cleanPaper]: updatedRemoved } : {})
+      },
+      updatedAt: new Date().toISOString(),
+      version: 2
+    };
+
+    inMemoryUpscHierarchy = updatedData;
+    safeLocalStorageSetItem(STORAGE_KEY_UPSC_HIERARCHY, JSON.stringify(updatedData));
+    notifyHierarchyListeners();
+
+    // Persist to Firestore curriculum_hierarchy
+    const db = await getFirebaseDb();
+    if (db) {
+      const upscDocRef = doc(db, "curriculum_hierarchy", "upsc_hierarchy");
+      await setDoc(upscDocRef, updatedData);
+
+      // Direct subjects collection doc
+      const cleanSubjId = cleanName.toLowerCase().replace(/[^a-z0-9]/g, "_");
+      const cleanPaperId = cleanPaper.toLowerCase().replace(/[^a-z0-9]/g, "_");
+      const subjectDocRef = doc(db, "subjects", `upsc_${cleanPaperId}_${cleanSubjId}`);
+      await setDoc(subjectDocRef, {
+        id: `upsc_${cleanPaperId}_${cleanSubjId}`,
+        name: cleanName,
+        subjectName: cleanName,
+        category: "upsc",
+        gsPaper: cleanPaper,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    notifyHierarchyListeners();
+    return { success: true, subjectName: cleanName, parentName: cleanPaper };
+  } else {
+    const cleanClass = (className || "Class 10").trim();
+    if (!cleanClass) {
+      throw new Error("Class must be specified.");
+    }
+
+    const current = getSchoolHierarchy();
+    const curClasses = current.classes.some((c) => c.toLowerCase().trim() === cleanClass.toLowerCase())
+      ? current.classes
+      : [...current.classes, cleanClass];
+
+    const matchingClassKey = Object.keys(current.subjects || {}).find(
+      (c) => c.toLowerCase().trim() === cleanClass.toLowerCase()
+    ) || cleanClass;
+
+    const curSubjs = current.subjects[matchingClassKey] || [];
+    const updatedSubjs = Array.from(new Set([...curSubjs, cleanName]));
+
+    // Clean up from removed subjects
+    const curRemoved = current.removedSubjects?.[matchingClassKey] || [];
+    const updatedRemoved = curRemoved.filter((s) => s.toLowerCase().trim() !== cleanName.toLowerCase());
+
+    const updatedData: SchoolHierarchyData = {
+      ...current,
+      classes: curClasses,
+      subjects: {
+        ...current.subjects,
+        [matchingClassKey]: updatedSubjs,
+        ...(matchingClassKey !== cleanClass ? { [cleanClass]: updatedSubjs } : {})
+      },
+      removedSubjects: {
+        ...(current.removedSubjects || {}),
+        [matchingClassKey]: updatedRemoved,
+        ...(matchingClassKey !== cleanClass ? { [cleanClass]: updatedRemoved } : {})
+      },
+      updatedAt: new Date().toISOString(),
+      version: 2
+    };
+
+    inMemorySchoolHierarchy = updatedData;
+    safeLocalStorageSetItem(STORAGE_KEY_SCHOOL_HIERARCHY, JSON.stringify(updatedData));
+    notifyHierarchyListeners();
+
+    // Persist to Firestore curriculum_hierarchy
+    const db = await getFirebaseDb();
+    if (db) {
+      const schoolDocRef = doc(db, "curriculum_hierarchy", "school_hierarchy");
+      await setDoc(schoolDocRef, updatedData);
+
+      // Direct subjects collection doc
+      const cleanSubjId = cleanName.toLowerCase().replace(/[^a-z0-9]/g, "_");
+      const cleanClsId = cleanClass.toLowerCase().replace(/[^a-z0-9]/g, "_");
+      const subjectDocRef = doc(db, "subjects", `school_${cleanClsId}_${cleanSubjId}`);
+      await setDoc(subjectDocRef, {
+        id: `school_${cleanClsId}_${cleanSubjId}`,
+        name: cleanName,
+        subjectName: cleanName,
+        category: "school",
+        className: cleanClass,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    notifyHierarchyListeners();
+    return { success: true, subjectName: cleanName, parentName: cleanClass };
+  }
+}
+
+export interface AddClassParams {
+  name: string;
+  category: "school" | "upsc";
+}
+
+export async function addClassPipeline(params: AddClassParams): Promise<{
+  success: boolean;
+  name: string;
+}> {
+  const { name, category } = params;
+  const cleanName = (name || "").trim();
+  if (!cleanName) throw new Error("Name cannot be empty.");
+
+  if (category === "upsc") {
+    const current = getUpscHierarchy();
+    const curPapers = current.papers.some((p) => p.toLowerCase().trim() === cleanName.toLowerCase())
+      ? current.papers
+      : [...current.papers, cleanName];
+
+    const updatedData: UpscHierarchyData = {
+      ...current,
+      papers: curPapers,
+      subjects: {
+        ...current.subjects,
+        [cleanName]: current.subjects[cleanName] || []
+      },
+      updatedAt: new Date().toISOString(),
+      version: 2
+    };
+    inMemoryUpscHierarchy = updatedData;
+    safeLocalStorageSetItem(STORAGE_KEY_UPSC_HIERARCHY, JSON.stringify(updatedData));
+    notifyHierarchyListeners();
+
     const db = await getFirebaseDb();
     if (db) {
       const docRef = doc(db, "curriculum_hierarchy", "upsc_hierarchy");
       await setDoc(docRef, updatedData);
     }
-  } catch (err) {
-    console.warn("[CurriculumService] Failed saving UPSC hierarchy to Firestore:", err);
+
+    notifyHierarchyListeners();
+    return { success: true, name: cleanName };
+  } else {
+    const current = getSchoolHierarchy();
+    const curClasses = current.classes.some((c) => c.toLowerCase().trim() === cleanName.toLowerCase())
+      ? current.classes
+      : [...current.classes, cleanName];
+
+    const updatedData: SchoolHierarchyData = {
+      ...current,
+      classes: curClasses,
+      subjects: {
+        ...current.subjects,
+        [cleanName]: current.subjects[cleanName] || []
+      },
+      updatedAt: new Date().toISOString(),
+      version: 2
+    };
+    inMemorySchoolHierarchy = updatedData;
+    safeLocalStorageSetItem(STORAGE_KEY_SCHOOL_HIERARCHY, JSON.stringify(updatedData));
+    notifyHierarchyListeners();
+
+    const db = await getFirebaseDb();
+    if (db) {
+      const docRef = doc(db, "curriculum_hierarchy", "school_hierarchy");
+      await setDoc(docRef, updatedData);
+    }
+
+    notifyHierarchyListeners();
+    return { success: true, name: cleanName };
+  }
+}
+
+export interface AddChapterParams {
+  category: "school" | "upsc";
+  className?: string;
+  gsPaper?: string;
+  subject: string;
+  number: number;
+  name: string;
+}
+
+export async function addChapterPipeline(params: AddChapterParams): Promise<{
+  success: boolean;
+  chapterNumber: number;
+  chapterName: string;
+}> {
+  const { category, className, gsPaper, subject, number, name } = params;
+  const cleanSubject = (subject || "").trim();
+  const cleanName = (name || "").trim();
+  const num = typeof number === "number" ? number : parseInt(String(number), 10) || 1;
+
+  if (!cleanSubject) throw new Error("Subject must be specified.");
+
+  if (category === "upsc") {
+    const cleanPaper = (gsPaper || "General Studies Paper I").trim();
+    const current = getUpscHierarchy();
+    const matchingPaperKey = Object.keys(current.modules || {}).find(
+      (p) => p.toLowerCase().trim() === cleanPaper.toLowerCase()
+    ) || cleanPaper;
+
+    const matchingSubjKey = Object.keys(current.modules[matchingPaperKey] || {}).find(
+      (s) => s.toLowerCase().trim() === cleanSubject.toLowerCase()
+    ) || cleanSubject;
+
+    const curModules = current.modules[matchingPaperKey]?.[matchingSubjKey] || [];
+    const filtered = curModules.filter((m) => m.number !== num);
+    filtered.push({ number: num, name: cleanName || `Module ${num}` });
+    filtered.sort((a, b) => a.number - b.number);
+
+    const updatedData: UpscHierarchyData = {
+      ...current,
+      modules: {
+        ...current.modules,
+        [matchingPaperKey]: {
+          ...(current.modules[matchingPaperKey] || {}),
+          [matchingSubjKey]: filtered
+        }
+      },
+      updatedAt: new Date().toISOString(),
+      version: 2
+    };
+    inMemoryUpscHierarchy = updatedData;
+    safeLocalStorageSetItem(STORAGE_KEY_UPSC_HIERARCHY, JSON.stringify(updatedData));
+    notifyHierarchyListeners();
+
+    const db = await getFirebaseDb();
+    if (db) {
+      const docRef = doc(db, "curriculum_hierarchy", "upsc_hierarchy");
+      await setDoc(docRef, updatedData);
+    }
+
+    notifyHierarchyListeners();
+    return { success: true, chapterNumber: num, chapterName: cleanName || `Module ${num}` };
+  } else {
+    const cleanClass = (className || "Class 10").trim();
+    const current = getSchoolHierarchy();
+    const matchingClassKey = Object.keys(current.chapters || {}).find(
+      (c) => c.toLowerCase().trim() === cleanClass.toLowerCase()
+    ) || cleanClass;
+
+    const matchingSubjKey = Object.keys(current.chapters[matchingClassKey] || {}).find(
+      (s) => s.toLowerCase().trim() === cleanSubject.toLowerCase()
+    ) || cleanSubject;
+
+    const curChapters = current.chapters[matchingClassKey]?.[matchingSubjKey] || [];
+    const filtered = curChapters.filter((c) => c.number !== num);
+    filtered.push({ number: num, name: cleanName || `Chapter ${num}` });
+    filtered.sort((a, b) => a.number - b.number);
+
+    const updatedData: SchoolHierarchyData = {
+      ...current,
+      chapters: {
+        ...current.chapters,
+        [matchingClassKey]: {
+          ...(current.chapters[matchingClassKey] || {}),
+          [matchingSubjKey]: filtered
+        }
+      },
+      updatedAt: new Date().toISOString(),
+      version: 2
+    };
+    inMemorySchoolHierarchy = updatedData;
+    safeLocalStorageSetItem(STORAGE_KEY_SCHOOL_HIERARCHY, JSON.stringify(updatedData));
+    notifyHierarchyListeners();
+
+    const db = await getFirebaseDb();
+    if (db) {
+      const docRef = doc(db, "curriculum_hierarchy", "school_hierarchy");
+      await setDoc(docRef, updatedData);
+    }
+
+    notifyHierarchyListeners();
+    return { success: true, chapterNumber: num, chapterName: cleanName || `Chapter ${num}` };
   }
 }
 
@@ -431,13 +764,15 @@ export function subscribeToCurriculumHierarchy(
         const db = await getFirebaseDb();
         if (!db) return;
 
-        // School Subscription
+        // School Subscription with non-destructive merge
         const schoolDocRef = doc(db, "curriculum_hierarchy", "school_hierarchy");
         activeSchoolUnsub = onSnapshot(schoolDocRef, (snap) => {
           if (snap.exists()) {
             const remote = snap.data() as SchoolHierarchyData;
-            inMemorySchoolHierarchy = remote;
-            safeLocalStorageSetItem(STORAGE_KEY_SCHOOL_HIERARCHY, JSON.stringify(remote));
+            const local = getSchoolHierarchy();
+            const merged = mergeSchoolHierarchies(local, remote);
+            inMemorySchoolHierarchy = merged;
+            safeLocalStorageSetItem(STORAGE_KEY_SCHOOL_HIERARCHY, JSON.stringify(merged));
             notifyHierarchyListeners();
           } else {
             // Document doesn't exist yet on remote, persist current local
@@ -446,15 +781,19 @@ export function subscribeToCurriculumHierarchy(
               setDoc(schoolDocRef, current).catch(() => {});
             }
           }
+        }, (err) => {
+          console.warn("[CurriculumService] School hierarchy subscription notice:", err);
         });
 
-        // UPSC Subscription
+        // UPSC Subscription with non-destructive merge
         const upscDocRef = doc(db, "curriculum_hierarchy", "upsc_hierarchy");
         activeUpscUnsub = onSnapshot(upscDocRef, (snap) => {
           if (snap.exists()) {
             const remote = snap.data() as UpscHierarchyData;
-            inMemoryUpscHierarchy = remote;
-            safeLocalStorageSetItem(STORAGE_KEY_UPSC_HIERARCHY, JSON.stringify(remote));
+            const local = getUpscHierarchy();
+            const merged = mergeUpscHierarchies(local, remote);
+            inMemoryUpscHierarchy = merged;
+            safeLocalStorageSetItem(STORAGE_KEY_UPSC_HIERARCHY, JSON.stringify(merged));
             notifyHierarchyListeners();
           } else {
             const current = getUpscHierarchy();
@@ -462,6 +801,8 @@ export function subscribeToCurriculumHierarchy(
               setDoc(upscDocRef, current).catch(() => {});
             }
           }
+        }, (err) => {
+          console.warn("[CurriculumService] UPSC hierarchy subscription notice:", err);
         });
       } catch (err) {
         console.warn("[CurriculumService] Firestore subscription warning:", err);

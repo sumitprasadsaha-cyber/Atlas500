@@ -11,7 +11,7 @@
  */
 
 import { Student, ClassNote, ChapterNote } from "../types";
-import { getSchoolHierarchy, SchoolHierarchyData } from "../lib/curriculumService";
+import { getSchoolHierarchy, SchoolHierarchyData, ChapterInfo } from "../lib/curriculumService";
 import { isNoteAccessibleToStudent } from "./noteAccessHelper";
 import {
   isClassGradeMatching,
@@ -153,25 +153,38 @@ export function getStudentEnrolledSchoolSubjects(
   const studentClass = student.classGrade ? normalizeClassGrade(student.classGrade) : "";
   
   const matchingClassKey = schoolHierarchy.classes.find(
-    (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase()
+    (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase() || c.toLowerCase().trim() === studentClass.toLowerCase()
+  ) || Object.keys(schoolHierarchy.subjects || {}).find(
+    (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase() || c.toLowerCase().trim() === studentClass.toLowerCase()
   ) || student.classGrade || "";
 
-  const removed = (matchingClassKey && schoolHierarchy.removedSubjects?.[matchingClassKey]) || [];
-  const adminSubjs = (matchingClassKey && schoolHierarchy.subjects?.[matchingClassKey]) || [];
+  const removed = Object.entries(schoolHierarchy.removedSubjects || {}).flatMap(([clsKey, list]) => {
+    if (clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() || normalizeClassGrade(clsKey).toLowerCase() === studentClass.toLowerCase()) {
+      return (list || []).map((s) => s.toLowerCase().trim());
+    }
+    return [];
+  });
+
+  const adminSubjs = Object.entries(schoolHierarchy.subjects || {}).flatMap(([clsKey, list]) => {
+    if (clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() || normalizeClassGrade(clsKey).toLowerCase() === studentClass.toLowerCase()) {
+      return list || [];
+    }
+    return [];
+  });
 
   const subjectsSet = new Set<string>();
   const rawEnrolled = (student.enrolledSubjects || []).filter((s) => typeof s === "string" && s.trim());
 
   if (rawEnrolled.length > 0) {
     rawEnrolled.forEach((sub) => {
-      if (!removed.includes(sub.trim())) {
+      if (!removed.includes(sub.trim().toLowerCase())) {
         subjectsSet.add(sub.trim());
       }
     });
   } else {
     // If student has no specific subjects enrolled, automatically receive all subjects from Admin hierarchy
     adminSubjs.forEach((sub) => {
-      if (!removed.includes(sub)) {
+      if (!removed.includes(sub.toLowerCase().trim())) {
         subjectsSet.add(sub);
       }
     });
@@ -179,7 +192,7 @@ export function getStudentEnrolledSchoolSubjects(
     if (Array.isArray(allClassNotes)) {
       allClassNotes.forEach((cn) => {
         if (cn.subject && cn.subject.trim() && isClassGradeMatching(cn.classGrade, student.classGrade)) {
-          if (!removed.includes(cn.subject.trim())) {
+          if (!removed.includes(cn.subject.trim().toLowerCase())) {
             subjectsSet.add(cn.subject.trim());
           }
         }
@@ -206,10 +219,18 @@ export function buildStudentSchoolHierarchy(
   const studentClass = student.classGrade ? normalizeClassGrade(student.classGrade) : "Class 10";
   
   const matchingClassKey = schoolHierarchy.classes.find(
-    (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase()
+    (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase() || c.toLowerCase().trim() === studentClass.toLowerCase()
+  ) || Object.keys(schoolHierarchy.subjects || {}).find(
+    (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase() || c.toLowerCase().trim() === studentClass.toLowerCase()
   ) || studentClass;
 
-  const removedSubjs = schoolHierarchy.removedSubjects?.[matchingClassKey] || [];
+  const removedSubjs = Object.entries(schoolHierarchy.removedSubjects || {}).flatMap(([clsKey, list]) => {
+    if (clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() || normalizeClassGrade(clsKey).toLowerCase() === studentClass.toLowerCase()) {
+      return (list || []).map((s) => s.toLowerCase().trim());
+    }
+    return [];
+  });
+
   const rawEnrolled = enrolledSubjectsFilter || (student?.enrolledSubjects || []).filter(
     (s) => typeof s === "string" && s.trim().length > 0
   );
@@ -232,9 +253,24 @@ export function buildStudentSchoolHierarchy(
   >();
 
   // 1. Pre-populate subjects and chapters/modules from Admin School Hierarchy
-  const adminSubjs = schoolHierarchy.subjects?.[matchingClassKey] || [];
+  const adminSubjs = Object.entries(schoolHierarchy.subjects || {}).flatMap(([clsKey, list]) => {
+    if (clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() || normalizeClassGrade(clsKey).toLowerCase() === studentClass.toLowerCase()) {
+      return list || [];
+    }
+    return [];
+  });
+
+  const adminChaptersMap: Record<string, ChapterInfo[]> = {};
+  Object.entries(schoolHierarchy.chapters || {}).forEach(([clsKey, chMap]) => {
+    if (clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() || normalizeClassGrade(clsKey).toLowerCase() === studentClass.toLowerCase()) {
+      Object.entries(chMap || {}).forEach(([sKey, chList]) => {
+        adminChaptersMap[sKey.toLowerCase().trim()] = chList || [];
+      });
+    }
+  });
+
   adminSubjs.forEach((sName) => {
-    if (removedSubjs.includes(sName)) return;
+    if (removedSubjs.includes(sName.toLowerCase().trim())) return;
 
     if (rawEnrolled.length > 0) {
       const matches = rawEnrolled.some((enrolled) => isSubjectMatching(enrolled, sName));
@@ -250,7 +286,7 @@ export function buildStudentSchoolHierarchy(
     }
 
     const subjEntry = subjMap.get(sKey)!;
-    const adminChapters = schoolHierarchy.chapters?.[matchingClassKey]?.[sName] || [];
+    const adminChapters = adminChaptersMap[sKey] || [];
     adminChapters.forEach((ch) => {
       const mKey = `mod_${ch.number}`;
       if (!subjEntry.moduleMap.has(mKey)) {

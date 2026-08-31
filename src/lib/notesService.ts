@@ -999,3 +999,13 @@ export {
   type DeleteTopicNoteParams,
   type GetTopicNoteParams,
 } from "./storageService";
+
+export {
+  addSubjectPipeline,
+  addClassPipeline,
+  addChapterPipeline,
+  type AddSubjectParams,
+  type AddClassParams,
+  type AddChapterParams,
+} from "./curriculumService";
+

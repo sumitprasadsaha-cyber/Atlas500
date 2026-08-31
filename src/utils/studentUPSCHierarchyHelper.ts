@@ -9,7 +9,7 @@ import {
 import { extractUPSCDetails, isUPSCClass } from "./upscHierarchyHelper";
 import { isNoteAccessibleToStudent } from "./noteAccessHelper";
 import { getChapterProgressRecord, getStatusConfig, normalizeStatusLabel } from "./chapterProgressHelper";
-import { getUpscHierarchy } from "../lib/curriculumService";
+import { getUpscHierarchy, ChapterInfo } from "../lib/curriculumService";
 
 export interface StudentUPSCTopicNote {
   id: string;
@@ -269,11 +269,32 @@ export function buildStudentUPSCHierarchy(
   // Pre-populate Subjects & Modules from Admin UPSC Hierarchy
   papersToInclude.forEach((p) => {
     const subjMap = paperMap.get(p)!;
-    const adminSubjs = upscHierarchy.subjects?.[p] || [];
-    const removedSubjs = upscHierarchy.removedSubjects?.[p] || [];
+    
+    const adminSubjs = Object.entries(upscHierarchy.subjects || {}).flatMap(([pKey, list]) => {
+      if (pKey.toLowerCase().trim() === p.toLowerCase().trim()) {
+        return list || [];
+      }
+      return [];
+    });
+
+    const removedSubjs = Object.entries(upscHierarchy.removedSubjects || {}).flatMap(([pKey, list]) => {
+      if (pKey.toLowerCase().trim() === p.toLowerCase().trim()) {
+        return (list || []).map((s) => s.toLowerCase().trim());
+      }
+      return [];
+    });
+
+    const adminModulesMap: Record<string, ChapterInfo[]> = {};
+    Object.entries(upscHierarchy.modules || {}).forEach(([pKey, sMap]) => {
+      if (pKey.toLowerCase().trim() === p.toLowerCase().trim()) {
+        Object.entries(sMap || {}).forEach(([sKey, modList]) => {
+          adminModulesMap[sKey.toLowerCase().trim()] = modList || [];
+        });
+      }
+    });
 
     adminSubjs.forEach((sName) => {
-      if (removedSubjs.includes(sName)) return;
+      if (removedSubjs.includes(sName.toLowerCase().trim())) return;
 
       if (rawEnrolled.length > 0) {
         const matches = rawEnrolled.some(
@@ -291,7 +312,7 @@ export function buildStudentUPSCHierarchy(
       }
 
       const subjEntry = subjMap.get(sKey)!;
-      const adminModules = upscHierarchy.modules?.[p]?.[sName] || [];
+      const adminModules = adminModulesMap[sKey] || [];
       adminModules.forEach((m) => {
         const mKey = `mod_${m.number}`;
         if (!subjEntry.moduleMap.has(mKey)) {
