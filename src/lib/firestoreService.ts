@@ -13,6 +13,7 @@ import {
 import { getFirebaseDb, OperationType, handleFirestoreError } from "./firebase";
 import { Student, ClassNote, TestAttemptRecord } from "../types";
 import { migrateNoteToHierarchy } from "../utils/notesHierarchyHelper";
+import { extractCanonicalStorageKey, getCanonicalNoteDownloadUrl } from "./noteOpener";
 import { notesCacheService } from "./notesCacheService";
 import { notesLogger } from "./notesLogger";
 import { AuthLogger } from "./authLogger";
@@ -1826,10 +1827,73 @@ export function getLocalClassNotes(): ClassNote[] {
   return inMemoryClassNotesCache;
 }
 
+export function prepareNoteForFirestore(note: ClassNote): Record<string, any> {
+  const bucket = note.bucket || "academy-connect-files";
+  const canonicalStoragePath = extractCanonicalStorageKey(note, bucket);
+  const fileName = note.fileName || note.pdfFileName || "note.pdf";
+
+  // Create a clean object without legacy raw URLs
+  const raw: Record<string, any> = { ...note };
+  delete raw.pdfUrl;
+  delete raw.downloadUrl;
+  delete raw.publicUrl;
+  delete raw.signedUrl;
+  delete raw.presignedUrl;
+  delete raw.url;
+
+  return cleanObjectForFirestore({
+    ...raw,
+    storagePath: canonicalStoragePath,
+    storageKey: canonicalStoragePath,
+    objectKey: canonicalStoragePath,
+    r2Key: canonicalStoragePath,
+    fileName,
+    bucket,
+  });
+}
+
+export function normalizeAndMigrateNoteDoc(note: ClassNote, db?: any, targetCollection?: string): ClassNote {
+  if (!note) return note;
+  const bucket = note.bucket || "academy-connect-files";
+  const canonicalStoragePath = extractCanonicalStorageKey(note, bucket);
+  const canonicalUrl = getCanonicalNoteDownloadUrl(canonicalStoragePath, bucket);
+
+  // Auto-heal missing or legacy storagePath in Firestore in background
+  if (db && note.id && targetCollection && (!note.storagePath || note.storagePath !== canonicalStoragePath)) {
+    try {
+      setDoc(
+        doc(db, targetCollection, note.id),
+        {
+          storagePath: canonicalStoragePath,
+          storageKey: canonicalStoragePath,
+          objectKey: canonicalStoragePath,
+          r2Key: canonicalStoragePath,
+        },
+        { merge: true }
+      ).catch((err) => {
+        console.warn(`[Firestore] Auto-healed note storagePath notice (${note.id}):`, err);
+      });
+    } catch {}
+  }
+
+  const migrated = migrateNoteToHierarchy(note);
+  return {
+    ...migrated,
+    storagePath: canonicalStoragePath,
+    storageKey: canonicalStoragePath,
+    objectKey: canonicalStoragePath,
+    r2Key: canonicalStoragePath,
+    downloadKey: canonicalStoragePath,
+    pdfUrl: canonicalUrl,
+    downloadUrl: canonicalUrl,
+    bucket,
+  };
+}
+
 export function saveLocalClassNotes(notes: ClassNote[]) {
   if (typeof window === "undefined" || !Array.isArray(notes)) return;
   
-  const migratedNotes = notes.map(migrateNoteToHierarchy).sort(sortNotesByTopicNumber);
+  const migratedNotes = notes.map((n) => normalizeAndMigrateNoteDoc(n)).sort(sortNotesByTopicNumber);
 
   // Prevent duplicate state emissions if the dataset is unchanged
   if (inMemoryClassNotesCache !== null && areClassNotesEqual(inMemoryClassNotesCache, migratedNotes)) {
@@ -1865,27 +1929,34 @@ function mergeAndSaveClassNotes() {
 
   // 1. Add class notes from remote Firestore
   for (const n of classNotesRemote) {
-    if (n && n.id) mergedMap.set(n.id, n);
+    if (n && n.id) {
+      const normalized = normalizeAndMigrateNoteDoc(n);
+      mergedMap.set(n.id, normalized);
+    }
   }
 
   // 2. Add upsc notes from remote Firestore
   for (const n of upscNotesRemote) {
-    if (n && n.id) mergedMap.set(n.id, n);
+    if (n && n.id) {
+      const normalized = normalizeAndMigrateNoteDoc(n);
+      mergedMap.set(n.id, normalized);
+    }
   }
 
   // 3. Merge R2 discovered topic notes (authoritative storage source)
   for (const [_, n] of globalR2DiscoveredNotes.entries()) {
     if (!n || !n.id) continue;
+    const normalizedN = normalizeAndMigrateNoteDoc(n);
 
     // Check if there is an existing Firestore note matching by id, storageKey, storagePath, or r2Key
     let matchedExistingId: string | null = null;
     for (const [id, existing] of mergedMap.entries()) {
       if (
-        id === n.id ||
-        (existing.storageKey && n.storageKey && existing.storageKey === n.storageKey) ||
-        (existing.storagePath && n.storagePath && existing.storagePath === n.storagePath) ||
-        (existing.r2Key && n.r2Key && existing.r2Key === n.r2Key) ||
-        (existing.objectKey && n.objectKey && existing.objectKey === n.objectKey)
+        id === normalizedN.id ||
+        (existing.storageKey && normalizedN.storageKey && existing.storageKey === normalizedN.storageKey) ||
+        (existing.storagePath && normalizedN.storagePath && existing.storagePath === normalizedN.storagePath) ||
+        (existing.r2Key && normalizedN.r2Key && existing.r2Key === normalizedN.r2Key) ||
+        (existing.objectKey && normalizedN.objectKey && existing.objectKey === normalizedN.objectKey)
       ) {
         matchedExistingId = id;
         break;
@@ -1895,21 +1966,21 @@ function mergeAndSaveClassNotes() {
     if (matchedExistingId) {
       const existing = mergedMap.get(matchedExistingId)!;
       mergedMap.set(matchedExistingId, {
-        ...n,
+        ...normalizedN,
         ...existing,
-        storageKey: n.storageKey || existing.storageKey,
-        storagePath: n.storagePath || existing.storagePath,
-        objectKey: n.objectKey || existing.objectKey,
-        pdfUrl: n.pdfUrl || existing.pdfUrl,
-        downloadUrl: n.downloadUrl || existing.downloadUrl,
-        pdfFileName: n.pdfFileName || existing.pdfFileName || n.fileName || existing.fileName,
-        fileName: n.fileName || existing.fileName || n.pdfFileName || existing.pdfFileName,
-        fileSize: n.fileSize || existing.fileSize,
-        fileType: n.fileType || existing.fileType || "pdf",
+        storageKey: normalizedN.storageKey || existing.storageKey,
+        storagePath: normalizedN.storagePath || existing.storagePath,
+        objectKey: normalizedN.objectKey || existing.objectKey,
+        pdfUrl: normalizedN.pdfUrl || existing.pdfUrl,
+        downloadUrl: normalizedN.downloadUrl || existing.downloadUrl,
+        pdfFileName: normalizedN.pdfFileName || existing.pdfFileName || normalizedN.fileName || existing.fileName,
+        fileName: normalizedN.fileName || existing.fileName || normalizedN.pdfFileName || existing.pdfFileName,
+        fileSize: normalizedN.fileSize || existing.fileSize,
+        fileType: normalizedN.fileType || existing.fileType || "pdf",
       });
     } else {
       // Direct R2 topic note discovered
-      mergedMap.set(n.id, n);
+      mergedMap.set(normalizedN.id, normalizedN);
     }
   }
 
@@ -1933,7 +2004,7 @@ export async function triggerR2TopicDiscovery(): Promise<ClassNote[]> {
       for (const n of discovered) {
         if (n && n.id) {
           const key = n.storageKey || n.storagePath || n.id;
-          nextR2Map.set(key, n);
+          nextR2Map.set(key, normalizeAndMigrateNoteDoc(n));
         }
       }
       globalR2DiscoveredNotes = nextR2Map;
@@ -1977,7 +2048,8 @@ function ensureSingleFirestoreNotesSubscription() {
           snap.forEach((docSnap) => {
             const data = docSnap.data() as ClassNote;
             if (data && data.id) {
-              classNotesRemote.push(data);
+              const normalized = normalizeAndMigrateNoteDoc(data, db, "class_notes");
+              classNotesRemote.push(normalized);
             }
           });
           mergeAndSaveClassNotes();
@@ -1996,7 +2068,8 @@ function ensureSingleFirestoreNotesSubscription() {
           snap.forEach((docSnap) => {
             const data = docSnap.data() as ClassNote;
             if (data && data.id) {
-              upscNotesRemote.push(data);
+              const normalized = normalizeAndMigrateNoteDoc(data, db, "upsc_notes");
+              upscNotesRemote.push(normalized);
             }
           });
           mergeAndSaveClassNotes();
@@ -2056,39 +2129,42 @@ export function subscribeToClassNotes(
 export async function saveClassNoteDoc(note: ClassNote): Promise<void> {
   initR2DiscoveredCache();
   
+  const normalizedNote = normalizeAndMigrateNoteDoc(note);
+
   // Update local R2 map if note has storage key
-  if (note.storagePath || note.storageKey) {
-    const key = note.storageKey || note.storagePath || note.id;
-    globalR2DiscoveredNotes.set(key, note);
+  if (normalizedNote.storagePath || normalizedNote.storageKey) {
+    const key = normalizedNote.storageKey || normalizedNote.storagePath || normalizedNote.id;
+    globalR2DiscoveredNotes.set(key, normalizedNote);
     if (typeof window !== "undefined") {
       safeSetStorage(STORAGE_KEY_R2_DISCOVERED, JSON.stringify(Array.from(globalR2DiscoveredNotes.values())));
     }
   }
 
   const currentLocal = getLocalClassNotes();
-  const exists = currentLocal.some((n) => n.id === note.id);
+  const exists = currentLocal.some((n) => n.id === normalizedNote.id);
   const updatedLocal = exists
-    ? currentLocal.map((n) => (n.id === note.id ? note : n))
-    : [note, ...currentLocal];
+    ? currentLocal.map((n) => (n.id === normalizedNote.id ? normalizedNote : n))
+    : [normalizedNote, ...currentLocal];
   saveLocalClassNotes(updatedLocal);
 
   const db = await getFirebaseDb();
   if (!db) return;
 
   try {
-    const isUpsc = note.isUPSC || (note as any).type === "upsc" || (note as any).noteType === "upsc" || note.classGrade === "UPSC" || (note as any).className === "UPSC";
+    const isUpsc = normalizedNote.isUPSC || (normalizedNote as any).type === "upsc" || (normalizedNote as any).noteType === "upsc" || normalizedNote.classGrade === "UPSC" || (normalizedNote as any).className === "UPSC";
     const targetCollection = isUpsc ? "upsc_notes" : "class_notes";
-    const docRef = doc(db, targetCollection, note.id);
-    await setDoc(docRef, cleanObjectForFirestore(note), { merge: true });
+    const docRef = doc(db, targetCollection, normalizedNote.id);
+    const firestoreData = prepareNoteForFirestore(normalizedNote);
+    await setDoc(docRef, firestoreData, { merge: true });
     
     // Also mirror to class_notes for legacy/unified lookups if upsc
     if (isUpsc) {
-      const mirrorRef = doc(db, "class_notes", note.id);
-      await setDoc(mirrorRef, cleanObjectForFirestore(note), { merge: true }).catch(() => {});
+      const mirrorRef = doc(db, "class_notes", normalizedNote.id);
+      await setDoc(mirrorRef, firestoreData, { merge: true }).catch(() => {});
     }
-    console.log(`[Firestore] Successfully persisted note: ${targetCollection}/${note.id}`);
+    console.log(`[Firestore] Successfully persisted canonical note metadata: ${targetCollection}/${normalizedNote.id}`);
   } catch (err: any) {
-    console.warn(`[Firestore] saveClassNoteDoc warning for note ${note.id}:`, err);
+    console.warn(`[Firestore] saveClassNoteDoc warning for note ${normalizedNote.id}:`, err);
   }
 }
 
@@ -2107,7 +2183,9 @@ export async function fetchAllClassNotesFromFirestore(): Promise<ClassNote[]> {
         classSnap.forEach((d) => {
           const data = d.data() as ClassNote;
           if (data && (data.id || d.id)) {
-            notesMap.set(data.id || d.id, { ...data, id: data.id || d.id });
+            const raw = { ...data, id: data.id || d.id };
+            const normalized = normalizeAndMigrateNoteDoc(raw, db, "class_notes");
+            notesMap.set(normalized.id, normalized);
           }
         });
       } catch (err) {
@@ -2120,7 +2198,9 @@ export async function fetchAllClassNotesFromFirestore(): Promise<ClassNote[]> {
         upscSnap.forEach((d) => {
           const data = d.data() as ClassNote;
           if (data && (data.id || d.id)) {
-            notesMap.set(data.id || d.id, { ...data, id: data.id || d.id });
+            const raw = { ...data, id: data.id || d.id };
+            const normalized = normalizeAndMigrateNoteDoc(raw, db, "upsc_notes");
+            notesMap.set(normalized.id, normalized);
           }
         });
       } catch (err) {

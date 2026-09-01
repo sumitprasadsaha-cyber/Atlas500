@@ -490,7 +490,7 @@ export async function getTopicNote(params: GetTopicNoteParams): Promise<(ClassNo
 
   const bucket = getR2BucketName();
   const downloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(targetKey)}`;
-  const viewUrl = getR2PublicUrl(bucket, targetKey) || downloadUrl;
+  const viewUrl = downloadUrl;
   const fileName = targetKey.split("/").pop() || "note.pdf";
 
   const baseNote: ClassNote = resolvedNote || {
@@ -1193,34 +1193,10 @@ export async function getResolvedViewUrl(
     throw new Error("Invalid storage path specified.");
   }
 
-  // 1. If direct public R2 domain/URL is configured, return it directly
-  const directPublicUrl = getR2PublicUrl(bucket, sanitizedPath);
-  if (directPublicUrl && !directPublicUrl.includes("/api/")) {
-    console.log(`[StorageService] Using direct public R2 URL: ${directPublicUrl}`);
-    return directPublicUrl;
-  }
-
-  // 2. Request direct pre-signed URL with inline Content-Disposition from Cloudflare R2
-  try {
-    const signedDetails = await getR2SignedUrlDetails({
-      bucket,
-      key: sanitizedPath,
-      expiresIn: 3600,
-      operation: "getObject",
-    });
-    if (signedDetails.signedUrl && !signedDetails.signedUrl.includes("/api/")) {
-      console.log(`[StorageService] Using direct pre-signed R2 URL: ${signedDetails.signedUrl}`);
-      return signedDetails.signedUrl;
-    }
-  } catch (signErr) {
-    console.warn("[StorageService] Pre-signed URL retrieval warning:", signErr);
-  }
-
-  if (cleanInput.startsWith("http://") || cleanInput.startsWith("https://")) {
-    return cleanInput;
-  }
-
-  throw new Error("Unable to resolve direct Cloudflare R2 storage URL.");
+  // Single canonical note delivery URL through backend proxy
+  const canonicalProxyUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(sanitizedPath)}`;
+  console.log(`[StorageService] Using canonical backend proxy URL: ${canonicalProxyUrl}`);
+  return canonicalProxyUrl;
 }
 
 /**

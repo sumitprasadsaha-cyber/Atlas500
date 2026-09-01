@@ -1,7 +1,5 @@
 import { getBucketName, sanitizeStoragePath } from "./storageService";
-import { getR2SignedUrlDetails, getR2PublicUrl } from "./r2Client";
-import { launchFileInNativeViewer, openDocumentInNativeApp, isCapacitorNative } from "./nativeFileOpener";
-import { notesCacheService } from "./notesCacheService";
+import { launchFileInNativeViewer, isCapacitorNative } from "./nativeFileOpener";
 import { notesLogger } from "./notesLogger";
 import { fetchNoteBlobWithCache } from "./nativePdfService";
 
@@ -10,6 +8,8 @@ export interface NoteOpeningTarget {
   storageKey?: string;
   storagePath?: string;
   pdfUrl?: string;
+  downloadUrl?: string;
+  publicUrl?: string;
   bucket?: string;
   fileName?: string;
   pdfFileName?: string;
@@ -43,136 +43,184 @@ export function getNoteMimeType(fileNameOrUrl: string, mimeType?: string, fileTy
 }
 
 /**
- * Resolves a direct HTTPS URL to Cloudflare R2 for opening/viewing notes.
- * Strictly O(1) single-pass resolution.
+ * Robust canonical key extractor.
+ * Recovers canonical storagePath from objects, strings, JSON, URLs, or query parameters.
  */
-export async function resolveDirectNoteUrl(target: string | NoteOpeningTarget): Promise<string> {
-  let rawUrl = "";
-  let storageKey = "";
-  let bucket = "academy-connect-files";
-  let mimeType = "";
-  let fileType = "";
-  let fileName = "";
+export function extractCanonicalStorageKey(target: any, defaultBucket: string = "academy-connect-files"): string {
+  if (!target) return "";
+
+  let candidate = "";
 
   if (typeof target === "string") {
-    rawUrl = target.trim();
-  } else if (target && typeof target === "object") {
-    rawUrl = (target.url || target.pdfUrl || "").trim();
-    storageKey = (
-      target.storageKey ||
+    candidate = target.trim();
+  } else if (typeof target === "object") {
+    // Priority 1: storagePath (canonical single source of truth)
+    candidate = (
       target.storagePath ||
-      (target as any).storage_path ||
-      (target as any).objectKey ||
-      (target as any).r2Key ||
-      (target as any).key ||
+      target.storage_path ||
+      target.storageKey ||
+      target.objectKey ||
+      target.r2Key ||
+      target.downloadKey ||
+      target.key ||
+      target.pdfUrl ||
+      target.downloadUrl ||
+      target.publicUrl ||
+      target.url ||
       ""
     ).trim();
-    bucket = target.bucket || "academy-connect-files";
-    fileName = target.fileName || target.pdfFileName || (target as any).filename || "";
-    mimeType = target.mimeType || (target as any).mime_type || "";
-    fileType = target.fileType || "";
   }
 
-  // Handle JSON metadata strings if passed as rawUrl
-  if (rawUrl.startsWith("{")) {
+  if (!candidate) return "";
+
+  // 1. Handle JSON string representation if passed
+  if (candidate.startsWith("{")) {
     try {
-      const parsed = JSON.parse(rawUrl);
-      storageKey = parsed.storageKey || parsed.storagePath || parsed.objectKey || storageKey;
-      rawUrl = parsed.downloadUrl || parsed.url || "";
-      if (parsed.bucket) bucket = parsed.bucket;
-      if (parsed.mimeType) mimeType = parsed.mimeType;
-    } catch {}
+      const parsed = JSON.parse(candidate);
+      return extractCanonicalStorageKey(
+        parsed.storagePath ||
+        parsed.storageKey ||
+        parsed.objectKey ||
+        parsed.key ||
+        parsed.downloadUrl ||
+        parsed.url,
+        defaultBucket
+      );
+    } catch {
+      // Ignore JSON parse errors
+    }
   }
 
-  // If already a Data URL or Blob URL (e.g. locally generated PDF), return directly
-  if (rawUrl.startsWith("data:") || rawUrl.startsWith("blob:")) {
-    return rawUrl;
+  // 2. Data / Blob URLs do not have an R2 storage key
+  if (candidate.startsWith("data:") || candidate.startsWith("blob:")) {
+    return candidate;
   }
 
-  // If rawUrl is already a resolved direct download API URL, return immediately (avoids double resolution)
-  if (rawUrl.startsWith("/api/storage?action=download") || rawUrl.startsWith("/api/r2/download") || rawUrl.startsWith("/api/files/download")) {
-    return rawUrl;
-  }
+  let clean = candidate;
 
-  // Extract storageKey if rawUrl contains query parameters or relative paths
-  if (rawUrl.includes("key=") || rawUrl.includes("storageKey=") || rawUrl.includes("storagePath=")) {
+  // 3. Extract from key/storageKey/storagePath query params in URLs
+  if (clean.includes("key=") || clean.includes("storageKey=") || clean.includes("storagePath=")) {
     try {
       const fakeBase = "http://localhost";
-      const parsedUrl = new URL(rawUrl.startsWith("http") ? rawUrl : `${fakeBase}${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`);
-      const keyParam = parsedUrl.searchParams.get("key") || parsedUrl.searchParams.get("storageKey") || parsedUrl.searchParams.get("storagePath");
+      const parsedUrl = new URL(clean.startsWith("http") ? clean : `${fakeBase}${clean.startsWith("/") ? "" : "/"}${clean}`);
+      const keyParam =
+        parsedUrl.searchParams.get("key") ||
+        parsedUrl.searchParams.get("storageKey") ||
+        parsedUrl.searchParams.get("storagePath");
       if (keyParam) {
-        storageKey = decodeURIComponent(keyParam);
+        clean = decodeURIComponent(keyParam);
       }
-      rawUrl = ""; // Force resolving direct Cloudflare URL
+    } catch {
+      const match = clean.match(/[?&](?:key|storageKey|storagePath)=([^&]+)/);
+      if (match && match[1]) {
+        clean = decodeURIComponent(match[1]);
+      }
+    }
+  }
+
+  // 4. Handle HTTP/HTTPS URLs (Cloudflare R2, S3 presigned, or custom CDN)
+  if (clean.startsWith("http://") || clean.startsWith("https://")) {
+    try {
+      const parsedUrl = new URL(clean);
+      const keyParam = parsedUrl.searchParams.get("key") || parsedUrl.searchParams.get("storageKey");
+      if (keyParam) {
+        clean = decodeURIComponent(keyParam);
+      } else {
+        const segments = parsedUrl.pathname.replace(/^\/+/, "").split("/");
+        if (segments[0] === defaultBucket || segments[0] === "academy-connect-files") {
+          segments.shift();
+        }
+        clean = segments.join("/");
+      }
+    } catch {
+      // fallback
+    }
+  }
+
+  // 5. Safe decode URI component (prevent double encoding / double decoding)
+  if (clean.includes("%")) {
+    try {
+      const decoded = decodeURIComponent(clean);
+      // Only keep if decode succeeded without corrupted control characters
+      if (decoded) clean = decoded;
     } catch {}
   }
 
-  // If rawUrl is a relative path or storage key (not http/https), treat it as storageKey
-  if (!storageKey && rawUrl && !rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
-    storageKey = rawUrl;
-    rawUrl = "";
+  // 6. Strip query strings and hash fragments if present
+  if (clean.includes("?")) {
+    clean = clean.split("?")[0];
+  }
+  if (clean.includes("#")) {
+    clean = clean.split("#")[0];
   }
 
-  const cleanBucket = getBucketName(bucket);
-  const cleanKey = storageKey ? sanitizeStoragePath(storageKey, cleanBucket).replace(/^\/+/, "") : "";
-  const finalMime = getNoteMimeType(fileName || cleanKey || rawUrl, mimeType, fileType);
-
-  // If cleanKey is empty and rawUrl is already a direct external HTTPS URL to Cloudflare R2 or CDN (not pointing to /api/), return it directly
-  if (!cleanKey && rawUrl && (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) && !rawUrl.includes("/api/")) {
-    return rawUrl;
+  // 7. Strip leading bucket name if present
+  const bucketPrefix = `${defaultBucket}/`;
+  if (clean.startsWith(bucketPrefix)) {
+    clean = clean.substring(bucketPrefix.length);
+  }
+  if (clean.startsWith("academy-connect-files/")) {
+    clean = clean.substring("academy-connect-files/".length);
   }
 
-  if (!cleanKey) {
-    if (rawUrl) return rawUrl;
-    throw new Error("Unable to open note: Missing file storage key.");
-  }
+  // 8. Normalize slashes, remove leading slashes, prevent traversal
+  clean = clean.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/{2,}/g, "/").replace(/\.\./g, "_");
 
-  console.log(`[Stage 1: Metadata Lookup] Resolving note storage info:`, {
-    stage: "1_METADATA_LOOKUP",
-    storageKey: cleanKey,
-    rawKey: storageKey,
-    bucket: cleanBucket,
-    mimeType: finalMime,
-    fileName,
-  });
+  return clean;
+}
 
-  // 1. Verify object existence and retrieve secure retrieval metadata from backend
-  try {
-    const signedDetails = await getR2SignedUrlDetails({
-      bucket: cleanBucket,
-      key: cleanKey,
-      expiresIn: 3600,
-      operation: "getObject",
-      contentType: finalMime,
-    });
+/**
+ * Single Canonical Note Download & View URL Generator.
+ * The entire application MUST use this function exclusively to generate note URLs.
+ * Always formats as: /api/storage?action=download&bucket=<bucket>&key=<storagePath>
+ */
+export function getCanonicalNoteDownloadUrl(
+  storagePathOrTarget: string | NoteOpeningTarget | any,
+  bucket?: string
+): string {
+  if (!storagePathOrTarget) return "";
 
-    if (signedDetails.status === 404 || signedDetails.exists === false) {
-      console.warn(`[Stage 3: R2 Existence Check] Object does NOT exist in storage: key="${cleanKey}"`);
-      throw new Error(`Object not found: "${cleanKey}" does not exist in storage.`);
+  // If already a Data or Blob URL (e.g. locally generated PDF), return immediately
+  if (typeof storagePathOrTarget === "string") {
+    const trimmed = storagePathOrTarget.trim();
+    if (trimmed.startsWith("data:") || trimmed.startsWith("blob:")) {
+      return trimmed;
     }
-
-    console.log(`[Stage 4: URL Resolution] Verified storage resolution:`, {
-      stage: "4_URL_RESOLUTION",
-      key: cleanKey,
-      bucket: cleanBucket,
-      downloadUrl: signedDetails.downloadUrl,
-      expiryTimestamp: signedDetails.expiryTimestamp,
-      contentLength: signedDetails.contentLength,
-    });
-
-    // Prefer the secure backend download proxy route to ensure immunity against Cloudflare Bot Fight Mode, WAF challenges, and CORS 403s
-    if (signedDetails.downloadUrl) {
-      return signedDetails.downloadUrl;
+  } else if (typeof storagePathOrTarget === "object") {
+    const rawUrl = (storagePathOrTarget.url || storagePathOrTarget.pdfUrl || "").trim();
+    if (rawUrl.startsWith("data:") || rawUrl.startsWith("blob:")) {
+      return rawUrl;
     }
-  } catch (signErr: any) {
-    if (signErr?.message && signErr.message.includes("Object not found")) {
-      throw signErr;
-    }
-    console.warn("[Stage 4: URL Resolution] Signed URL detail check notice:", signErr?.message || signErr);
   }
 
-  // 2. Direct streaming download proxy fallback
-  return `/api/storage?action=download&bucket=${encodeURIComponent(cleanBucket)}&key=${encodeURIComponent(cleanKey)}`;
+  const effectiveBucket = getBucketName(
+    bucket || (typeof storagePathOrTarget === "object" ? storagePathOrTarget?.bucket : undefined) || "academy-connect-files"
+  );
+  const cleanKey = extractCanonicalStorageKey(storagePathOrTarget, effectiveBucket);
+
+  if (!cleanKey) return "";
+  if (cleanKey.startsWith("data:") || cleanKey.startsWith("blob:")) {
+    return cleanKey;
+  }
+
+  return `/api/storage?action=download&bucket=${encodeURIComponent(effectiveBucket)}&key=${encodeURIComponent(cleanKey)}`;
+}
+
+/**
+ * Resolves the canonical download URL for opening/viewing notes.
+ * Strictly guarantees same-origin backend proxy route delivery.
+ */
+export async function resolveDirectNoteUrl(target: string | NoteOpeningTarget): Promise<string> {
+  const canonicalUrl = getCanonicalNoteDownloadUrl(target);
+  if (canonicalUrl) {
+    return canonicalUrl;
+  }
+
+  if (typeof target === "string" && (target.startsWith("http://") || target.startsWith("https://"))) {
+    return target;
+  }
+
+  throw new Error("Unable to resolve note URL: Missing canonical storagePath.");
 }
 
 /**
@@ -193,17 +241,7 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
     typeof navigator !== "undefined" &&
     /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-  const storageKey =
-    typeof target === "string"
-      ? target
-      : target?.storageKey ||
-        target?.storagePath ||
-        (target as any)?.storage_path ||
-        (target as any)?.objectKey ||
-        (target as any)?.r2Key ||
-        target?.url ||
-        target?.pdfUrl ||
-        "";
+  const cleanStoragePath = extractCanonicalStorageKey(target);
 
   const fileName =
     typeof target === "object" && target !== null
@@ -222,8 +260,8 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
   const onProgress = typeof target === "object" && target !== null ? target.onProgress : undefined;
   const verifiedNote = await fetchNoteBlobWithCache(
     {
-      storageKey,
-      storagePath: storageKey,
+      storageKey: cleanStoragePath,
+      storagePath: cleanStoragePath,
       noteId: typeof target === "object" && target !== null ? target.noteId : undefined,
       title: typeof target === "object" && target !== null ? target.title : undefined,
       fileName,
@@ -247,7 +285,7 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
         recordNoteOpenedOrDownloaded(
           target.studentId!,
           target.subject,
-          target.noteId || target.storageKey || target.storagePath || ""
+          target.noteId || cleanStoragePath
         );
       })
       .catch(() => {});
@@ -263,7 +301,7 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
 
   notesLogger.info("VIEW_OPEN", {
     fileName: verifiedNote.fileName,
-    storageKey,
+    storageKey: cleanStoragePath,
     extra: {
       platform: isCapacitor ? "Capacitor" : isPWA ? "PWA" : isMobile ? "Mobile" : "Desktop",
       launched,
@@ -273,3 +311,4 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
 
   return verifiedNote.objectUrl;
 }
+

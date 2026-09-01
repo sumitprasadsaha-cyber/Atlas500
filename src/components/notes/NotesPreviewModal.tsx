@@ -21,7 +21,7 @@ import {
   WifiOff
 } from "lucide-react";
 import { ClassNote, ChapterNote } from "../../types";
-import { isImageFile, fetchNoteBlobWithCache } from "../../lib/nativePdfService";
+import { isImageFile, fetchNoteBlobWithCache, getCanonicalNoteDownloadUrl } from "../../lib/nativePdfService";
 import { notesLogger } from "../../lib/notesLogger";
 
 interface NotesPreviewModalProps {
@@ -91,15 +91,19 @@ export default function NotesPreviewModal({
       "";
 
     const fileName = note.fileName || (note as any).pdfFileName || "note.pdf";
+    const bucket = (note as any).bucket || "academy-connect-files";
+    const canonicalProxyUrl = getCanonicalNoteDownloadUrl(note, bucket);
 
     fetchNoteBlobWithCache(
       {
         storageKey,
+        storagePath: (note as any).storagePath || storageKey,
         fileName,
         pdfFileName: fileName,
         mimeType: (note as any).mimeType,
         fileType: (note as any).fileType,
-        url: note.pdfUrl,
+        bucket,
+        url: canonicalProxyUrl,
       },
       controller.signal,
       (percent) => {
@@ -116,19 +120,12 @@ export default function NotesPreviewModal({
       .catch((err) => {
         if (controller.signal.aborted) return;
         console.warn("[NotesPreviewModal] Blob fetch notice:", err);
-        // Fallback to direct URL if available
-        const fallbackUrl = note.pdfUrl || (note as any).publicUrl || (note as any).downloadUrl;
-        if (fallbackUrl && navigator.onLine) {
-          setBlobUrl(fallbackUrl);
-          setIsLoading(false);
-        } else {
-          setErrorMessage(
-            !navigator.onLine
-              ? "You are currently offline. This note has not been cached yet."
-              : "Unable to load document preview. Please check your connection or download directly."
-          );
-          setIsLoading(false);
-        }
+        setErrorMessage(
+          !navigator.onLine
+            ? "You are currently offline. This note has not been cached yet."
+            : (err?.message || "Unable to load document preview. Please check your connection or download directly.")
+        );
+        setIsLoading(false);
       });
 
     return () => {

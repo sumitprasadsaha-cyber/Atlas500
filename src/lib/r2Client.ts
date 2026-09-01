@@ -634,43 +634,26 @@ export async function downloadFromR2(params: {
   const bucket = getR2BucketName(params.bucket);
   const cleanKey = params.key.replace(/^\/+/, "");
 
-  // 1. Same-Origin /api/storage?action=download proxy endpoint (fast streaming, 0 CORS issues)
+  // 1. Same-Origin /api/storage?action=download proxy endpoint (fast streaming, 0 CORS issues, immunity to Cloudflare WAF)
   const baseUrl = getApiBaseUrl();
   const proxyUrl = `${baseUrl}/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(cleanKey)}`;
-  try {
-    const proxyRes = await fetch(proxyUrl);
-    if (proxyRes.ok) {
-      const blob = await proxyRes.blob();
-      if (blob && blob.size > 0) {
-        return {
-          blob,
-          mimeType: proxyRes.headers.get("content-type") || "application/octet-stream",
-        };
-      }
-    } else if (proxyRes.status === 404) {
+  
+  const proxyRes = await fetch(proxyUrl);
+  if (!proxyRes.ok) {
+    if (proxyRes.status === 404) {
       throw new Error(`File not found in Cloudflare R2 (key: "${cleanKey}")`);
     }
-  } catch (proxyErr: any) {
-    if (proxyErr?.message?.includes("File not found")) {
-      throw proxyErr;
-    }
-    console.warn("[R2Client] Proxy download notice, attempting alternative URL:", proxyErr?.message || proxyErr);
+    throw new Error(`Cloudflare R2 download failed with status HTTP ${proxyRes.status}`);
   }
 
-  // 2. Fallback to signed URL or public URL
-  const viewUrl = await getR2SignedUrl({ bucket, key: cleanKey, expiresIn: 3600 });
-  const res = await fetch(viewUrl);
-  if (!res.ok) {
-    if (res.status === 404) {
-      throw new Error(`File not found in Cloudflare R2 (key: "${cleanKey}")`);
-    }
-    throw new Error(`Cloudflare R2 download failed with status HTTP ${res.status}`);
+  const blob = await proxyRes.blob();
+  if (!blob || blob.size <= 0) {
+    throw new Error(`File downloaded is empty (key: "${cleanKey}")`);
   }
 
-  const blob = await res.blob();
   return {
     blob,
-    mimeType: res.headers.get("content-type") || "application/octet-stream",
+    mimeType: proxyRes.headers.get("content-type") || "application/octet-stream",
   };
 }
 

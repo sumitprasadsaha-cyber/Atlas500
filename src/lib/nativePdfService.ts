@@ -6,13 +6,20 @@
 
 import { Capacitor } from "@capacitor/core";
 import { Browser } from "@capacitor/browser";
-import { openNote, resolveDirectNoteUrl, getNoteMimeType, NoteOpeningTarget } from "./noteOpener";
+import {
+  openNote,
+  resolveDirectNoteUrl,
+  getNoteMimeType,
+  getCanonicalNoteDownloadUrl,
+  extractCanonicalStorageKey,
+  NoteOpeningTarget,
+} from "./noteOpener";
 import { notesCacheService } from "./notesCacheService";
 import { notesLogger } from "./notesLogger";
 import { topicDownloadProgress } from "./topicDownloadProgress";
 import { ClassNote } from "../types";
 
-export { openNote, resolveDirectNoteUrl, getNoteMimeType };
+export { openNote, resolveDirectNoteUrl, getNoteMimeType, getCanonicalNoteDownloadUrl, extractCanonicalStorageKey };
 
 export type NoteViewerState = "idle" | "downloading" | "opening" | "opened" | "error";
 
@@ -261,15 +268,10 @@ export async function fetchNoteBlobWithCache(
   signal?: AbortSignal,
   onProgress?: (percent: number) => void
 ): Promise<{ blob: Blob; mimeType: string; fileName: string; objectUrl: string; cached: boolean }> {
-  const storageKey =
-    options.storageKey ||
-    options.storagePath ||
-    options.r2Key ||
-    options.key ||
-    options.url ||
-    "";
+  const canonicalStoragePath = extractCanonicalStorageKey(options, options.bucket || "academy-connect-files");
   const fileName = options.fileName || options.pdfFileName || options.filename || "note.pdf";
   const mimeType = getNoteMimeType(fileName, options.mimeType, options.fileType);
+  const bucket = options.bucket || "academy-connect-files";
 
   // 1. Revoke any previous Blob Object URL before opening a new note
   revokePreviousNoteBlob();
@@ -279,40 +281,68 @@ export async function fetchNoteBlobWithCache(
     throw new Error("This note is not available offline. Connect to the internet to download it.");
   }
 
-  notesLogger.info("DOWNLOAD_START", { storageKey, fileName });
+  notesLogger.info("DOWNLOAD_START", { storageKey: canonicalStoragePath, fileName });
 
-  // 3. Resolve direct unique URL for the selected topic
-  let targetUrl = "";
-  try {
-    targetUrl = await resolveDirectNoteUrl(options);
-  } catch {
-    // Fallback to streaming download proxy if direct signed URL fails
-    targetUrl = `/api/storage?action=download&key=${encodeURIComponent(storageKey.replace(/^\/+/, ""))}`;
-  }
+  // 3. Resolve single canonical proxy download URL
+  const targetUrl = getCanonicalNoteDownloadUrl(options, bucket);
 
-  console.log("Topic ID:", options.noteId || storageKey || "topic-note");
-  console.log("Topic Name:", options.title || fileName || "Topic Note");
-  console.log("Download URL:", targetUrl);
+  console.log("[NoteDeliveryPipeline] Initiating note download:", {
+    stage: "CANONICAL_PROXY_FETCH",
+    topicId: options.noteId || canonicalStoragePath || "topic-note",
+    topicName: options.title || fileName || "Topic Note",
+    canonicalStoragePath,
+    bucket,
+    targetUrl,
+  });
 
   // 4. Download selected topic's file fresh with real-time percentage progress
-  const topicId = options.noteId || storageKey || "topic-note";
+  const topicId = options.noteId || canonicalStoragePath || "topic-note";
   topicDownloadProgress.setProgress(topicId, null);
-  if (options.noteId && storageKey && options.noteId !== storageKey) {
-    topicDownloadProgress.setProgress(storageKey, null);
+  if (options.noteId && canonicalStoragePath && options.noteId !== canonicalStoragePath) {
+    topicDownloadProgress.setProgress(canonicalStoragePath, null);
   }
   if (onProgress) {
     onProgress(0);
   }
 
-  const response = await fetch(targetUrl, { signal, cache: "no-store" });
-  if (!response.ok || response.status !== 200) {
+  let response: Response;
+  try {
+    response = await fetch(targetUrl, { signal, cache: "no-store" });
+  } catch (netErr: any) {
     topicDownloadProgress.clearProgress(topicId);
-    if (options.noteId && storageKey) topicDownloadProgress.clearProgress(storageKey);
-    notesLogger.error("DOWNLOAD_ERROR", { storageKey, fileName, status: response.status });
-    if (response.status === 404) {
-      throw new Error("File not found in cloud storage.");
+    if (options.noteId && canonicalStoragePath) topicDownloadProgress.clearProgress(canonicalStoragePath);
+    console.error("[NoteDeliveryPipeline] Network fetch failed:", {
+      storagePath: canonicalStoragePath,
+      targetUrl,
+      error: netErr?.message || netErr,
+    });
+    throw new Error(`Unable to reach note server: ${netErr?.message || "Network connection failed"}.`);
+  }
+
+  if (!response.ok || (response.status !== 200 && response.status !== 206)) {
+    topicDownloadProgress.clearProgress(topicId);
+    if (options.noteId && canonicalStoragePath) topicDownloadProgress.clearProgress(canonicalStoragePath);
+
+    const responseStatus = response.status;
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((val, key) => {
+      responseHeaders[key] = val;
+    });
+
+    console.error("[NoteDeliveryPipeline] Server returned non-200 status:", {
+      storagePath: canonicalStoragePath,
+      targetUrl,
+      bucket,
+      status: responseStatus,
+      statusText: response.statusText,
+      headers: responseHeaders,
+    });
+
+    notesLogger.error("DOWNLOAD_ERROR", { storageKey: canonicalStoragePath, fileName, status: responseStatus });
+    if (responseStatus === 404) {
+      throw new Error(`Note not found: The file "${canonicalStoragePath}" was not found in storage.`);
     }
-    throw new Error(`Failed to load note (Server returned status ${response.status}).`);
+    throw new Error(`Failed to load note (Server returned status ${responseStatus}).`);
   }
 
   const contentTypeHeader = response.headers.get("content-type");
@@ -336,11 +366,11 @@ export async function fetchNoteBlobWithCache(
         if (totalBytes > 0) {
           const pct = Math.min(99, Math.round((receivedBytes / totalBytes) * 100));
           topicDownloadProgress.setProgress(topicId, pct);
-          if (options.noteId && storageKey) topicDownloadProgress.setProgress(storageKey, pct);
+          if (options.noteId && canonicalStoragePath) topicDownloadProgress.setProgress(canonicalStoragePath, pct);
           if (onProgress) onProgress(pct);
         } else {
           topicDownloadProgress.setProgress(topicId, null);
-          if (options.noteId && storageKey) topicDownloadProgress.setProgress(storageKey, null);
+          if (options.noteId && canonicalStoragePath) topicDownloadProgress.setProgress(canonicalStoragePath, null);
           if (onProgress) onProgress(null as any);
         }
       }
@@ -359,24 +389,24 @@ export async function fetchNoteBlobWithCache(
 
   if (!verification.valid) {
     topicDownloadProgress.clearProgress(topicId);
-    if (options.noteId && storageKey) topicDownloadProgress.clearProgress(storageKey);
+    if (options.noteId && canonicalStoragePath) topicDownloadProgress.clearProgress(canonicalStoragePath);
     if (verification.isCloudflare) {
       notesLogger.warn("CLOUDFLARE_CHALLENGE_DETECTED", {
-        storageKey,
+        storageKey: canonicalStoragePath,
         fileName,
         fileSize: blob.size,
         extra: { reason: verification.reason },
       });
     } else {
       notesLogger.warn("INVALID_CONTENT_DETECTED", {
-        storageKey,
+        storageKey: canonicalStoragePath,
         fileName,
         fileSize: blob.size,
         extra: { reason: verification.reason },
       });
     }
     notesLogger.error("VERIFICATION_FAILED", {
-      storageKey,
+      storageKey: canonicalStoragePath,
       fileName,
       error: verification.reason || "Verification failed",
     });
@@ -384,7 +414,7 @@ export async function fetchNoteBlobWithCache(
   }
 
   notesLogger.info("VERIFICATION_PASSED", {
-    storageKey,
+    storageKey: canonicalStoragePath,
     fileName,
     fileSize: blob.size,
     mimeType,
@@ -392,7 +422,7 @@ export async function fetchNoteBlobWithCache(
 
   // Set progress to 100% immediately before creating object URL and opening
   topicDownloadProgress.setProgress(topicId, 100);
-  if (options.noteId && storageKey) topicDownloadProgress.setProgress(storageKey, 100);
+  if (options.noteId && canonicalStoragePath) topicDownloadProgress.setProgress(canonicalStoragePath, 100);
   if (onProgress) onProgress(100);
 
   // 6. Create fresh object URL
@@ -400,7 +430,7 @@ export async function fetchNoteBlobWithCache(
   previousBlobUrl = objectUrl;
 
   notesLogger.info("DOWNLOAD_SUCCESS", {
-    storageKey,
+    storageKey: canonicalStoragePath,
     fileName,
     fileSize: blob.size,
   });
@@ -408,7 +438,7 @@ export async function fetchNoteBlobWithCache(
   // Clear download progress so the progress bar hides cleanly as the note opens
   setTimeout(() => {
     topicDownloadProgress.clearProgress(topicId);
-    if (options.noteId && storageKey) topicDownloadProgress.clearProgress(storageKey);
+    if (options.noteId && canonicalStoragePath) topicDownloadProgress.clearProgress(canonicalStoragePath);
   }, 400);
 
   return {

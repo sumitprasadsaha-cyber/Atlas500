@@ -82,6 +82,7 @@ export interface SchoolNote {
   downloadKey: string; // Alias for storagePath / objectKey
   practiceTestPath: string; // Reserved future path: class_notes/.../practice_tests/
   pdfUrl: string;
+  downloadUrl?: string;
   fileName: string;
   fileType: "pdf" | "image";
   fileSize: number;
@@ -137,6 +138,7 @@ export interface UPSCNote {
   downloadKey: string; // Alias for storagePath / objectKey
   practiceTestPath: string; // Reserved future path: upsc/.../practice_tests/
   pdfUrl: string;
+  downloadUrl?: string;
   fileName: string;
   fileType: "pdf" | "image";
   fileSize: number;
@@ -582,6 +584,7 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
     const rawKey = input.objectKey || input.storagePath || input.storageKey || input.r2Key || input.downloadKey || paths.storagePath;
     const immutableKey = sanitizeCanonicalStorageKey(rawKey, mimeType);
     const bucket = input.bucket || "academy-connect-files";
+    const canonicalDownloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(immutableKey)}`;
 
     return {
       type: "upsc",
@@ -611,7 +614,8 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
       r2Key: immutableKey,
       downloadKey: immutableKey,
       practiceTestPath: paths.practiceTestPath,
-      pdfUrl: input.pdfUrl || "",
+      pdfUrl: canonicalDownloadUrl,
+      downloadUrl: canonicalDownloadUrl,
       fileName: canonicalFileName,
       fileType,
       fileSize,
@@ -663,6 +667,7 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
     const rawKey = input.objectKey || input.storagePath || input.storageKey || input.r2Key || input.downloadKey || paths.storagePath;
     const immutableKey = sanitizeCanonicalStorageKey(rawKey, mimeType);
     const bucket = input.bucket || "academy-connect-files";
+    const canonicalDownloadUrl = `/api/storage?action=download&bucket=${encodeURIComponent(bucket)}&key=${encodeURIComponent(immutableKey)}`;
 
     return {
       type: "school",
@@ -690,7 +695,8 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
       r2Key: immutableKey,
       downloadKey: immutableKey,
       practiceTestPath: paths.practiceTestPath,
-      pdfUrl: input.pdfUrl || "",
+      pdfUrl: canonicalDownloadUrl,
+      downloadUrl: canonicalDownloadUrl,
       fileName: canonicalFileName,
       fileType,
       fileSize,

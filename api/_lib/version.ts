@@ -18,7 +18,7 @@ export interface AppVersionInfo {
  */
 export function getAppVersionInfo(): AppVersionInfo {
   // 1. Base semver from package.json if available
-  let baseVersion = "7.8.0";
+  let baseVersion = "7.8.1";
   try {
     const pkgPath = path.resolve(process.cwd(), "package.json");
     if (fs.existsSync(pkgPath)) {
