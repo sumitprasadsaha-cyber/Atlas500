@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { LayoutDashboard, Users, Settings as SettingsIcon, BookOpen, RefreshCw, Sparkles, Timer, Clock, FolderKanban, Radio } from "lucide-react";
+import { LayoutDashboard, Users, Settings as SettingsIcon, BookOpen, RefreshCw, Sparkles, Timer, Clock, FolderKanban, Radio, Loader2, AlertCircle, LogOut, ShieldAlert } from "lucide-react";
 import { Student, StudentServiceStatus, ChapterNote, ClassNote } from "./types";
 import { INITIAL_STUDENTS } from "./data";
 import Dashboard from "./components/Dashboard";
@@ -28,6 +28,7 @@ import {
   deleteStudentDoc,
   saveUserDocument,
   deleteUserAuthCredentials,
+  createStudentAccountAtomic,
   subscribeToClassNotes,
   getLocalClassNotes,
   areClassNotesEqual,
@@ -44,6 +45,7 @@ import {
   clearCachedAuthSession,
   fetchFreshAdminDashboardData
 } from "./lib/firestoreService";
+import { AuthLogger } from "./lib/authLogger";
 import { initPracticeTestsRealtimeSync, fetchAllPracticeTests } from "./lib/practiceTestService";
 import { migrateLegacyNotesToClassNotes, filterClassNotesForStudent, getStudentSubjects, isSubjectMatching } from "./utils/classNoteHelper";
 import { deleteFileFromStorage, uploadProfilePhoto } from "./lib/storageService";
@@ -866,35 +868,16 @@ export default function App() {
         attendance: {},
       };
 
-      // Handle student Login account generation
-      if (studentData.email) {
-        try {
-          const tempPassword = studentData.password || "123456";
-          const uid = await createNewUserAuth(studentData.email, tempPassword);
-          
-          // Store uid in student document for later deletion
-          newStudent.uid = uid;
-          
-          const studentUserDoc = {
-            uid,
-            name: studentData.name,
-            email: studentData.email.toLowerCase(),
-            role: "Student",
-            studentId: studentId,
-            active: true,
-            temporaryPasswordRequired: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLogin: null
-          };
-          await saveUserDocument(uid, studentUserDoc);
-        } catch (authErr: any) {
-          console.error("Failed to register student auth details:", authErr);
-        }
+      try {
+        // Atomic account generation across Auth, /users, and /students
+        const created = await createStudentAccountAtomic(newStudent, studentData.password || "123456");
+        setStudents((prev) => [created, ...prev.filter(s => s.id !== created.id)]);
+      } catch (atomicErr: any) {
+        console.error("Atomic student creation failed:", atomicErr);
+        // Fallback local save if offline
+        setStudents((prev) => [newStudent, ...prev]);
+        await saveStudentDoc(newStudent);
       }
-
-      setStudents((prev) => [newStudent, ...prev]);
-      await saveStudentDoc(newStudent);
     }
   };
 
@@ -1742,7 +1725,81 @@ export default function App() {
       );
     }
 
-    return null;
+    // If student is authenticated but activeStudent record is still synchronizing/resolving from Firestore or local cache:
+    if (auth.role === "student") {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center animate-fadeIn" id="student-initialization-screen">
+          <div className="w-full max-w-sm bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-2xl p-6 flex flex-col items-center">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/25 mb-4 animate-bounce">
+              <Sparkles className="w-7 h-7" />
+            </div>
+
+            <h3 className="text-base font-extrabold text-slate-900 dark:text-white tracking-tight mb-1">
+              Synchronizing Student Portal
+            </h3>
+            
+            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mb-5 max-w-xs leading-relaxed">
+              Loading student profile, restoring your session, and preparing study records…
+            </p>
+
+            <div className="w-full bg-slate-100 dark:bg-slate-800/90 h-2 rounded-full overflow-hidden border border-slate-200/60 dark:border-slate-700/60 mb-5">
+              <div className="h-full bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 rounded-full animate-pulse w-3/4 transition-all duration-500" />
+            </div>
+
+            <div className="flex items-center gap-2 text-[11px] font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 px-3 py-1.5 rounded-full mb-4">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Connecting to database…</span>
+            </div>
+
+            <div className="w-full pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (auth.loggedInStudentId) {
+                    const local = getLocalStudents().find(s => s.id === auth.loggedInStudentId);
+                    if (local) {
+                      setStudents([local]);
+                    }
+                  }
+                  window.location.reload();
+                }}
+                className="flex-1 py-2.5 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Retry</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="py-2.5 px-3 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Default fallback for any unexpected unauthenticated state
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-6 text-center" id="session-fallback-screen">
+        <div className="w-full max-w-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 flex flex-col items-center shadow-xl">
+          <AlertCircle className="w-10 h-10 text-amber-500 mb-3" />
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-1">Session Initializing</h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">Please wait while the portal prepares your view.</p>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="py-2 px-4 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold rounded-xl text-xs hover:bg-slate-200 transition-colors"
+          >
+            Return to Login
+          </button>
+        </div>
+      </div>
+    );
   };
 
   return (

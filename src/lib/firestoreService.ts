@@ -14,6 +14,7 @@ import { Student, ClassNote, TestAttemptRecord } from "../types";
 import { migrateNoteToHierarchy } from "../utils/notesHierarchyHelper";
 import { notesCacheService } from "./notesCacheService";
 import { notesLogger } from "./notesLogger";
+import { AuthLogger } from "./authLogger";
 import { sortNotesByTopicNumber } from "../utils/notesValidation";
 import { discoverTopicNotesFromR2 } from "./topicDiscoveryService";
 import { 
@@ -173,32 +174,56 @@ export async function getUserDocument(uid: string): Promise<any> {
   }
 }
 
+export type VerificationStatus = 
+  | "success"
+  | "user_not_found" 
+  | "missing_user_doc" 
+  | "missing_student_doc" 
+  | "permission_denied" 
+  | "network_error" 
+  | "timeout" 
+  | "inactive";
+
 export interface RoleVerificationResult {
   role: "Admin" | "Student" | null;
   studentId: string | null;
   userDoc: any | null;
+  status: VerificationStatus;
+  errorMessage?: string;
 }
 
 /**
  * Strict database-only role verification by authenticated Firebase UID and Email.
  * Flow:
  * 1. Get authenticated user's UID and email.
- * 2. Check whether UID/email exists in Students collection/table (or users table with role "Student").
- *    If found -> return { role: "Student", studentId }. Stop all further checks.
- * 3. Check whether UID/email exists in Admins collection/table (or users table with role "Admin").
- *    If found -> return { role: "Admin", studentId: null }.
- * 4. If UID/email exists in neither Students nor Admins -> return { role: null, studentId: null }.
- * 5. If database query fails -> throws Error so authentication fails immediately.
+ * 2. Look up /users/{uid} document directly (allowed by security rules for authenticated user).
+ * 3. Verify student profile or admin credentials deterministically.
+ * 4. Distinguishes precisely between:
+ *    - true non-existence
+ *    - permission denied
+ *    - network unavailable / timeout
+ *    - missing /users/{uid} document
+ *    - missing /students/{studentId} document
  */
 export async function verifyUserRoleFromDatabase(uid: string, userEmail?: string | null): Promise<RoleVerificationResult> {
+  AuthLogger.stage("verifyUserRoleFromDatabase:START", { uid, userEmail });
+
   if (!uid || typeof uid !== "string") {
-    return { role: null, studentId: null, userDoc: null };
+    AuthLogger.warn("verifyUserRoleFromDatabase", "Invalid or missing UID provided");
+    return { 
+      role: null, 
+      studentId: null, 
+      userDoc: null, 
+      status: "user_not_found", 
+      errorMessage: "Invalid user identifier." 
+    };
   }
 
   const normalizedEmail = userEmail ? userEmail.trim().toLowerCase() : "";
 
   // Helper to check local/cached data
-  const checkLocalData = (): RoleVerificationResult => {
+  const checkLocalData = (fallbackStatus: VerificationStatus = "success"): RoleVerificationResult => {
+    AuthLogger.stage("verifyUserRoleFromDatabase:CHECK_LOCAL_DATA", { uid, normalizedEmail });
     const cachedUsersStr = localStorage.getItem(STORAGE_KEY_USERS);
     const localUsers = cachedUsersStr ? JSON.parse(cachedUsersStr) : {};
     const userDoc = localUsers[uid] || (normalizedEmail ? Object.values(localUsers).find((u: any) => u.email?.toLowerCase().trim() === normalizedEmail) : null);
@@ -215,19 +240,23 @@ export async function verifyUserRoleFromDatabase(uid: string, userEmail?: string
     // 1. Check Students collection/table first
     if (studentByRecord || (userDoc && String(userDoc.role).trim().toLowerCase() === "student")) {
       const studentId = studentByRecord?.id || userDoc?.studentId || uid;
+      AuthLogger.lookup("local_student_resolved", { studentId, uid });
       return {
         role: "Student",
         studentId,
-        userDoc: userDoc || { uid, role: "Student", studentId }
+        userDoc: userDoc || { uid, role: "Student", studentId },
+        status: fallbackStatus === "success" ? "success" : fallbackStatus
       };
     }
 
     // 2. Check Admins collection/table second
     if (userDoc && String(userDoc.role).trim().toLowerCase() === "admin") {
+      AuthLogger.lookup("local_admin_resolved", { uid });
       return {
         role: "Admin",
         studentId: null,
-        userDoc
+        userDoc,
+        status: fallbackStatus === "success" ? "success" : fallbackStatus
       };
     }
 
@@ -241,7 +270,8 @@ export async function verifyUserRoleFromDatabase(uid: string, userEmail?: string
         return {
           role: "Admin",
           studentId: null,
-          userDoc: adminByEmail
+          userDoc: adminByEmail,
+          status: fallbackStatus === "success" ? "success" : fallbackStatus
         };
       }
     }
@@ -252,288 +282,196 @@ export async function verifyUserRoleFromDatabase(uid: string, userEmail?: string
       return {
         role: cachedSession.role === "admin" ? "Admin" : "Student",
         studentId: cachedSession.studentId || null,
-        userDoc: { uid, role: cachedSession.role === "admin" ? "Admin" : "Student", studentId: cachedSession.studentId }
+        userDoc: { uid, role: cachedSession.role === "admin" ? "Admin" : "Student", studentId: cachedSession.studentId },
+        status: fallbackStatus === "success" ? "success" : fallbackStatus
       };
     }
 
-    return { role: null, studentId: null, userDoc: null };
+    return { 
+      role: null, 
+      studentId: null, 
+      userDoc: null, 
+      status: "user_not_found", 
+      errorMessage: "No user account found." 
+    };
   };
 
   const performLiveLookup = async (): Promise<RoleVerificationResult> => {
     try {
       const db = await getFirebaseDb();
-
       if (!db) {
+        AuthLogger.warn("performLiveLookup", "Firebase DB not ready, using local cache");
         return checkLocalData();
       }
 
-      // ----------------------------------------------------
-      // FIRESTORE LIVE DATABASE LOOKUP
-      // ----------------------------------------------------
+      AuthLogger.stage("performLiveLookup:READ_USER_DOC", { path: `users/${uid}` });
 
-      // 1. CHECK STUDENTS COLLECTION / TABLE FIRST
-      // A) Direct doc in students/{uid}
-      try {
-        const studentDocRef = doc(db, "students", uid);
-        const studentDocSnap = await getDoc(studentDocRef);
-        if (studentDocSnap.exists()) {
-          const studentData = studentDocSnap.data() as Student;
-          const res: RoleVerificationResult = {
-            role: "Student",
-            studentId: studentData.id || uid,
-            userDoc: { uid, role: "Student", studentId: studentData.id || uid }
-          };
-          saveCachedAuthSession({ uid, email: normalizedEmail || studentData.email || "", role: "student", studentId: res.studentId });
-          return res;
-        }
-      } catch (err) {
-        console.warn("[verifyUserRoleFromDatabase] Direct student doc lookup warning:", err);
-      }
-
-      // B) Direct doc in users/{uid} for Student role
+      // Step 1: Direct document lookup at /users/{uid}
       let userDoc: any = null;
+      let userDocExists = false;
+
       try {
         const userDocRef = doc(db, "users", uid);
         const userDocSnap = await getDoc(userDocRef);
         if (userDocSnap.exists()) {
           userDoc = userDocSnap.data();
-          if (userDoc && userDoc.role && String(userDoc.role).trim().toLowerCase() === "student") {
-            const studentId = userDoc.studentId || uid;
-            const res: RoleVerificationResult = {
-              role: "Student",
-              studentId,
-              userDoc
-            };
-            saveCachedAuthSession({ uid, email: normalizedEmail || userDoc.email || "", role: "student", studentId });
-            return res;
-          }
+          userDocExists = true;
+          AuthLogger.lookup(`users/${uid}`, { exists: true, role: userDoc?.role, studentId: userDoc?.studentId });
+        } else {
+          AuthLogger.lookup(`users/${uid}`, { exists: false });
         }
-      } catch (err) {
-        console.warn("[verifyUserRoleFromDatabase] Direct user doc lookup warning:", err);
-      }
-
-      // C) Check if userDoc has studentId pointing to students collection doc
-      if (userDoc && userDoc.studentId) {
-        try {
-          const targetStudentRef = doc(db, "students", userDoc.studentId);
-          const targetStudentSnap = await getDoc(targetStudentRef);
-          if (targetStudentSnap.exists()) {
-            const res: RoleVerificationResult = {
-              role: "Student",
-              studentId: userDoc.studentId,
-              userDoc
-            };
-            saveCachedAuthSession({ uid, email: normalizedEmail || userDoc.email || "", role: "student", studentId: userDoc.studentId });
-            return res;
-          }
-        } catch (err) {
-          console.warn("[verifyUserRoleFromDatabase] Target student ref lookup warning:", err);
-        }
-      }
-
-      // D) Query students collection where uid == uid
-      try {
-        const studentsColRef = collection(db, "students");
-        const qUid = query(studentsColRef, where("uid", "==", uid));
-        const snapUid = await getDocs(qUid);
-        if (!snapUid.empty) {
-          const studentData = snapUid.docs[0].data() as Student;
-          const res: RoleVerificationResult = {
-            role: "Student",
-            studentId: studentData.id || uid,
-            userDoc: userDoc || { uid, role: "Student", studentId: studentData.id || uid }
+      } catch (err: any) {
+        AuthLogger.error(`users/${uid}`, err);
+        const errCode = err?.code || "";
+        if (errCode === "permission-denied") {
+          return {
+            role: null,
+            studentId: null,
+            userDoc: null,
+            status: "permission_denied",
+            errorMessage: `Access denied by security rules for user profile (/users/${uid}).`
           };
-          saveCachedAuthSession({ uid, email: normalizedEmail || studentData.email || "", role: "student", studentId: res.studentId });
-          return res;
         }
-
-        // E) Query students collection where email == normalizedEmail
-        if (normalizedEmail) {
-          const qEmail = query(studentsColRef, where("email", "==", normalizedEmail));
-          const snapEmail = await getDocs(qEmail);
-          if (!snapEmail.empty) {
-            const studentData = snapEmail.docs[0].data() as Student;
-            const res: RoleVerificationResult = {
-              role: "Student",
-              studentId: studentData.id || uid,
-              userDoc: userDoc || { uid, role: "Student", studentId: studentData.id || uid }
-            };
-            saveCachedAuthSession({ uid, email: normalizedEmail || studentData.email || "", role: "student", studentId: res.studentId });
-            return res;
-          }
+        if (errCode === "unavailable" || String(err?.message || "").toLowerCase().includes("offline")) {
+          return checkLocalData("network_error");
         }
-      } catch (e) {
-        console.warn("Error querying students collection:", e);
       }
 
-      // F) Query users collection where email == normalizedEmail and role == Student
-      if (normalizedEmail) {
-        try {
-          const usersColRef = collection(db, "users");
-          const qUsersEmail = query(usersColRef, where("email", "==", normalizedEmail));
-          const snapUsersEmail = await getDocs(qUsersEmail);
-          for (const docSnap of snapUsersEmail.docs) {
-            const data = docSnap.data();
-            if (data && String(data.role || "").trim().toLowerCase() === "student") {
+      // Step 2: Handle when /users/{uid} was found
+      if (userDocExists && userDoc) {
+        const normalizedRole = String(userDoc.role || "").trim().toLowerCase();
+
+        if (normalizedRole === "student") {
+          const studentId = userDoc.studentId || uid;
+          AuthLogger.stage("performLiveLookup:VERIFY_STUDENT_DOC", { studentId });
+
+          // Verify /students/{studentId} exists in Firestore
+          try {
+            const studentDocRef = doc(db, "students", studentId);
+            const studentDocSnap = await getDoc(studentDocRef);
+            if (studentDocSnap.exists()) {
+              const studentData = studentDocSnap.data() as Student;
               const res: RoleVerificationResult = {
                 role: "Student",
-                studentId: data.studentId || uid,
-                userDoc: data
+                studentId: studentData.id || studentId,
+                userDoc,
+                status: "success"
               };
-              saveCachedAuthSession({ uid, email: normalizedEmail || data.email || "", role: "student", studentId: res.studentId });
+              saveCachedAuthSession({ uid, email: normalizedEmail || userDoc.email || "", role: "student", studentId: res.studentId });
+              AuthLogger.stage("performLiveLookup:SUCCESS", res);
               return res;
             }
+          } catch (stErr: any) {
+            AuthLogger.warn("performLiveLookup:studentDocCheck", stErr);
           }
-        } catch (e) {
-          console.warn("Error querying users collection by email for student:", e);
+
+          // Fallback to local cache verification for student doc
+          const localStudents = getLocalStudents();
+          const foundLocal = localStudents.find((s) => s.id === studentId || s.uid === uid);
+          if (foundLocal) {
+            const res: RoleVerificationResult = {
+              role: "Student",
+              studentId: foundLocal.id || studentId,
+              userDoc,
+              status: "success"
+            };
+            saveCachedAuthSession({ uid, email: normalizedEmail || userDoc.email || "", role: "student", studentId: res.studentId });
+            return res;
+          }
+
+          // If neither Firestore nor local cache contains the student document:
+          AuthLogger.error("performLiveLookup:MISSING_STUDENT_DOC", { studentId, uid });
+          return {
+            role: null,
+            studentId,
+            userDoc,
+            status: "missing_student_doc",
+            errorMessage: `Student profile record (/students/${studentId}) was not found in the database. Please contact your administrator.`
+          };
         }
-      }
 
-      // STUDENT CHECK FINISHED -> If student was found, we already returned.
-
-      // 2. CHECK ADMINS COLLECTION / TABLE SECOND
-      // A) Check direct doc in admins/{uid}
-      try {
-        const adminDocRef = doc(db, "admins", uid);
-        const adminDocSnap = await getDoc(adminDocRef);
-        if (adminDocSnap.exists()) {
+        if (normalizedRole === "admin") {
           const res: RoleVerificationResult = {
             role: "Admin",
             studentId: null,
-            userDoc: adminDocSnap.data()
+            userDoc,
+            status: "success"
           };
-          saveCachedAuthSession({ uid, email: normalizedEmail || adminDocSnap.data()?.email || "", role: "admin", studentId: null });
+          saveCachedAuthSession({ uid, email: normalizedEmail || userDoc.email || "", role: "admin", studentId: null });
+          AuthLogger.stage("performLiveLookup:SUCCESS", res);
           return res;
         }
-      } catch (err) {
-        console.warn("[verifyUserRoleFromDatabase] Direct admin doc lookup warning:", err);
       }
 
-      // B) Check direct doc in users/{uid} for Admin role
-      if (userDoc && userDoc.role && String(userDoc.role).trim().toLowerCase() === "admin") {
-        const res: RoleVerificationResult = {
-          role: "Admin",
-          studentId: null,
-          userDoc
-        };
-        saveCachedAuthSession({ uid, email: normalizedEmail || userDoc.email || "", role: "admin", studentId: null });
-        return res;
-      }
-
-      // C) Query admins collection where uid == uid
+      // Step 3: Handle when /users/{uid} was NOT found (Attempt recovery via /students/{uid})
+      AuthLogger.stage("performLiveLookup:CHECK_DIRECT_STUDENT_ID", { path: `students/${uid}` });
       try {
-        const adminsColRef = collection(db, "admins");
-        const qAdminUid = query(adminsColRef, where("uid", "==", uid));
-        const snapAdminUid = await getDocs(qAdminUid);
-        if (!snapAdminUid.empty) {
+        const directStudentRef = doc(db, "students", uid);
+        const directStudentSnap = await getDoc(directStudentRef);
+        if (directStudentSnap.exists()) {
+          const studentData = directStudentSnap.data() as Student;
+          const resolvedStudentId = studentData.id || uid;
+
+          // Self-heal: Create missing /users/{uid} document seamlessly
+          const autoUserDoc = {
+            uid,
+            name: studentData.name || "Student",
+            email: normalizedEmail || studentData.email?.toLowerCase() || "",
+            role: "Student",
+            studentId: resolvedStudentId,
+            active: true,
+            temporaryPasswordRequired: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastLogin: new Date().toISOString()
+          };
+          setDoc(doc(db, "users", uid), autoUserDoc, { merge: true }).catch((e) => {
+            AuthLogger.warn("performLiveLookup:autoHealUserDoc", e);
+          });
+
           const res: RoleVerificationResult = {
-            role: "Admin",
-            studentId: null,
-            userDoc: snapAdminUid.docs[0].data()
+            role: "Student",
+            studentId: resolvedStudentId,
+            userDoc: autoUserDoc,
+            status: "success"
           };
-          saveCachedAuthSession({ uid, email: normalizedEmail || snapAdminUid.docs[0].data()?.email || "", role: "admin", studentId: null });
+          saveCachedAuthSession({ uid, email: normalizedEmail || studentData.email || "", role: "student", studentId: resolvedStudentId });
+          AuthLogger.stage("performLiveLookup:SELF_HEALED_SUCCESS", res);
           return res;
         }
-
-        // D) Query admins collection where email == normalizedEmail
-        if (normalizedEmail) {
-          const qAdminEmail = query(adminsColRef, where("email", "==", normalizedEmail));
-          const snapAdminEmail = await getDocs(qAdminEmail);
-          if (!snapAdminEmail.empty) {
-            const res: RoleVerificationResult = {
-              role: "Admin",
-              studentId: null,
-              userDoc: snapAdminEmail.docs[0].data()
-            };
-            saveCachedAuthSession({ uid, email: normalizedEmail || snapAdminEmail.docs[0].data()?.email || "", role: "admin", studentId: null });
-            return res;
-          }
-        }
-      } catch (e) {
-        console.warn("Error querying admins collection:", e);
+      } catch (err: any) {
+        AuthLogger.warn("performLiveLookup:directStudentCheck", err);
       }
 
-      // E) Query users collection for Admin record by email or scanning users collection
-      if (normalizedEmail) {
-        try {
-          const usersColRef = collection(db, "users");
-          const qUsersEmail = query(usersColRef, where("email", "==", normalizedEmail));
-          const snapUsersEmail = await getDocs(qUsersEmail);
-          for (const docSnap of snapUsersEmail.docs) {
-            const data = docSnap.data();
-            if (data && String(data.role || "").trim().toLowerCase() === "admin") {
-              // Ensure record has correct UID attached
-              if (data.uid !== uid) {
-                try {
-                  await setDoc(doc(db, "users", docSnap.id), { uid }, { merge: true });
-                } catch (e) {
-                  // Ignore sync error
-                }
-              }
-              const res: RoleVerificationResult = {
-                role: "Admin",
-                studentId: null,
-                userDoc: { ...data, uid }
-              };
-              saveCachedAuthSession({ uid, email: normalizedEmail, role: "admin", studentId: null });
-              return res;
-            }
-          }
-        } catch (e) {
-          console.warn("Error querying users collection by email for admin:", e);
-        }
-      }
-
-      // F) Fallback scan of users collection in Firestore to support custom doc ID formats
-      try {
-        const usersColRef = collection(db, "users");
-        const snapAllUsers = await getDocs(usersColRef);
-        for (const d of snapAllUsers.docs) {
-          const u = d.data();
-          const matchesUid = u.uid === uid || d.id === uid;
-          const matchesEmail = normalizedEmail && u.email?.toLowerCase().trim() === normalizedEmail;
-          const isAdminRole = String(u.role || "").trim().toLowerCase() === "admin";
-
-          if ((matchesUid || matchesEmail) && isAdminRole) {
-            const res: RoleVerificationResult = {
-              role: "Admin",
-              studentId: null,
-              userDoc: { ...u, uid }
-            };
-            saveCachedAuthSession({ uid, email: normalizedEmail || u.email || "", role: "admin", studentId: null });
-            return res;
-          }
-        }
-      } catch (e) {
-        console.warn("Error scanning users collection for admin:", e);
-      }
-
-      // 3. Fallback check to local data before returning null
+      // Step 4: Check local cache fallback
       const localResult = checkLocalData();
       if (localResult.role) {
         return localResult;
       }
 
-      // 4. NEITHER STUDENTS NOR ADMINS RECORD EXISTS FOR THIS UID / EMAIL
+      // Step 5: User profile is genuinely missing
+      AuthLogger.error("performLiveLookup:MISSING_USER_DOC", { uid, email: normalizedEmail });
       return {
         role: null,
         studentId: null,
-        userDoc: null
+        userDoc: null,
+        status: "missing_user_doc",
+        errorMessage: `User profile record (/users/${uid}) was not found in the database. Please contact your administrator.`
       };
 
-    } catch (err) {
-      console.warn("[verifyUserRoleFromDatabase] Error during database role check, using local fallback:", err);
-      return checkLocalData();
+    } catch (err: any) {
+      AuthLogger.error("performLiveLookup:FATAL", err);
+      return checkLocalData("network_error");
     }
   };
 
-  // Enforce a strict 2500ms safety race against local cache to prevent startup deadlocks
+  // Enforce a strict 3500ms safety race against local cache
   let timeoutHandle: any;
   const timeoutPromise = new Promise<RoleVerificationResult>((resolve) => {
     timeoutHandle = setTimeout(() => {
-      console.warn("[verifyUserRoleFromDatabase] Network role verification timed out after 2500ms, using local session fallback");
-      resolve(checkLocalData());
-    }, 2500);
+      AuthLogger.warn("verifyUserRoleFromDatabase", "Network role verification timed out after 3500ms, using local session fallback");
+      resolve(checkLocalData("timeout"));
+    }, 3500);
   });
 
   try {
@@ -542,7 +480,7 @@ export async function verifyUserRoleFromDatabase(uid: string, userEmail?: string
     return result;
   } catch (err) {
     clearTimeout(timeoutHandle);
-    return checkLocalData();
+    return checkLocalData("network_error");
   }
 }
 
@@ -666,12 +604,15 @@ export function subscribeToStudents(
   let unsubscribeFirestore: (() => void) | null = null;
   let active = true;
 
+  AuthLogger.subscription("StudentsList", "INIT");
+
   async function setup() {
     const db = await getFirebaseDb();
     if (!active) return;
 
     if (!db) {
       // Local Sandbox/Offline Mode: Trigger immediate update and register listener
+      AuthLogger.subscription("StudentsList", "LOCAL_SANDBOX_LOAD");
       onUpdate(getLocalStudents());
       const listener: StudentsListener = (updatedList) => {
         if (active) onUpdate(updatedList);
@@ -691,7 +632,12 @@ export function subscribeToStudents(
           if (!active) return;
           const list: Student[] = [];
           snap.forEach((docSnap) => {
-            const data = docSnap.data() as Student;
+            const raw = docSnap.data() as Student;
+            if (!raw) return;
+            const data: Student = {
+              ...raw,
+              id: raw.id || docSnap.id
+            };
             if (
               data &&
               data.id &&
@@ -708,19 +654,21 @@ export function subscribeToStudents(
               deleteDoc(docSnap.ref).catch(() => {});
             }
           });
+          AuthLogger.subscription("StudentsList", "SNAPSHOT_RECEIVED", { count: list.length });
           onUpdate(list);
           // Also sync with localStorage cache for offline seamless use
           safeSetStorage(STORAGE_KEY_STUDENTS, JSON.stringify(list));
         },
         (err) => {
-          console.error("Firestore onSnapshot error", err);
+          AuthLogger.error("subscribeToStudents:onSnapshot", err);
           if (onError) onError(err);
           // Fallback to local cache on error
           onUpdate(getLocalStudents());
         }
       );
     } catch (err) {
-      console.warn("Failed to subscribe to students collection, falling back to local storage.", err);
+      AuthLogger.warn("subscribeToStudents:setup", err);
+      if (onError) onError(err);
       onUpdate(getLocalStudents());
     }
   }
@@ -729,6 +677,7 @@ export function subscribeToStudents(
 
   return () => {
     active = false;
+    AuthLogger.subscription("StudentsList", "UNSUBSCRIBE");
     if (unsubscribeFirestore) {
       unsubscribeFirestore();
     }
@@ -745,6 +694,20 @@ export function subscribeToStudent(
 ): () => void {
   let unsubscribeFirestore: (() => void) | null = null;
   let active = true;
+
+  AuthLogger.subscription("SingleStudent", "INIT", { studentId });
+
+  // Deliver cached student immediately if available to prevent any blank screen
+  try {
+    const cachedStudents = getLocalStudents();
+    const foundCached = cachedStudents.find((s) => s.id === studentId);
+    if (foundCached) {
+      AuthLogger.subscription("SingleStudent", "DELIVER_CACHED_IMMEDIATE", { studentId, name: foundCached.name });
+      onUpdate(foundCached);
+    }
+  } catch (e) {
+    // Ignore cache error
+  }
 
   async function setup() {
     const db = await getFirebaseDb();
@@ -776,16 +739,58 @@ export function subscribeToStudent(
         (snap) => {
           if (!active) return;
           if (snap.exists()) {
-            onUpdate(snap.data() as Student);
+            const raw = snap.data() as Student;
+            const data: Student = {
+              ...raw,
+              id: raw.id || snap.id || studentId
+            };
+            AuthLogger.subscription("SingleStudent", "DOC_RECEIVED", { studentId: data.id, name: data.name });
+            onUpdate(data);
+
+            // Update local storage cache seamlessly
+            try {
+              const current = getLocalStudents();
+              const idx = current.findIndex((s) => s.id === data.id);
+              if (idx >= 0) {
+                current[idx] = data;
+              } else {
+                current.push(data);
+              }
+              safeSetStorage(STORAGE_KEY_STUDENTS, JSON.stringify(current));
+            } catch (storageErr) {
+              // Ignore cache write error
+            }
+          } else {
+            AuthLogger.warn("subscribeToStudent", `Document students/${studentId} does not exist`);
+            // Check local cache before reporting error
+            const cachedStudents = getLocalStudents();
+            const foundCached = cachedStudents.find((s) => s.id === studentId);
+            if (foundCached) {
+              onUpdate(foundCached);
+            } else if (onError) {
+              onError(new Error(`Student profile (${studentId}) was not found in Firestore.`));
+            }
           }
         },
         (err) => {
-          console.error("Single student subscription failed:", err);
+          AuthLogger.error("subscribeToStudent:onSnapshot", err);
           if (onError) onError(err);
+          // Fallback to local cache on error so offline/resumed mode remains responsive
+          const cachedStudents = getLocalStudents();
+          const foundCached = cachedStudents.find((s) => s.id === studentId);
+          if (foundCached && active) {
+            onUpdate(foundCached);
+          }
         }
       );
     } catch (err) {
-      console.warn("Failed to subscribe to single student doc. Using local fallback.", err);
+      AuthLogger.error("subscribeToStudent:setup", err);
+      if (onError) onError(err);
+      const cachedStudents = getLocalStudents();
+      const foundCached = cachedStudents.find((s) => s.id === studentId);
+      if (foundCached && active) {
+        onUpdate(foundCached);
+      }
     }
   }
 
@@ -793,6 +798,7 @@ export function subscribeToStudent(
 
   return () => {
     active = false;
+    AuthLogger.subscription("SingleStudent", "UNSUBSCRIBE", { studentId });
     if (unsubscribeFirestore) {
       unsubscribeFirestore();
     }
@@ -898,6 +904,97 @@ export async function deleteStudentDoc(studentId: string): Promise<void> {
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `students/${studentId}`);
     }
+  }
+}
+
+/**
+ * Atomic student creation workflow.
+ * Guarantees that Firebase Auth user, /users/{uid}, and /students/{studentId} are created deterministically.
+ * If any step fails, performs a full rollback so no orphaned Auth or Firestore records remain.
+ */
+export async function createStudentAccountAtomic(
+  newStudentData: Student,
+  password?: string
+): Promise<Student> {
+  const studentId = newStudentData.id || `student-${Date.now()}`;
+  const student: Student = {
+    ...newStudentData,
+    id: studentId
+  };
+
+  let createdAuthUid: string | null = null;
+  let createdUserDoc: boolean = false;
+  let createdStudentDoc: boolean = false;
+
+  AuthLogger.stage("createStudentAccountAtomic:START", { studentId, email: student.email });
+
+  try {
+    // Step 1: Create Firebase Auth credentials (if email is provided)
+    if (student.email && student.email.trim()) {
+      const { createNewUserAuth } = await import("./firebase");
+      const tempPassword = password || "123456";
+      createdAuthUid = await createNewUserAuth(student.email.trim().toLowerCase(), tempPassword);
+      student.uid = createdAuthUid;
+      AuthLogger.stage("createStudentAccountAtomic:AUTH_CREATED", { uid: createdAuthUid });
+
+      // Step 2: Create /users/{uid} document
+      const studentUserDoc = {
+        uid: createdAuthUid,
+        name: student.name,
+        email: student.email.trim().toLowerCase(),
+        role: "Student",
+        studentId: studentId,
+        active: true,
+        temporaryPasswordRequired: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastLogin: null
+      };
+      await saveUserDocument(createdAuthUid, studentUserDoc);
+      createdUserDoc = true;
+      AuthLogger.stage("createStudentAccountAtomic:USER_DOC_SAVED", { uid: createdAuthUid });
+    }
+
+    // Step 3: Create /students/{studentId} document
+    await saveStudentDoc(student);
+    createdStudentDoc = true;
+    AuthLogger.stage("createStudentAccountAtomic:STUDENT_DOC_SAVED", { studentId });
+
+    return student;
+  } catch (err: any) {
+    AuthLogger.error("createStudentAccountAtomic:FAILED_ROLLING_BACK", err);
+
+    // Rollback Step 3
+    if (createdStudentDoc) {
+      try {
+        await deleteStudentDoc(studentId);
+        AuthLogger.stage("createStudentAccountAtomic:ROLLBACK_STUDENT_DOC", { studentId });
+      } catch (rbErr) {
+        AuthLogger.warn("createStudentAccountAtomic:rollbackStudentDoc", rbErr);
+      }
+    }
+
+    // Rollback Step 2
+    if (createdUserDoc && createdAuthUid) {
+      try {
+        await deleteUserDocument(createdAuthUid);
+        AuthLogger.stage("createStudentAccountAtomic:ROLLBACK_USER_DOC", { uid: createdAuthUid });
+      } catch (rbErr) {
+        AuthLogger.warn("createStudentAccountAtomic:rollbackUserDoc", rbErr);
+      }
+    }
+
+    // Rollback Step 1
+    if (createdAuthUid) {
+      try {
+        await deleteUserAuthCredentials(createdAuthUid);
+        AuthLogger.stage("createStudentAccountAtomic:ROLLBACK_AUTH", { uid: createdAuthUid });
+      } catch (rbErr) {
+        AuthLogger.warn("createStudentAccountAtomic:rollbackAuth", rbErr);
+      }
+    }
+
+    throw err;
   }
 }
 

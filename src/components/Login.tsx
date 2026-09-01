@@ -161,23 +161,41 @@ export default function Login({ onLoginSuccess, onInstitutionNameLoaded }: Login
       let roleResult: RoleVerificationResult;
       try {
         roleResult = await verifyUserRoleFromDatabase(user.uid, user.email || emailInput);
-      } catch (dbErr) {
+      } catch (dbErr: any) {
         console.error("Database role lookup error:", dbErr);
         await auth.signOut();
-        setError("Network error. Unable to verify account.");
+        setError("Network connection error. Unable to verify account.");
         progressService.fail();
         setLoading(false);
         return;
       }
 
-      const { role, studentId, userDoc } = roleResult;
+      const { role, studentId, userDoc, status, errorMessage } = roleResult;
 
-      // If UID exists in neither Students nor Admins -> sign out immediately and display "No user exists."
+      // If role could not be resolved -> distinguish the root cause clearly
       if (!role) {
         await auth.signOut();
-        setError("No user exists.");
         progressService.fail();
         setLoading(false);
+
+        if (status === "permission_denied") {
+          setError(errorMessage || "Access denied by security permissions. Please contact administrator.");
+          return;
+        }
+        if (status === "missing_student_doc") {
+          setError(errorMessage || "Student profile document not found. Please contact administrator.");
+          return;
+        }
+        if (status === "missing_user_doc") {
+          setError(errorMessage || "User account record not found in database. Please contact administrator.");
+          return;
+        }
+        if (status === "network_error" || status === "timeout") {
+          setError("Network timeout verifying account. Please check your connection and try again.");
+          return;
+        }
+
+        setError("No user exists.");
         return;
       }
 
