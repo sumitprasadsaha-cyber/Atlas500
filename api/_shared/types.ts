@@ -31,7 +31,11 @@ export type StorageAction =
   | "get-node"
   | "list-nodes"
   | "discover-topics"
-  | "migrate-hierarchy";
+  | "migrate-hierarchy"
+  | "health"
+  | "status"
+  | "ping"
+  | "test";
 
 export interface StorageNodeRequest {
   bucket?: string;

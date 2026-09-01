@@ -46,6 +46,12 @@ export function sendError(res: any, error: any, defaultMessage: string = "Intern
         message: error.message,
         code: error.code || "OBJECT_NOT_FOUND",
       });
+    } else if (error.statusCode === 400) {
+      console.warn("[API Validation Notice]", {
+        message: error.message,
+        code: error.code || defaultCode || "VALIDATION_ERROR",
+        details: error.details,
+      });
     } else {
       console.error("[API Error Handler]", {
         message: error.message,
@@ -60,7 +66,7 @@ export function sendError(res: any, error: any, defaultMessage: string = "Intern
       error: error.message,
       code: error.code || defaultCode || "HTTP_ERROR",
       details: error.details,
-      stack: process.env.NODE_ENV !== "production" && error.statusCode !== 404 ? error.stack : undefined,
+      stack: process.env.NODE_ENV !== "production" && error.statusCode >= 500 ? error.stack : undefined,
     });
   }
 
@@ -71,6 +77,8 @@ export function sendError(res: any, error: any, defaultMessage: string = "Intern
 
   if (statusCode === 404 || code === "OBJECT_NOT_FOUND") {
     console.info("[API Notice] Resource not found:", { message, code });
+  } else if (statusCode === 400 || code === "VALIDATION_ERROR") {
+    console.warn("[API Validation Notice]:", { message, code, details: error?.details });
   } else {
     console.error("[API Error Handler]", {
       message,

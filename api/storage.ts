@@ -36,6 +36,10 @@ const ALLOWED_ACTIONS = [
   "list-nodes",
   "discover-topics",
   "migrate-hierarchy",
+  "health",
+  "status",
+  "ping",
+  "test",
 ] as const;
 
 /**
@@ -76,11 +80,24 @@ export default async function handler(req: any, res: any) {
     const parsedBody = parseRequestBody(req.body);
     const params = extractCombinedParams(req, parsedBody);
 
+    const hasKey = Boolean(
+      params.key ||
+      params.storageKey ||
+      params.storagePath ||
+      params.objectKey ||
+      params.r2Key ||
+      params.path
+    );
+
     // Determine action from query, body, or URL
     const actionParam =
       params.action ||
-      (req.method === "GET" && (params.key || params.storageKey || params.storagePath) ? "download" : "upload");
-    const action = validateAction<StorageAction>(actionParam, ALLOWED_ACTIONS, "download");
+      (req.method === "GET" && hasKey
+        ? "download"
+        : req.method === "GET"
+        ? "health"
+        : "upload");
+    const action = validateAction<StorageAction>(actionParam, ALLOWED_ACTIONS, "health");
 
     const config = getR2ServerConfig();
     const actualBucket = (params.bucket || config.bucket || "academy-connect-files").trim();
@@ -1003,6 +1020,21 @@ export default async function handler(req: any, res: any) {
           totalChecked: 0,
           totalCreated: 0,
           createdKeys: [],
+        });
+      }
+
+      // 14. HEALTH / STATUS / PING / TEST
+      case "health":
+      case "status":
+      case "ping":
+      case "test": {
+        return sendSuccess(res, {
+          success: true,
+          status: "ok",
+          service: "storage",
+          action,
+          isConfigured: isR2Configured(),
+          bucket: actualBucket,
         });
       }
 
