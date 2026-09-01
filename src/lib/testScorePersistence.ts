@@ -31,7 +31,11 @@ import {
 } from "./r2Client";
 
 const PRACTICE_TESTS_BUCKET = getR2BucketName();
-const TEST_SCORE_CACHE_KEY = "tuition_student_test_score_cache";
+const CANONICAL_ATTEMPTS_CACHE_KEY = "tuition_student_test_attempts";
+const LEGACY_SCORE_CACHE_KEYS = [
+  "tuition_student_test_score_cache",
+  "tuition_test_attempts_cache",
+];
 
 async function downloadJsonFromR2<T>(key: string): Promise<T | null> {
   try {
@@ -467,9 +471,10 @@ export function clearTestScoreCache(): void {
   inFlightScoreRequests.clear();
   if (typeof window === "undefined") return;
   try {
-    localStorage.removeItem(TEST_SCORE_CACHE_KEY);
-    localStorage.removeItem("tuition_student_test_score_cache");
-    localStorage.removeItem("tuition_test_attempts_cache");
+    localStorage.removeItem(CANONICAL_ATTEMPTS_CACHE_KEY);
+    for (const key of LEGACY_SCORE_CACHE_KEYS) {
+      localStorage.removeItem(key);
+    }
   } catch (err) {
     console.warn("[TestScoreService] Error clearing test score cache:", err);
   }
@@ -643,7 +648,9 @@ export async function deleteTopicAttemptsFromPersistence(
   saveLocalTestAttemptsCache(localAttempts);
 
   try {
-    localStorage.removeItem(TEST_SCORE_CACHE_KEY);
+    for (const key of LEGACY_SCORE_CACHE_KEYS) {
+      localStorage.removeItem(key);
+    }
   } catch (e) {}
 
   notifyScoreUpdate();

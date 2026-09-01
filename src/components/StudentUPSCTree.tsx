@@ -73,7 +73,7 @@ export default function StudentUPSCTree({
     return {};
   });
 
-  const [, setTestBankTick] = useState(0);
+  const [testBankTick, setTestBankTick] = useState(0);
   const [downloadingIds, setDownloadingIds] = useState<Record<string, boolean>>({});
   const [localErrorId, setLocalErrorId] = useState<string | null>(null);
   const [localErrorMsg, setLocalErrorMsg] = useState<string>("");
@@ -120,7 +120,7 @@ export default function StudentUPSCTree({
 
   const allAttempts = useMemo(() => {
     return getAllTestAttempts();
-  }, [student?.id, student?.name]);
+  }, [student?.id, student?.name, testBankTick]);
 
   const toggleModule = (moduleKey: string) => {
     setExpandedModules((prev) => ({
