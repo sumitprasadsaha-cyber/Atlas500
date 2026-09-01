@@ -13,8 +13,8 @@ export interface AppVersionData {
   baseVersion: string;
 }
 
-// Clean public application version
-export const APP_VERSION: string = "7.8.1";
+import { APP_VERSION, BASE_VERSION } from "./constants/version";
+export { APP_VERSION, BASE_VERSION };
 
 export const GIT_COMMIT: string = "production";
 
@@ -25,8 +25,6 @@ export const GIT_BRANCH: string = "main";
 export const BUILD_TIME: string = "";
 
 export const DEPLOYMENT_ENV: string = "production";
-
-export const BASE_VERSION: string = "7.8.1";
 
 /**
  * Fetches the dynamic runtime version directly from the live /api/version endpoint.

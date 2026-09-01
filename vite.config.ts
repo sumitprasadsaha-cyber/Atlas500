@@ -61,7 +61,7 @@ export default defineConfig(({ command, mode }) => {
         manifest: {
           name: 'Academy Connect',
           short_name: 'Academy',
-          description: 'Academy Connect Tuition Management',
+          description: `Academy Connect Tuition Management v${versionInfo.version}`,
           theme_color: '#2563eb',
           background_color: '#ffffff',
           display: 'standalone',

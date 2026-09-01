@@ -11,6 +11,8 @@ import {
   type GetObjectCommandInput,
   type DeleteObjectCommandInput,
 } from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
+import https from "https";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "stream";
 import fs from "fs";
@@ -383,9 +385,17 @@ export function getMimeTypeFromKey(key: string): string {
 }
 
 /**
+ * Resets the cached S3Client instance so subsequent calls establish a clean socket connection.
+ */
+export function resetR2S3Client(): void {
+  s3ClientInstance = null;
+  lastS3Endpoint = "";
+}
+
+/**
  * Initializes and returns the singleton AWS S3 client configured for Cloudflare R2.
  */
-export function getR2S3Client(): S3Client {
+export function getR2S3Client(forceFresh: boolean = false): S3Client {
   const config = getR2ServerConfig();
   if (!config.accessKeyId || !config.secretAccessKey || !config.endpoint) {
     throw new Error(
@@ -393,7 +403,7 @@ export function getR2S3Client(): S3Client {
     );
   }
 
-  if (!s3ClientInstance || lastS3Endpoint !== config.endpoint) {
+  if (forceFresh || !s3ClientInstance || lastS3Endpoint !== config.endpoint) {
     s3ClientInstance = new S3Client({
       region: "auto",
       endpoint: config.endpoint,
@@ -404,9 +414,19 @@ export function getR2S3Client(): S3Client {
       forcePathStyle: true,
       requestChecksumCalculation: "WHEN_REQUIRED",
       responseChecksumValidation: "WHEN_REQUIRED",
+      maxAttempts: 3,
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: 10000,
+        requestTimeout: 45000,
+        httpsAgent: new https.Agent({
+          keepAlive: true,
+          maxSockets: 50,
+          keepAliveMsecs: 10000,
+        }),
+      }),
     });
     lastS3Endpoint = config.endpoint;
-    console.log(`[R2Server] S3Client initialized successfully for endpoint: "${config.endpoint}", bucket: "${config.bucket}"`);
+    console.log(`[R2Server] S3Client initialized successfully for endpoint: "${config.endpoint}", bucket: "${config.bucket}" (forceFresh: ${forceFresh})`);
   }
   return s3ClientInstance;
 }
@@ -868,7 +888,7 @@ export async function getObjectFromR2(params: {
             requestId: err?.$metadata?.requestId,
           });
           if (err?.$metadata?.httpStatusCode === 403 || err?.code === "AccessDenied" || err?.name === "AccessDenied") {
-            console.error("[Trace 4: R2 403 Forbidden Error]", {
+            console.error("[Trace 4: R2 403 Forbidden Error - Attempting Fresh Socket Retry]", {
               errorSource: "Cloudflare R2 / AWS S3 Client GetObjectCommand",
               location: "src/lib/r2Server.ts:getObjectFromR2",
               bucket: bucketName,
@@ -877,8 +897,38 @@ export async function getObjectFromR2(params: {
               name: err?.name,
               code: err?.code,
               message: err?.message,
-              stack: err?.stack,
             });
+            // Reset S3Client instance to flush dead/stale HTTP keepalive connection pool
+            resetR2S3Client();
+            try {
+              const freshClient = getR2S3Client(true);
+              const freshCommand = new GetObjectCommand({
+                Bucket: bucketName,
+                Key: keyToTry,
+                Range: params.range,
+              });
+              const freshResponse = await freshClient.send(freshCommand);
+              console.log("[Trace 4: R2 Fresh Socket Retry SUCCESS]", {
+                bucket: bucketName,
+                key: keyToTry,
+                status: freshResponse.$metadata?.httpStatusCode || 200,
+              });
+              return {
+                body: (freshResponse.Body as unknown as Readable) || null,
+                contentType: freshResponse.ContentType || getMimeTypeFromKey(keyToTry),
+                contentLength: freshResponse.ContentLength,
+                contentRange: freshResponse.ContentRange,
+                lastModified: freshResponse.LastModified,
+                etag: freshResponse.ETag,
+                metadata: freshResponse.Metadata,
+                resolvedKey: keyToTry,
+              };
+            } catch (retryErr: any) {
+              console.error("[Trace 4: R2 Fresh Socket Retry Failed]", {
+                key: keyToTry,
+                error: retryErr?.message || retryErr,
+              });
+            }
           }
         }
       }

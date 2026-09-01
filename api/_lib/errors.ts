@@ -41,8 +41,8 @@ export class NotFoundError extends HttpError {
 }
 
 export class StorageError extends HttpError {
-  constructor(message: string, code: string = "STORAGE_ERROR", details?: any) {
-    super(500, message, code, details);
+  constructor(message: string, code: string = "STORAGE_ERROR", statusCode: number = 500, details?: any) {
+    super(statusCode, message, code, details);
     this.name = "StorageError";
   }
 }

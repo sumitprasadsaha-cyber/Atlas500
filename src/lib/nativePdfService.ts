@@ -247,6 +247,20 @@ export async function verifyDocumentBlob(
 
 let previousBlobUrl: string | null = null;
 
+let activeNoteAbortController: AbortController | null = null;
+
+/**
+ * Cancels any active note binary download currently in progress.
+ */
+export function cancelActiveNoteDownload(): void {
+  if (activeNoteAbortController) {
+    try {
+      activeNoteAbortController.abort();
+    } catch {}
+    activeNoteAbortController = null;
+  }
+}
+
 /**
  * Revokes any previously allocated object URL to prevent memory leaks and blob collisions.
  */
@@ -273,8 +287,21 @@ export async function fetchNoteBlobWithCache(
   const mimeType = getNoteMimeType(fileName, options.mimeType, options.fileType);
   const bucket = options.bucket || "academy-connect-files";
 
-  // 1. Revoke any previous Blob Object URL before opening a new note
+  // 1. Cancel any prior download and revoke previous Blob Object URL
+  cancelActiveNoteDownload();
   revokePreviousNoteBlob();
+
+  const internalController = new AbortController();
+  activeNoteAbortController = internalController;
+
+  if (signal) {
+    if (signal.aborted) {
+      internalController.abort();
+    } else {
+      signal.addEventListener("abort", () => internalController.abort(), { once: true });
+    }
+  }
+  const effectiveSignal = internalController.signal;
 
   // 2. Offline check
   if (!notesCacheService.getOnlineStatus() || (typeof navigator !== "undefined" && !navigator.onLine)) {
@@ -317,10 +344,13 @@ export async function fetchNoteBlobWithCache(
 
   let response: Response;
   try {
-    response = await fetch(targetUrl, { signal, cache: "no-store" });
+    response = await fetch(targetUrl, { signal: effectiveSignal, cache: "no-store" });
   } catch (netErr: any) {
     topicDownloadProgress.clearProgress(topicId);
     if (options.noteId && canonicalStoragePath) topicDownloadProgress.clearProgress(canonicalStoragePath);
+    if (effectiveSignal.aborted) {
+      throw new Error("Note download was cancelled.");
+    }
     console.error("[NoteDeliveryPipeline] Network fetch failed:", {
       storagePath: canonicalStoragePath,
       targetUrl,
@@ -334,6 +364,11 @@ export async function fetchNoteBlobWithCache(
     if (options.noteId && canonicalStoragePath) topicDownloadProgress.clearProgress(canonicalStoragePath);
 
     const responseStatus = response.status;
+    let errorDetails: any = null;
+    try {
+      errorDetails = await response.json();
+    } catch {}
+
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((val, key) => {
       responseHeaders[key] = val;
@@ -346,13 +381,20 @@ export async function fetchNoteBlobWithCache(
       status: responseStatus,
       statusText: response.statusText,
       headers: responseHeaders,
+      errorDetails,
     });
 
-    notesLogger.error("DOWNLOAD_ERROR", { storageKey: canonicalStoragePath, fileName, status: responseStatus });
+    notesLogger.error("DOWNLOAD_ERROR", { storageKey: canonicalStoragePath, fileName, status: responseStatus, extra: { details: errorDetails } });
     if (responseStatus === 404) {
       throw new Error(`Note not found: The file "${canonicalStoragePath}" was not found in storage.`);
     }
-    throw new Error(`Failed to load note (Server returned status ${responseStatus}).`);
+    if (responseStatus === 403) {
+      if (errorDetails?.code === "R2_ACCESS_DENIED") {
+        throw new Error("Cloudflare R2 storage credentials denied access. Please check storage settings.");
+      }
+      throw new Error(errorDetails?.error || `Failed to load note (Server returned status 403).`);
+    }
+    throw new Error(errorDetails?.error || `Failed to load note (Server returned status ${responseStatus}).`);
   }
 
   const contentTypeHeader = response.headers.get("content-type");

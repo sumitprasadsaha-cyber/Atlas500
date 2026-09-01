@@ -372,7 +372,9 @@ export default async function handler(req: any, res: any) {
             setCorsHeaders(res);
             res.setHeader("Content-Type", contentType);
             res.setHeader("Accept-Ranges", "bytes");
-            res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+            res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+            res.setHeader("Pragma", "no-cache");
+            res.setHeader("Expires", "0");
             res.setHeader("Content-Disposition", `${isAttachment ? "attachment" : "inline"}; filename="${encodeURIComponent(fileName)}"`);
             if (head.etag) res.setHeader("ETag", head.etag);
             if (head.contentLength) res.setHeader("Content-Length", head.contentLength);
@@ -389,6 +391,12 @@ export default async function handler(req: any, res: any) {
           obj = await getObjectFromR2({ bucket: actualBucket, key: cleanKey, range });
         } catch (getErr: any) {
           console.warn("[Stage 5: Backend Streaming] getObjectFromR2 notice:", getErr?.message || getErr);
+          if (getErr?.code === "R2_ACCESS_DENIED" || getErr?.$metadata?.httpStatusCode === 403) {
+            return sendError(
+              res,
+              new StorageError("Cloudflare R2 storage credentials denied access.", "R2_ACCESS_DENIED", 403)
+            );
+          }
           return sendError(
             res,
             new NotFoundError(`Object not found: "${cleanKey}" does not exist in bucket "${actualBucket}".`)
@@ -411,7 +419,9 @@ export default async function handler(req: any, res: any) {
         setCorsHeaders(res);
         res.setHeader("Content-Type", contentType);
         res.setHeader("Accept-Ranges", "bytes");
-        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
 
         if (obj.etag) res.setHeader("ETag", obj.etag);
         if (obj.contentRange) {
