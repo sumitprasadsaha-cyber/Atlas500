@@ -37,6 +37,7 @@ import {
   saveUserDocument, 
   deleteUserDocument,
   deleteUserAuthCredentials,
+  createAdminAccountAtomic,
   subscribeToAnnouncements,
   saveAnnouncementDoc,
   deleteAnnouncementDoc
@@ -227,20 +228,12 @@ export default function Settings({
     }
     try {
       setLoadingAdmins(true);
-      const uid = await createNewUserAuth(adminEmail.toLowerCase().trim(), adminPassword);
-      const newAdmin = {
-        uid,
+      await createAdminAccountAtomic({
         name: adminName.trim(),
         email: adminEmail.toLowerCase().trim(),
-        phone: "+919609598095",
-        role: "Admin",
-        status: "Active",
-        active: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        lastLogin: null
-      };
-      await saveUserDocument(uid, newAdmin);
+        password: adminPassword,
+        phone: "+919609598095"
+      });
       triggerNotification("Admin account created successfully!");
       setAdminName("");
       setAdminEmail("");
