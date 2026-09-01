@@ -831,12 +831,13 @@ export async function getUserDocByPhone(phone: string): Promise<any> {
  */
 export function subscribeToStudents(
   onUpdate: (students: Student[]) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  authUid?: string | null
 ): () => void {
   let unsubscribeFirestore: (() => void) | null = null;
   let active = true;
 
-  AuthLogger.subscription("StudentsList", "INIT");
+  AuthLogger.subscription("StudentsList", "INIT", { uid: authUid });
 
   async function setup() {
     const db = await getFirebaseDb();
@@ -870,20 +871,8 @@ export function subscribeToStudents(
               ...raw,
               id: raw.id || docSnap.id
             };
-            if (
-              data &&
-              data.id &&
-              data.name &&
-              data.name.trim() !== "" &&
-              data.name.trim().toLowerCase() !== "unnamed student"
-            ) {
+            if (data && data.id) {
               list.push(data);
-            } else if (
-              docSnap.ref &&
-              (!data || !data.name || data.name.trim() === "" || data.name.trim().toLowerCase() === "unnamed student")
-            ) {
-              // Delete orphaned or Unnamed Student records permanently from Firestore
-              deleteDoc(docSnap.ref).catch(() => {});
             }
           });
           AuthLogger.subscription("StudentsList", "SNAPSHOT_RECEIVED", { count: list.length });
@@ -909,7 +898,7 @@ export function subscribeToStudents(
 
   return () => {
     active = false;
-    AuthLogger.subscription("StudentsList", "UNSUBSCRIBE");
+    AuthLogger.subscription("StudentsList", "UNSUBSCRIBE", { uid: authUid });
     if (unsubscribeFirestore) {
       unsubscribeFirestore();
     }
@@ -922,12 +911,13 @@ export function subscribeToStudents(
 export function subscribeToStudent(
   studentId: string,
   onUpdate: (student: Student) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  authUid?: string | null
 ): () => void {
   let unsubscribeFirestore: (() => void) | null = null;
   let active = true;
 
-  AuthLogger.subscription("SingleStudent", "INIT", { studentId });
+  AuthLogger.subscription("SingleStudent", "INIT", { studentId, uid: authUid });
 
   // Deliver cached student immediately if available to prevent any blank screen
   try {
@@ -1316,7 +1306,7 @@ export async function createAdminAccountAtomic(adminData: {
 }
 
 /**
- * Permanently purge any "Unnamed Student" or invalid empty student records across LocalStorage and Firestore.
+ * Permanently purge any invalid empty student records from local memory/cache safely without deleting Firestore documents.
  */
 export async function purgeUnnamedStudents(): Promise<void> {
   // 1. Clean localStorage
@@ -1339,24 +1329,6 @@ export async function purgeUnnamedStudents(): Promise<void> {
     }
   } catch (e) {
     console.warn("[Purge] Error cleaning local students cache:", e);
-  }
-
-  // 2. Clean Firestore if database is available
-  try {
-    const db = await getFirebaseDb();
-    if (db) {
-      const studentsColRef = collection(db, "students");
-      const snap = await getDocs(studentsColRef);
-      snap.forEach(async (docSnap) => {
-        const data = docSnap.data();
-        if (!data || !data.name || data.name.trim() === "" || data.name.trim().toLowerCase() === "unnamed student") {
-          console.log(`[Purge] Permanently deleting Unnamed Student record from Firestore: ${docSnap.id}`);
-          await deleteDoc(docSnap.ref).catch(() => {});
-        }
-      });
-    }
-  } catch (e) {
-    console.warn("[Purge] Error purging Firestore students:", e);
   }
 }
 
