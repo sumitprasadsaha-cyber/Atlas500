@@ -125,6 +125,109 @@ export function safeLocalStorageRemoveItem(key: string): void {
   }
 }
 
+/**
+ * Generates a strictly isolated, user-scoped storage key
+ */
+export function getUserScopedKey(uid: string | null | undefined, keySuffix: string): string {
+  if (!uid || typeof uid !== "string" || !uid.trim()) {
+    return `tuition_${keySuffix}_unauthenticated`;
+  }
+  return `tuition_${keySuffix}_${uid.trim()}`;
+}
+
+/**
+ * Reads user-scoped data securely with JSON parsing
+ */
+export function getUserScopedItem<T = any>(uid: string | null | undefined, keySuffix: string): T | null {
+  if (!uid) return null;
+  const key = getUserScopedKey(uid, keySuffix);
+  const raw = safeLocalStorageGetItem(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    console.warn(`[SafeStorage] Failed parsing user-scoped key "${key}":`, e);
+    return null;
+  }
+}
+
+/**
+ * Stores user-scoped data securely with JSON serialization
+ */
+export function setUserScopedItem(uid: string | null | undefined, keySuffix: string, value: any): void {
+  if (!uid) {
+    console.warn(`[SafeStorage] Attempted to set user-scoped key "${keySuffix}" without valid UID.`);
+    return;
+  }
+  const key = getUserScopedKey(uid, keySuffix);
+  try {
+    safeLocalStorageSetItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.warn(`[SafeStorage] setUserScopedItem failed for key "${key}":`, e);
+  }
+}
+
+/**
+ * Removes user-scoped item
+ */
+export function removeUserScopedItem(uid: string | null | undefined, keySuffix: string): void {
+  if (!uid) return;
+  const key = getUserScopedKey(uid, keySuffix);
+  safeLocalStorageRemoveItem(key);
+}
+
+/**
+ * Completely purges all cached data owned by a specific UID on logout or session reset
+ */
+export function clearAllUserScopedData(uid?: string | null): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    const targetSuffix = uid ? `_${uid.trim()}` : null;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+
+      if (targetSuffix && k.endsWith(targetSuffix)) {
+        localStorage.removeItem(k);
+      } else if (!uid && (k.startsWith("tuition_students_data") || k.startsWith("tuition_user_data") || k.startsWith("tuition_session_"))) {
+        localStorage.removeItem(k);
+      }
+    }
+  } catch (e) {
+    console.warn("[SafeStorage] clearAllUserScopedData error:", e);
+  }
+}
+
+/**
+ * Migrates legacy un-scoped global caches into UID-scoped keys and purges legacy keys
+ */
+export function migrateLegacyCachesToUserScope(uid: string): void {
+  if (typeof window === "undefined" || !window.localStorage || !uid || !uid.trim()) return;
+  try {
+    // 1. Legacy global students cache
+    const legacyStudents = localStorage.getItem("tuition_students_data");
+    if (legacyStudents) {
+      const scopedKey = getUserScopedKey(uid, "students_data");
+      if (!localStorage.getItem(scopedKey)) {
+        localStorage.setItem(scopedKey, legacyStudents);
+      }
+      localStorage.removeItem("tuition_students_data");
+    }
+
+    // 2. Legacy global users cache
+    const legacyUsers = localStorage.getItem("tuition_users_data");
+    if (legacyUsers) {
+      const scopedKey = getUserScopedKey(uid, "user_data");
+      if (!localStorage.getItem(scopedKey)) {
+        localStorage.setItem(scopedKey, legacyUsers);
+      }
+      localStorage.removeItem("tuition_users_data");
+    }
+  } catch (err) {
+    console.warn("[SafeStorage] Legacy cache migration notice:", err);
+  }
+}
+
 // Automatically execute safety check on script load
 if (typeof window !== "undefined") {
   autoCleanupStorageIfOverLimit(1.5);

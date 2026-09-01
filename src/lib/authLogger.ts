@@ -1,55 +1,100 @@
 /**
- * Development-only diagnostic logging for Authentication & Firestore lifecycle.
- * In production builds (NODE_ENV === 'production'), all logging methods are silent no-ops.
+ * Production-grade structured diagnostic logging for Session, Cache, Auth, Role, Student, Sync, Resume, Logout, and Validation lifecycles.
  */
 
-const IS_DEV = process.env.NODE_ENV !== "production";
+export interface StructuredLogContext {
+  uid?: string | null;
+  studentId?: string | null;
+  requestId?: string;
+  sessionId?: string;
+  cacheOwner?: string | null;
+  [key: string]: any;
+}
+
+function formatContext(ctx?: StructuredLogContext): string {
+  if (!ctx) return "";
+  const parts: string[] = [];
+  if (ctx.uid) parts.push(`uid=${ctx.uid}`);
+  if (ctx.studentId) parts.push(`studentId=${ctx.studentId}`);
+  if (ctx.sessionId) parts.push(`sessionId=${ctx.sessionId}`);
+  if (ctx.cacheOwner) parts.push(`cacheOwner=${ctx.cacheOwner}`);
+  if (ctx.requestId) parts.push(`reqId=${ctx.requestId}`);
+  return parts.length > 0 ? ` [${parts.join(" ")}]` : "";
+}
+
+export const StructuredLogger = {
+  session(action: string, ctx?: StructuredLogContext, details?: any) {
+    console.log(`[Session] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  cache(action: string, ctx?: StructuredLogContext, details?: any) {
+    console.log(`[Cache] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  auth(action: string, ctx?: StructuredLogContext, details?: any) {
+    console.log(`[Auth] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  role(action: string, ctx?: StructuredLogContext, details?: any) {
+    console.log(`[Role] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  student(action: string, ctx?: StructuredLogContext, details?: any) {
+    console.log(`[Student] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  sync(action: string, ctx?: StructuredLogContext, details?: any) {
+    console.log(`[Sync] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  resume(action: string, ctx?: StructuredLogContext, details?: any) {
+    console.log(`[Resume] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  logout(action: string, ctx?: StructuredLogContext, details?: any) {
+    console.log(`[Logout] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  validation(action: string, ctx?: StructuredLogContext, details?: any) {
+    console.log(`[Validation] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  warn(category: string, action: string, ctx?: StructuredLogContext, details?: any) {
+    console.warn(`[${category}:WARN] ${action}${formatContext(ctx)}`, details !== undefined ? details : "");
+  },
+
+  error(category: string, action: string, ctx?: StructuredLogContext, error?: any) {
+    console.error(`[${category}:ERROR] ${action}${formatContext(ctx)}`, error !== undefined ? error : "");
+  }
+};
 
 export const AuthLogger = {
   stage(stageName: string, details?: any) {
-    if (!IS_DEV) return;
-    if (details !== undefined) {
-      console.log(`[AuthPipeline:${stageName}]`, details);
-    } else {
-      console.log(`[AuthPipeline:${stageName}]`);
-    }
+    StructuredLogger.auth(stageName, details);
   },
 
   query(collectionName: string, queryInfo: any) {
-    if (!IS_DEV) return;
-    console.log(`[FirestoreQuery:${collectionName}]`, queryInfo);
+    StructuredLogger.sync(`query:${collectionName}`, undefined, queryInfo);
   },
 
   lookup(target: string, result: any) {
-    if (!IS_DEV) return;
-    console.log(`[UserLookup:${target}]`, result);
+    StructuredLogger.role(`lookup:${target}`, undefined, result);
   },
 
   subscription(entity: string, event: string, details?: any) {
-    if (!IS_DEV) return;
-    if (details !== undefined) {
-      console.log(`[Subscription:${entity}] ${event}`, details);
-    } else {
-      console.log(`[Subscription:${entity}] ${event}`);
-    }
+    StructuredLogger.sync(`sub:${entity}:${event}`, undefined, details);
   },
 
   render(component: string, status: string, stateInfo?: any) {
-    if (!IS_DEV) return;
-    if (stateInfo !== undefined) {
-      console.log(`[RenderPipeline:${component}] ${status}`, stateInfo);
-    } else {
-      console.log(`[RenderPipeline:${component}] ${status}`);
-    }
+    StructuredLogger.session(`render:${component}:${status}`, undefined, stateInfo);
   },
 
   warn(context: string, warning: any) {
-    if (!IS_DEV) return;
-    console.warn(`[AuthWarning:${context}]`, warning);
+    StructuredLogger.warn("Auth", context, undefined, warning);
   },
 
   error(context: string, error: any) {
-    if (!IS_DEV) return;
-    console.error(`[AuthError:${context}]`, error);
+    StructuredLogger.error("Auth", context, undefined, error);
   }
 };
+

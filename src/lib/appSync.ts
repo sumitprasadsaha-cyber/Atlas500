@@ -21,53 +21,108 @@ import { initPracticeTestsRealtimeSync, fetchAllPracticeTests } from "./practice
 import { cleanupAllListeners } from "./realtimeSync";
 import { subscribeToCurriculumHierarchy } from "./curriculumService";
 import { runDatabaseMigrationsIfNeeded } from "./schemaMigrationService";
+import { StructuredLogger } from "./authLogger";
 
 type UnsubscribeFn = () => void;
 
 interface AppSyncState {
-  initialized: boolean;
+  activeUid: string | null;
+  activeRole: "admin" | "student" | null;
+  activeStudentId: string | null;
+  sessionId: string;
   unsubscribers: Set<UnsubscribeFn>;
   isOnline: boolean;
   syncInterval: NodeJS.Timeout | null;
 }
 
 const appState: AppSyncState = {
-  initialized: false,
+  activeUid: null,
+  activeRole: null,
+  activeStudentId: null,
+  sessionId: "",
   unsubscribers: new Set(),
   isOnline: typeof navigator !== "undefined" ? navigator.onLine : true,
   syncInterval: null
 };
 
 /**
+ * Teardown current active listeners before re-initializing or on user change
+ */
+export function teardownCurrentSync(): void {
+  StructuredLogger.sync("Teardown sync listeners", {
+    uid: appState.activeUid,
+    studentId: appState.activeStudentId,
+    sessionId: appState.sessionId
+  });
+
+  try {
+    appState.unsubscribers.forEach((unsubscribe) => {
+      try {
+        unsubscribe();
+      } catch (err) {
+        StructuredLogger.warn("Sync", "Error unsubscribing listener", undefined, err);
+      }
+    });
+    appState.unsubscribers.clear();
+
+    cleanupAllFirestoreListeners();
+    cleanupAllListeners();
+
+    if (appState.syncInterval) {
+      clearInterval(appState.syncInterval);
+      appState.syncInterval = null;
+    }
+
+    appState.activeUid = null;
+    appState.activeRole = null;
+    appState.activeStudentId = null;
+  } catch (err) {
+    StructuredLogger.error("Sync", "Error during teardown", undefined, err);
+  }
+}
+
+/**
  * Initialize all real-time listeners for admin dashboard
  */
-export function initializeAdminSync(): void {
-  if (appState.initialized) {
-    console.log("[AppSync] Admin sync already initialized, skipping");
+export function initializeAdminSync(adminUid?: string | null): void {
+  const targetUid = adminUid || "admin";
+  
+  if (appState.activeUid === targetUid && appState.activeRole === "admin" && appState.unsubscribers.size > 0) {
+    StructuredLogger.sync("Admin sync already active for this UID, skipping duplicate init", { uid: targetUid });
     return;
   }
 
-  console.log("[AppSync] Initializing Admin synchronization...");
+  // Clean up any existing listeners from a previous session or role
+  teardownCurrentSync();
+
+  const newSessionId = `admin-sync-${Date.now()}`;
+  appState.activeUid = targetUid;
+  appState.activeRole = "admin";
+  appState.activeStudentId = null;
+  appState.sessionId = newSessionId;
+
+  StructuredLogger.sync("Initializing Admin synchronization", { uid: targetUid, sessionId: newSessionId });
 
   try {
     // 1. Subscribe to all students
     const unsubStudents = subscribeToStudents(
       (students) => {
-        console.log(`[AppSync] Students updated: ${students.length} students`);
+        StructuredLogger.sync("Admin students updated", { uid: targetUid }, { count: students.length });
       },
       (err) => {
-        console.warn("[AppSync] Students subscription error:", err);
-      }
+        StructuredLogger.warn("Sync", "Students subscription error", { uid: targetUid }, err);
+      },
+      targetUid
     );
     appState.unsubscribers.add(unsubStudents);
 
     // 2. Subscribe to class notes
     const unsubClassNotes = subscribeToClassNotes(
       (notes) => {
-        console.log(`[AppSync] Class notes updated: ${notes.length} notes`);
+        StructuredLogger.sync("Class notes updated", { uid: targetUid }, { count: notes.length });
       },
       (err) => {
-        console.warn("[AppSync] Class notes subscription error:", err);
+        StructuredLogger.warn("Sync", "Class notes subscription error", { uid: targetUid }, err);
       }
     );
     appState.unsubscribers.add(unsubClassNotes);
@@ -75,10 +130,10 @@ export function initializeAdminSync(): void {
     // 3. Subscribe to announcements
     const unsubAnnouncements = subscribeToAnnouncements(
       (announcements) => {
-        console.log(`[AppSync] Announcements updated: ${announcements.length} announcements`);
+        StructuredLogger.sync("Announcements updated", { uid: targetUid }, { count: announcements.length });
       },
       (err) => {
-        console.warn("[AppSync] Announcements subscription error:", err);
+        StructuredLogger.warn("Sync", "Announcements subscription error", { uid: targetUid }, err);
       }
     );
     appState.unsubscribers.add(unsubAnnouncements);
@@ -86,10 +141,10 @@ export function initializeAdminSync(): void {
     // 4. Subscribe to test attempts (for admin reports)
     const unsubTestAttempts = subscribeToTestAttempts(
       (attempts) => {
-        console.log(`[AppSync] Test attempts updated: ${attempts.length} attempts`);
+        StructuredLogger.sync("Test attempts updated", { uid: targetUid }, { count: attempts.length });
       },
       (err) => {
-        console.warn("[AppSync] Test attempts subscription error:", err);
+        StructuredLogger.warn("Sync", "Test attempts subscription error", { uid: targetUid }, err);
       }
     );
     appState.unsubscribers.add(unsubTestAttempts);
@@ -97,7 +152,7 @@ export function initializeAdminSync(): void {
     // 5. Initialize practice tests real-time sync
     initPracticeTestsRealtimeSync();
     fetchAllPracticeTests().catch((err) => {
-      console.warn("[AppSync] Admin practice tests fetch warning:", err);
+      StructuredLogger.warn("Sync", "Admin practice tests fetch warning", { uid: targetUid }, err);
     });
 
     // 6. Subscribe to curriculum hierarchy (Classes, GS Papers, Subjects, Chapters, Modules)
@@ -106,50 +161,76 @@ export function initializeAdminSync(): void {
 
     // 7. Run safe non-destructive migrations if needed
     runDatabaseMigrationsIfNeeded().catch((err) => {
-      console.warn("[AppSync] Migration check warning:", err);
+      StructuredLogger.warn("Sync", "Migration check warning", { uid: targetUid }, err);
     });
 
     // 8. Set up network connectivity monitoring
     setupNetworkMonitoring();
 
-    appState.initialized = true;
-    console.log("[AppSync] Admin synchronization initialized successfully");
+    StructuredLogger.sync("Admin synchronization initialized successfully", { uid: targetUid, sessionId: newSessionId });
   } catch (err) {
-    console.error("[AppSync] Failed to initialize admin sync:", err);
+    StructuredLogger.error("Sync", "Failed to initialize admin sync", { uid: targetUid }, err);
   }
 }
 
 /**
  * Initialize real-time listeners for student dashboard
  */
-export function initializeStudentSync(studentId: string): void {
-  if (appState.initialized) {
-    console.log("[AppSync] Student sync already initialized, skipping");
+export function initializeStudentSync(studentId: string, authUid?: string | null): void {
+  if (!studentId || (authUid && studentId === authUid)) {
+    StructuredLogger.error("Sync", "Refusing to initialize student sync with invalid student ID or matching UID", {
+      uid: authUid,
+      studentId
+    });
     return;
   }
 
-  console.log(`[AppSync] Initializing Student synchronization for ${studentId}...`);
+  const targetUid = authUid || studentId;
+
+  if (appState.activeUid === targetUid && appState.activeStudentId === studentId && appState.unsubscribers.size > 0) {
+    StructuredLogger.sync("Student sync already active for this session, skipping", {
+      uid: targetUid,
+      studentId
+    });
+    return;
+  }
+
+  // Clean up any existing listeners from previous session
+  teardownCurrentSync();
+
+  const newSessionId = `student-sync-${Date.now()}`;
+  appState.activeUid = targetUid;
+  appState.activeRole = "student";
+  appState.activeStudentId = studentId;
+  appState.sessionId = newSessionId;
+
+  StructuredLogger.sync("Initializing Student synchronization", {
+    uid: targetUid,
+    studentId,
+    sessionId: newSessionId
+  });
 
   try {
     // 1. Subscribe to this student's data
     const unsubStudent = subscribeToStudent(
       studentId,
       (student) => {
-        console.log(`[AppSync] Student data updated: ${student.name}`);
+        StructuredLogger.sync("Student data updated", { uid: targetUid, studentId }, { name: student.name });
       },
       (err) => {
-        console.warn("[AppSync] Student subscription error:", err);
-      }
+        StructuredLogger.warn("Sync", "Student subscription error", { uid: targetUid, studentId }, err);
+      },
+      targetUid
     );
     appState.unsubscribers.add(unsubStudent);
 
     // 2. Subscribe to class notes (for study materials)
     const unsubClassNotes = subscribeToClassNotes(
       (notes) => {
-        console.log(`[AppSync] Class notes updated: ${notes.length} notes`);
+        StructuredLogger.sync("Class notes updated for student", { uid: targetUid, studentId }, { count: notes.length });
       },
       (err) => {
-        console.warn("[AppSync] Class notes subscription error:", err);
+        StructuredLogger.warn("Sync", "Class notes subscription error", { uid: targetUid, studentId }, err);
       }
     );
     appState.unsubscribers.add(unsubClassNotes);
@@ -158,10 +239,10 @@ export function initializeStudentSync(studentId: string): void {
     const unsubTestAttempts = subscribeToTestAttempts(
       (attempts) => {
         const studentAttempts = attempts.filter(a => a.studentId === studentId);
-        console.log(`[AppSync] Test attempts updated for student: ${studentAttempts.length} attempts`);
+        StructuredLogger.sync("Test attempts updated for student", { uid: targetUid, studentId }, { count: studentAttempts.length });
       },
       (err) => {
-        console.warn("[AppSync] Test attempts subscription error:", err);
+        StructuredLogger.warn("Sync", "Test attempts subscription error", { uid: targetUid, studentId }, err);
       }
     );
     appState.unsubscribers.add(unsubTestAttempts);
@@ -169,10 +250,10 @@ export function initializeStudentSync(studentId: string): void {
     // 4. Subscribe to announcements (for notifications)
     const unsubAnnouncements = subscribeToAnnouncements(
       (announcements) => {
-        console.log(`[AppSync] Announcements updated: ${announcements.length} announcements`);
+        StructuredLogger.sync("Announcements updated for student", { uid: targetUid, studentId }, { count: announcements.length });
       },
       (err) => {
-        console.warn("[AppSync] Announcements subscription error:", err);
+        StructuredLogger.warn("Sync", "Announcements subscription error", { uid: targetUid, studentId }, err);
       }
     );
     appState.unsubscribers.add(unsubAnnouncements);
@@ -180,7 +261,7 @@ export function initializeStudentSync(studentId: string): void {
     // 5. Initialize practice tests real-time sync
     initPracticeTestsRealtimeSync();
     fetchAllPracticeTests().catch((err) => {
-      console.warn("[AppSync] Student practice tests fetch warning:", err);
+      StructuredLogger.warn("Sync", "Student practice tests fetch warning", { uid: targetUid, studentId }, err);
     });
 
     // 6. Subscribe to curriculum hierarchy
@@ -190,10 +271,13 @@ export function initializeStudentSync(studentId: string): void {
     // 7. Set up network connectivity monitoring
     setupNetworkMonitoring();
 
-    appState.initialized = true;
-    console.log("[AppSync] Student synchronization initialized successfully");
+    StructuredLogger.sync("Student synchronization initialized successfully", {
+      uid: targetUid,
+      studentId,
+      sessionId: newSessionId
+    });
   } catch (err) {
-    console.error("[AppSync] Failed to initialize student sync:", err);
+    StructuredLogger.error("Sync", "Failed to initialize student sync", { uid: targetUid, studentId }, err);
   }
 }
 
@@ -204,13 +288,13 @@ function setupNetworkMonitoring(): void {
   if (typeof window === "undefined") return;
 
   const handleOnline = () => {
-    console.log("[AppSync] Network connectivity restored, processing sync queue...");
+    StructuredLogger.sync("Network connectivity restored, processing sync queue");
     appState.isOnline = true;
     processSyncQueue();
   };
 
   const handleOffline = () => {
-    console.log("[AppSync] Network connectivity lost, queuing operations...");
+    StructuredLogger.sync("Network connectivity lost, offline mode enabled");
     appState.isOnline = false;
   };
 
@@ -231,73 +315,29 @@ function setupNetworkMonitoring(): void {
 
 /**
  * Process offline sync queue
- * This function would be called when connectivity is restored
  */
 async function processSyncQueue(): Promise<void> {
-  console.log("[AppSync] Checking for pending sync operations...");
-  
-  // Practice tests and other offline operations are already handled by
-  // the practiceTestService and their respective services through
-  // their built-in offline sync mechanisms
-  
+  StructuredLogger.sync("Checking for pending sync operations");
   try {
-    // Note: Offline sync is handled automatically by individual services
-    // This function is a placeholder for future expansion
-    console.log("[AppSync] Sync queue processing check completed");
+    // Practice tests and notes use built-in offline synchronization
   } catch (err) {
-    console.warn("[AppSync] Error during sync queue processing:", err);
+    StructuredLogger.warn("Sync", "Error during sync queue processing", undefined, err);
   }
 }
 
 /**
  * Cleanup all listeners and resources on logout
  */
-export function cleanupOnLogout(): void {
-  console.log("[AppSync] Cleaning up listeners on logout...");
-
-  try {
-    // Unsubscribe all Firebase listeners
-    appState.unsubscribers.forEach((unsubscribe) => {
-      try {
-        unsubscribe();
-      } catch (err) {
-        console.warn("[AppSync] Error unsubscribing listener:", err);
-      }
-    });
-    appState.unsubscribers.clear();
-
-    // Clean up Firestore listeners
-    cleanupAllFirestoreListeners();
-
-    // Clean up realtimeSync listeners
-    cleanupAllListeners();
-
-    // Clear sync interval
-    if (appState.syncInterval) {
-      clearInterval(appState.syncInterval);
-      appState.syncInterval = null;
-    }
-
-    // Reset state
-    appState.initialized = false;
-
-    // Remove network listeners
-    if (typeof window !== "undefined") {
-      window.removeEventListener("online", () => {});
-      window.removeEventListener("offline", () => {});
-    }
-
-    console.log("[AppSync] Cleanup completed successfully");
-  } catch (err) {
-    console.error("[AppSync] Error during cleanup:", err);
-  }
+export function cleanupOnLogout(uid?: string | null): void {
+  StructuredLogger.logout("Cleaning up all synchronization resources on logout", { uid: uid || appState.activeUid });
+  teardownCurrentSync();
 }
 
 /**
  * Cleanup all resources on app unload
  */
 export function cleanupOnUnload(): void {
-  console.log("[AppSync] App unloading, cleaning up all resources...");
+  StructuredLogger.sync("App unloading, cleaning up all sync resources");
   cleanupOnLogout();
 }
 
@@ -306,7 +346,10 @@ export function cleanupOnUnload(): void {
  */
 export function getSyncState() {
   return {
-    initialized: appState.initialized,
+    activeUid: appState.activeUid,
+    activeRole: appState.activeRole,
+    activeStudentId: appState.activeStudentId,
+    sessionId: appState.sessionId,
     isOnline: appState.isOnline,
     listenerCount: appState.unsubscribers.size,
     hasSyncInterval: appState.syncInterval !== null
@@ -321,6 +364,7 @@ if (typeof window !== "undefined") {
 export default {
   initializeAdminSync,
   initializeStudentSync,
+  teardownCurrentSync,
   cleanupOnLogout,
   cleanupOnUnload,
   getSyncState
