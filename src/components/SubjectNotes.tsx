@@ -452,6 +452,34 @@ export default function SubjectNotes({
         // ignore
       }
     }
+    const topicId = note.id;
+    const chapterId = `ch_${note.chapterNo}`;
+    const subjectName = subject;
+
+    // 1. Student clicks topic
+    console.log("[Trace 1: Topic Click]", {
+      topicId,
+      chapterId,
+      subject: subjectName,
+      studentId: studentId || "anonymous",
+    });
+
+    // 2. Log the Firestore document
+    console.log("[Trace 2: Firestore Document]", {
+      storagePath: note.storagePath || (note as any).storage_path || (note as any).objectKey || (note as any).r2Key || "",
+      bucket: note.bucket || "academy-connect-files",
+      contentType: note.mimeType || (note as any).contentType || (note as any).mime_type || "application/pdf",
+      fileName: note.pdfFileName || note.fileName || (note as any).filename || "note.pdf",
+      allUrlFields: {
+        pdfUrl: note.pdfUrl || "",
+        downloadUrl: (note as any).downloadUrl || "",
+        publicUrl: (note as any).publicUrl || "",
+        fileUrl: (note as any).fileUrl || "",
+        url: (note as any).url || "",
+        signedUrl: (note as any).signedUrl || "",
+      },
+    });
+
     const topicFormatted = getFormattedTopicLabel(note);
     const title = topicFormatted || `Chapter ${note.chapterNo} - ${note.chapterName}`;
 

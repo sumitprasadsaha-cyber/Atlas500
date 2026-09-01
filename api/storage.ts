@@ -3,6 +3,7 @@ import { handleOptions, sendSuccess, sendError, setCorsHeaders } from "./_lib/re
 import { validateAction } from "./_lib/validation.js";
 import { NotFoundError, ValidationError, StorageError } from "./_lib/errors.js";
 import { sanitizeKey, getMimeType, parseRequestBody, extractUploadPayload } from "./_lib/utils.js";
+import { verifyUserAuth } from "./_lib/auth.js";
 import {
   uploadObjectToR2,
   getObjectFromR2,
@@ -308,6 +309,43 @@ export default async function handler(req: any, res: any) {
             new ValidationError("Invalid storage key: Missing or empty 'key' parameter.")
           );
         }
+
+        // Trace 4: Log incoming backend request & auth verification result
+        let authUser: any = null;
+        try {
+          authUser = await verifyUserAuth(req);
+        } catch (authErr: any) {
+          authUser = { error: authErr?.message || "Auth error", role: "anonymous" };
+        }
+
+        console.log("[Trace 4: Backend Request]", {
+          incomingRequest: {
+            path: req.path || req.url,
+            method: req.method,
+            queryParams: req.query || {},
+            headers: {
+              host: req.headers?.host,
+              origin: req.headers?.origin,
+              referer: req.headers?.referer,
+              "user-agent": req.headers?.["user-agent"],
+              authorization: req.headers?.authorization ? "Bearer [REDACTED]" : "None",
+              "x-user-id": req.headers?.["x-user-id"],
+              "x-user-role": req.headers?.["x-user-role"],
+              range: req.headers?.range,
+            },
+          },
+          authVerificationResult: {
+            uid: authUser?.uid || "anonymous",
+            role: authUser?.role || "student",
+            permissions: authUser?.permissions || ["notes:read"],
+            isAllowed: true,
+          },
+          r2S3ClientRequest: {
+            bucket: actualBucket,
+            key: cleanKey,
+            method: req.method === "HEAD" ? "HeadObject" : "GetObject",
+          },
+        });
 
         console.log(`[Stage 2: Key Resolution] Storage Key Resolved for Download:`, {
           stage: "2_KEY_RESOLUTION",

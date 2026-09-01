@@ -346,6 +346,35 @@ export default function StudentUPSCTree({
                               setDownloadingIds((prev) => ({ ...prev, [topic.id]: true }));
 
                               const topicId = topic.id;
+                              const chapterId = mod.moduleKey || `mod_${chapterNo}`;
+                              const subjectName = targetSubj;
+                              const studentId = student?.id || "anonymous";
+
+                              // 1. Student clicks topic
+                              console.log("[Trace 1: Topic Click]", {
+                                topicId,
+                                chapterId,
+                                subject: subjectName,
+                                studentId,
+                              });
+
+                              // 2. Log the Firestore document
+                              const noteDoc = topic.note || ({} as any);
+                              console.log("[Trace 2: Firestore Document]", {
+                                storagePath: noteDoc.storagePath || (noteDoc as any).storage_path || (noteDoc as any).objectKey || (noteDoc as any).r2Key || "",
+                                bucket: noteDoc.bucket || "academy-connect-files",
+                                contentType: noteDoc.mimeType || (noteDoc as any).contentType || (noteDoc as any).mime_type || "application/pdf",
+                                fileName: noteDoc.pdfFileName || noteDoc.fileName || (noteDoc as any).filename || "note.pdf",
+                                allUrlFields: {
+                                  pdfUrl: noteDoc.pdfUrl || "",
+                                  downloadUrl: (noteDoc as any).downloadUrl || "",
+                                  publicUrl: (noteDoc as any).publicUrl || "",
+                                  fileUrl: (noteDoc as any).fileUrl || "",
+                                  url: (noteDoc as any).url || "",
+                                  signedUrl: (noteDoc as any).signedUrl || "",
+                                },
+                              });
+
                               const topicName = topic.topicName || topic.topicLabel || (topic.note as any)?.topicTitle || (topic as any).name || "";
                               const noteUrl = topic.note?.pdfUrl || topic.note?.storagePath || (topic.note as any)?.url || (topic.note as any)?.downloadUrl || "";
                               console.log("Topic ID:", topicId);

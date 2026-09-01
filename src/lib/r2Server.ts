@@ -655,11 +655,30 @@ export async function headObjectFromR2(params: {
 
     for (const keyToTry of candidateKeys) {
       try {
+        console.log("[Trace 4: R2 S3 Client Request]", {
+          bucket: bucketName,
+          key: keyToTry,
+          operation: "HeadObject",
+        });
+
         const command = new HeadObjectCommand({
           Bucket: bucketName,
           Key: keyToTry,
         });
         const response = await client.send(command);
+
+        console.log("[Trace 4: R2 Response]", {
+          operation: "HeadObject",
+          bucket: bucketName,
+          key: keyToTry,
+          status: response.$metadata?.httpStatusCode || 200,
+          headers: {
+            "content-type": response.ContentType,
+            "content-length": response.ContentLength,
+            etag: response.ETag,
+            "last-modified": response.LastModified?.toISOString(),
+          },
+        });
 
         console.log(`[Stage 3: R2 Existence Check] Success:`, {
           stage: "3_R2_EXISTENCE_CHECK",
@@ -780,6 +799,13 @@ export async function getObjectFromR2(params: {
 
     for (const keyToTry of candidateKeys) {
       try {
+        console.log("[Trace 4: R2 S3 Client Request]", {
+          bucket: bucketName,
+          key: keyToTry,
+          operation: "GetObject",
+          range: params.range,
+        });
+
         const input: GetObjectCommandInput = {
           Bucket: bucketName,
           Key: keyToTry,
@@ -787,6 +813,20 @@ export async function getObjectFromR2(params: {
         };
         const command = new GetObjectCommand(input);
         const response = await client.send(command);
+
+        console.log("[Trace 4: R2 Response]", {
+          operation: "GetObject",
+          bucket: bucketName,
+          key: keyToTry,
+          status: response.$metadata?.httpStatusCode || 200,
+          headers: {
+            "content-type": response.ContentType,
+            "content-length": response.ContentLength,
+            "content-range": response.ContentRange,
+            etag: response.ETag,
+            "last-modified": response.LastModified?.toISOString(),
+          },
+        });
 
         console.log(`[Stage 5: Backend Streaming] S3 GetObject stream opened:`, {
           stage: "5_BACKEND_STREAMING",
@@ -827,6 +867,19 @@ export async function getObjectFromR2(params: {
             message: err?.message,
             requestId: err?.$metadata?.requestId,
           });
+          if (err?.$metadata?.httpStatusCode === 403 || err?.code === "AccessDenied" || err?.name === "AccessDenied") {
+            console.error("[Trace 4: R2 403 Forbidden Error]", {
+              errorSource: "Cloudflare R2 / AWS S3 Client GetObjectCommand",
+              location: "src/lib/r2Server.ts:getObjectFromR2",
+              bucket: bucketName,
+              key: keyToTry,
+              status: 403,
+              name: err?.name,
+              code: err?.code,
+              message: err?.message,
+              stack: err?.stack,
+            });
+          }
         }
       }
     }
