@@ -32,6 +32,16 @@ import {
   preloadQuestionImages
 } from "../lib/practiceTestService";
 import { fetchStudentScore } from "../lib/testScorePersistence";
+import { TestTimerDisplay } from "./TestTimerDisplay";
+import {
+  startTestSession,
+  endTestSession,
+  updateTestDraft,
+  loadTestDraft,
+  clearTestDraft,
+  saveTestDraftSync
+} from "../lib/testSessionManager";
+import { testDiagnostics } from "../lib/testDiagnostics";
 
 interface StudentPracticeTestModalProps {
   isOpen?: boolean;
@@ -106,14 +116,17 @@ export default function StudentPracticeTestModal({
     );
   }
   // Test State
-  const initialQuestions = getQuestionsSync(
-    classGrade,
-    subject,
-    chapterNo,
-    topicName,
-    testType,
-    { publishedOnly: true }
-  );
+  const initialQuestions = React.useMemo(() => {
+    if (!isOpen) return [];
+    return getQuestionsSync(
+      classGrade,
+      subject,
+      chapterNo,
+      topicName,
+      testType,
+      { publishedOnly: true }
+    ) || [];
+  }, [isOpen, classGrade, subject, chapterNo, topicName, testType]);
 
   const [isLoading, setIsLoading] = useState<boolean>(!initialQuestions || initialQuestions.length === 0);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -122,10 +135,11 @@ export default function StudentPracticeTestModal({
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [userAnswers, setUserAnswers] = useState<Record<string, string>>({});
   const [zoomImage, setZoomImage] = useState<{ url: string; label?: string } | null>(null);
+  const [restoredFromDraft, setRestoredFromDraft] = useState<boolean>(false);
   
-  // Timer State
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  // Timer State - decoupled from parent modal rendering to prevent 1-second full-page rerenders
+  const [initialElapsedSeconds, setInitialElapsedSeconds] = useState(0);
+  const timerSecondsRef = useRef<number>(0);
 
   // Result & Attempt record state
   const [lastAttemptRecord, setLastAttemptRecord] = useState<TestAttemptRecord | null>(null);
@@ -143,13 +157,70 @@ export default function StudentPracticeTestModal({
     }
   }, [testStage, currentQuestionIdx]);
 
-  // Instant open & cache performance measurement
+  // Lazy image preloading: only preload images for current and immediate next question
+  useEffect(() => {
+    if (testStage === "active" && questions.length > 0) {
+      preloadQuestionImages(questions.slice(currentQuestionIdx, currentQuestionIdx + 2), 2);
+    }
+  }, [testStage, currentQuestionIdx, questions]);
+
+  // Instant open & cache performance measurement + draft recovery
   useEffect(() => {
     if (!isOpen) return;
 
     const openStartTime = performance.now();
     const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
     let isMounted = true;
+
+    // Calculate next attempt number
+    const nextNum = getStudentNextAttemptNumber(
+      studentId,
+      classGrade,
+      subject,
+      chapterNo,
+      topicName,
+      testType
+    );
+    setAttemptCount(nextNum);
+
+    const applyQuestionsAndRestore = (loadedQuestions: ParsedAssessmentQuestion[]) => {
+      setQuestions(loadedQuestions);
+      setIsLoading(false);
+      setFetchError(null);
+
+      // Lazy preload: only first 2 questions
+      preloadQuestionImages(loadedQuestions.slice(0, 2), 2);
+
+      // Check for crash recovery / existing draft from interrupted attempt
+      const draft = loadTestDraft(undefined, studentId, testId, nextNum);
+      if (draft && draft.userAnswers && Object.keys(draft.userAnswers).length > 0) {
+        console.log(`[TestSession] Restoring interrupted draft attempt for testId: ${testId}`);
+        setUserAnswers(draft.userAnswers);
+        const safeIdx = Math.min(Math.max(0, draft.currentQuestionIdx || 0), Math.max(0, loadedQuestions.length - 1));
+        setCurrentQuestionIdx(safeIdx);
+        setInitialElapsedSeconds(draft.elapsedSeconds || 0);
+        timerSecondsRef.current = draft.elapsedSeconds || 0;
+        setRestoredFromDraft(true);
+        setTestStage("active");
+
+        startTestSession({
+          testId,
+          studentId,
+          studentName,
+          attemptNumber: nextNum,
+          questions: loadedQuestions,
+          totalQuestions: loadedQuestions.length
+        });
+        testDiagnostics.recordCrashRecovery();
+      } else {
+        setTestStage("intro");
+        setCurrentQuestionIdx(0);
+        setUserAnswers({});
+        setInitialElapsedSeconds(0);
+        timerSecondsRef.current = 0;
+        setRestoredFromDraft(false);
+      }
+    };
 
     // 1. Check synchronous in-memory cache first
     const cached = getQuestionsSync(
@@ -163,13 +234,8 @@ export default function StudentPracticeTestModal({
 
     if (cached && cached.length > 0) {
       const durationMs = Math.round(performance.now() - openStartTime);
-      console.log(`[PracticeTest] Cache Hit: ${testId}`);
-      console.log(`[PracticeTest] Practice Test Open Time: { testId: "${testId}", durationMs: ${durationMs}, cacheHit: true }`);
-
-      setQuestions(cached);
-      setIsLoading(false);
-      setFetchError(null);
-      preloadQuestionImages(cached);
+      console.log(`[PracticeTest] Cache Hit: ${testId} (${durationMs}ms)`);
+      applyQuestionsAndRestore(cached);
 
       // Fetch student score history in background without blocking UI
       if (studentId) {
@@ -183,25 +249,19 @@ export default function StudentPracticeTestModal({
       }
     } else {
       // 2. Cache Miss (rare): Fetch in background
-      console.log(`[PracticeTest] Cache Miss: ${testId}`);
       setIsLoading(true);
       setFetchError(null);
 
       fetchQuestions(classGrade, subject, chapterNo, topicName, testType, { publishedOnly: true })
         .then((qList) => {
           if (!isMounted) return;
-          const durationMs = Math.round(performance.now() - openStartTime);
-          console.log(`[PracticeTest] Practice Test Open Time: { testId: "${testId}", durationMs: ${durationMs}, cacheHit: false }`);
-
           if (Array.isArray(qList) && qList.length > 0) {
-            setQuestions(qList);
-            preloadQuestionImages(qList);
-            setFetchError(null);
+            applyQuestionsAndRestore(qList);
           } else {
             setQuestions([]);
             setFetchError("No practice questions found for this topic yet.");
+            setIsLoading(false);
           }
-          setIsLoading(false);
         })
         .catch((err) => {
           if (!isMounted) return;
@@ -210,7 +270,6 @@ export default function StudentPracticeTestModal({
           setIsLoading(false);
         });
 
-      // Also fetch score
       if (studentId) {
         fetchStudentScore(studentId, classGrade, subject, chapterNo, topicName, testType)
           .then((studentScore) => {
@@ -222,76 +281,97 @@ export default function StudentPracticeTestModal({
       }
     }
 
-    const handleRealtimeUpdate = () => {
-      if (testStageRef.current !== "result") {
-        const fresh = getQuestionsSync(classGrade, subject, chapterNo, topicName, testType, { publishedOnly: true });
-        if (fresh && fresh.length > 0 && isMounted) {
-          setQuestions(fresh);
-          preloadQuestionImages(fresh);
-        }
-      }
-    };
-    window.addEventListener("practice-tests-updated", handleRealtimeUpdate);
-    window.addEventListener("test-attempts-updated", handleRealtimeUpdate);
-
-    setTestStage("intro");
-    setCurrentQuestionIdx(0);
-    setUserAnswers({});
-    setElapsedSeconds(0);
-
-    // Calculate next attempt number
-    const nextNum = getStudentNextAttemptNumber(
-      studentId,
-      classGrade,
-      subject,
-      chapterNo,
-      topicName,
-      testType
-    );
-    setAttemptCount(nextNum);
-
     return () => {
       isMounted = false;
-      window.removeEventListener("practice-tests-updated", handleRealtimeUpdate);
-      window.removeEventListener("test-attempts-updated", handleRealtimeUpdate);
+      if (testStageRef.current === "active") {
+        saveTestDraftSync();
+        endTestSession();
+      }
     };
   }, [isOpen, studentId, classGrade, subject, chapterNo, topicName, testType]);
-
-  // Timer loop
-  useEffect(() => {
-    if (testStage === "active") {
-      timerRef.current = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [testStage]);
 
   if (!isOpen) return null;
 
   const handleStartTest = () => {
     if (questions.length === 0) return;
+    const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
+    const nextAttempt = testStage === "result" ? attemptCount + 1 : attemptCount;
+    setAttemptCount(nextAttempt);
+    startTestSession({
+      testId,
+      studentId,
+      studentName,
+      attemptNumber: nextAttempt,
+      questions,
+      totalQuestions: questions.length
+    });
     setTestStage("active");
     setCurrentQuestionIdx(0);
     setUserAnswers({});
-    setElapsedSeconds(0);
+    setInitialElapsedSeconds(0);
+    timerSecondsRef.current = 0;
+    setRestoredFromDraft(false);
+    updateTestDraft({ userAnswers: {}, currentQuestionIdx: 0, elapsedSeconds: 0 });
   };
 
   const handleSelectAnswer = (questionId: string, answerKey: string) => {
-    setUserAnswers((prev) => ({
-      ...prev,
+    const nextAnswers = {
+      ...userAnswers,
       [questionId]: answerKey
-    }));
+    };
+    setUserAnswers(nextAnswers);
+    updateTestDraft({
+      userAnswers: nextAnswers,
+      currentQuestionIdx,
+      elapsedSeconds: timerSecondsRef.current
+    });
+  };
+
+  const handleNextQuestion = () => {
+    if (currentQuestionIdx < questions.length - 1) {
+      const nextIdx = currentQuestionIdx + 1;
+      setCurrentQuestionIdx(nextIdx);
+      updateTestDraft({
+        currentQuestionIdx: nextIdx,
+        elapsedSeconds: timerSecondsRef.current
+      });
+    }
+  };
+
+  const handlePrevQuestion = () => {
+    if (currentQuestionIdx > 0) {
+      const prevIdx = currentQuestionIdx - 1;
+      setCurrentQuestionIdx(prevIdx);
+      updateTestDraft({
+        currentQuestionIdx: prevIdx,
+        elapsedSeconds: timerSecondsRef.current
+      });
+    }
+  };
+
+  const handlePeriodicAutosave = (secs: number) => {
+    if (testStageRef.current === "active") {
+      updateTestDraft({
+        elapsedSeconds: secs
+      });
+    }
+  };
+
+  const handleClose = () => {
+    if (testStage === "active") {
+      updateTestDraft({
+        userAnswers,
+        currentQuestionIdx,
+        elapsedSeconds: timerSecondsRef.current
+      });
+      saveTestDraftSync();
+      endTestSession();
+    }
+    onClose();
   };
 
   const handleSubmitTest = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-
+    const finalElapsedSeconds = timerSecondsRef.current;
     let correctCount = 0;
     let wrongCount = 0;
     let unattemptedCount = 0;
@@ -304,15 +384,12 @@ export default function StudentPracticeTestModal({
       }
 
       if (q.type !== "true_false") {
-        // q.correctAnswer is e.g. "B" or "1. B"
-        // studentAns is option letter e.g. "B" or full string
         if (studentAns.toLowerCase().startsWith(q.correctAnswer.toLowerCase())) {
           correctCount++;
         } else {
           wrongCount++;
         }
       } else {
-        // True / False
         if (studentAns.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()) {
           correctCount++;
         } else {
@@ -355,7 +432,7 @@ export default function StudentPracticeTestModal({
       attemptNumber: attemptCount,
       date: formattedDate,
       timestamp: Date.now(),
-      timeTakenSeconds: elapsedSeconds,
+      timeTakenSeconds: finalElapsedSeconds,
       score,
       totalMarks: totalQuestions,
       totalQuestions,
@@ -367,14 +444,10 @@ export default function StudentPracticeTestModal({
     };
 
     saveTestAttempt(attemptRecord);
+    clearTestDraft(undefined, studentId, testId, attemptCount);
+    endTestSession();
     setLastAttemptRecord(attemptRecord);
     setTestStage("result");
-  };
-
-  const formatTime = (totalSecs: number) => {
-    const mins = Math.floor(totalSecs / 60);
-    const secs = totalSecs % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
   const currentQuestion = questions[currentQuestionIdx];
@@ -404,14 +477,14 @@ export default function StudentPracticeTestModal({
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {testStage === "active" && (
-              <div className="h-[28px] sm:h-[32px] px-2.5 bg-blue-700/80 dark:bg-blue-800/80 border border-white/25 rounded-full flex items-center gap-1.5 text-xs font-mono font-bold text-white shadow-xs">
-                <Clock className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                <span>{formatTime(elapsedSeconds)}</span>
-              </div>
-            )}
+            <TestTimerDisplay
+              isActive={testStage === "active"}
+              initialSeconds={initialElapsedSeconds}
+              timerSecondsRef={timerSecondsRef}
+              onPeriodicAutosave={handlePeriodicAutosave}
+            />
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="w-7 h-7 sm:w-8 sm:h-8 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-white transition cursor-pointer shrink-0"
               title="Close"
             >
@@ -500,6 +573,13 @@ export default function StudentPracticeTestModal({
                   {Object.keys(userAnswers).length} / {questions.length} Answered
                 </span>
               </div>
+
+              {restoredFromDraft && (
+                <div className="p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 text-xs font-semibold flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                  <span>Interrupted test session recovered. Your previous answers and timer have been restored.</span>
+                </div>
+              )}
 
               {/* Question Card - Clear & Balanced Typography */}
               <div className="p-4 sm:p-5 rounded-xl bg-slate-50/90 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 my-2 shadow-2xs space-y-3">
@@ -735,7 +815,7 @@ export default function StudentPracticeTestModal({
               <div className="grid grid-cols-2 gap-2.5 sm:gap-4 pt-3 mt-4 border-t border-slate-200 dark:border-slate-800">
                 <button
                   disabled={currentQuestionIdx === 0}
-                  onClick={() => setCurrentQuestionIdx((prev) => prev - 1)}
+                  onClick={handlePrevQuestion}
                   className="h-11 sm:h-12 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold text-xs sm:text-sm hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-1 transition-all"
                 >
                   <ChevronLeft className="w-4 h-4" />
@@ -744,7 +824,7 @@ export default function StudentPracticeTestModal({
 
                 {currentQuestionIdx < questions.length - 1 ? (
                   <button
-                    onClick={() => setCurrentQuestionIdx((prev) => prev + 1)}
+                    onClick={handleNextQuestion}
                     className="h-11 sm:h-12 bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs sm:text-sm rounded-xl shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1"
                   >
                     <span>Next Question</span>
@@ -896,7 +976,7 @@ export default function StudentPracticeTestModal({
                 </button>
 
                 <button
-                  onClick={onClose}
+                  onClick={handleClose}
                   className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white text-xs font-black uppercase tracking-wider rounded-xl transition cursor-pointer shadow-md"
                 >
                   Close & Return

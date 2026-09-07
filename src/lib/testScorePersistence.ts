@@ -79,6 +79,10 @@ export async function fetchTestAttemptsFromR2Storage(): Promise<TestAttemptRecor
 // In-memory cache for fast, synchronous UI reads
 let inMemoryAttempts: TestAttemptRecord[] = [];
 
+// In-flight request deduplication map to prevent concurrent executions
+const inFlightStudentAttemptFetches = new Map<string, Promise<TestAttemptRecord[]>>();
+const lastFetchTimePerStudent = new Map<string, number>();
+
 // Session cache for student scores per topic & student to eliminate redundant network requests
 const scoreSessionCache = new Map<string, TestAttemptRecord | null>();
 const inFlightScoreRequests = new Map<string, Promise<TestAttemptRecord | null>>();
@@ -134,80 +138,103 @@ export async function fetchStudentTestAttempts(
   const cId = cleanId(studentId) || cleanId(studentName);
   if (!cId) return [];
 
-  let remoteAttempts: TestAttemptRecord[] = [];
+  // Deduplicate: if a fetch is already running for this student, reuse the existing promise
+  const existingPromise = inFlightStudentAttemptFetches.get(cId);
+  if (existingPromise) {
+    return existingPromise;
+  }
 
-  // 1. Fetch from Firestore test_attempts AND student_test_attempts collections
-  try {
-    const db = await getFirebaseDb();
-    if (db) {
-      const collectionsToCheck = ["student_test_attempts", "test_attempts"];
-      for (const colName of collectionsToCheck) {
-        try {
-          const colRef = collection(db, colName);
-          const q = query(colRef, where("studentId", "==", studentId));
-          const snap = await getDocs(q);
-          snap.forEach((docSnap) => {
-            const d = docSnap.data() as TestAttemptRecord;
-            if (d && d.studentId) {
-              remoteAttempts.push({ ...d, id: d.id || docSnap.id });
-            }
-          });
-        } catch (colErr) {
-          console.warn(`[ScorePersistence] Error querying ${colName} for ${studentId}:`, colErr);
+  // Throttle: if fetched less than 5 seconds ago, return cached attempts directly
+  const lastFetch = lastFetchTimePerStudent.get(cId) || 0;
+  if (Date.now() - lastFetch < 5000) {
+    const cached = getCachedAttemptsFromMemory().filter(
+      (a) => cleanId(a.studentId) === cId || cleanId(a.studentName) === cId
+    );
+    if (cached.length > 0) return cached;
+  }
+
+  const fetchPromise = (async () => {
+    let remoteAttempts: TestAttemptRecord[] = [];
+
+    // 1. Fetch from Firestore test_attempts AND student_test_attempts collections
+    try {
+      const db = await getFirebaseDb();
+      if (db) {
+        const collectionsToCheck = ["student_test_attempts", "test_attempts"];
+        for (const colName of collectionsToCheck) {
+          try {
+            const colRef = collection(db, colName);
+            const q = query(colRef, where("studentId", "==", studentId));
+            const snap = await getDocs(q);
+            snap.forEach((docSnap) => {
+              const d = docSnap.data() as TestAttemptRecord;
+              if (d && d.studentId) {
+                remoteAttempts.push({ ...d, id: d.id || docSnap.id });
+              }
+            });
+          } catch (colErr) {
+            console.warn(`[ScorePersistence] Error querying ${colName} for ${studentId}:`, colErr);
+          }
         }
       }
-    }
-  } catch (err) {
-    console.warn(`[ScorePersistence] Firestore test_attempts query error for ${studentId}:`, err);
-  }
-
-  // 2. Fetch student-specific JSON file from Cloudflare R2 bucket
-  try {
-    const filePath = getStudentAttemptStoragePath(studentId);
-    let parsed = await downloadJsonFromR2<TestAttemptRecord[]>(filePath);
-    
-    // Legacy fallback probe if not found
-    if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
-      const legacyPath = `practice_tests/student_attempts/student_${cId}.json`;
-      if (legacyPath !== filePath) {
-        parsed = await downloadJsonFromR2<TestAttemptRecord[]>(legacyPath);
-      }
+    } catch (err) {
+      console.warn(`[ScorePersistence] Firestore test_attempts query error for ${studentId}:`, err);
     }
 
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      remoteAttempts = [...remoteAttempts, ...parsed];
-    }
-  } catch (err) {
-    console.warn(`[ScorePersistence] Error downloading per-student file for ${studentId} from R2:`, err);
-  }
-
-  // 3. Fallback: Download global test_attempts.json from Cloudflare R2
-  if (remoteAttempts.length === 0) {
+    // 2. Fetch student-specific JSON file from Cloudflare R2 bucket
     try {
-      const parsed = await downloadJsonFromR2<TestAttemptRecord[]>("practice_tests/test_attempts.json");
-      if (Array.isArray(parsed)) {
-        const studentMatches = parsed.filter((a) => {
-          if (!a) return false;
-          const aId = cleanId(a.studentId);
-          const aName = cleanId(a.studentName);
-          return (studentId && aId === cId) || (studentName && aName === cleanId(studentName));
-        });
-        remoteAttempts = [...remoteAttempts, ...studentMatches];
+      const filePath = getStudentAttemptStoragePath(studentId);
+      let parsed = await downloadJsonFromR2<TestAttemptRecord[]>(filePath);
+      
+      // Legacy fallback probe if not found
+      if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
+        const legacyPath = `practice_tests/student_attempts/student_${cId}.json`;
+        if (legacyPath !== filePath) {
+          parsed = await downloadJsonFromR2<TestAttemptRecord[]>(legacyPath);
+        }
+      }
+
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        remoteAttempts = [...remoteAttempts, ...parsed];
       }
     } catch (err) {
-      console.warn("[ScorePersistence] Global file download fallback warning from R2:", err);
+      console.warn(`[ScorePersistence] Error downloading per-student file for ${studentId} from R2:`, err);
     }
-  }
 
-  // Deduplicate and merge into memory & local cache
-  const cleanRemote = deduplicateAttempts(remoteAttempts);
+    // 3. Fallback: Download global test_attempts.json from Cloudflare R2
+    if (remoteAttempts.length === 0) {
+      try {
+        const parsed = await downloadJsonFromR2<TestAttemptRecord[]>("practice_tests/test_attempts.json");
+        if (Array.isArray(parsed)) {
+          const studentMatches = parsed.filter((a) => {
+            if (!a) return false;
+            const aId = cleanId(a.studentId);
+            const aName = cleanId(a.studentName);
+            return (studentId && aId === cId) || (studentName && aName === cleanId(studentName));
+          });
+          remoteAttempts = [...remoteAttempts, ...studentMatches];
+        }
+      } catch (err) {
+        console.warn("[ScorePersistence] Global file download fallback warning from R2:", err);
+      }
+    }
 
-  if (cleanRemote.length > 0) {
-    mergeAttemptsIntoMemoryAndCache(cleanRemote);
-    notifyScoreUpdate();
-  }
+    // Deduplicate and merge into memory & local cache
+    const cleanRemote = deduplicateAttempts(remoteAttempts);
 
-  return cleanRemote;
+    if (cleanRemote.length > 0) {
+      mergeAttemptsIntoMemoryAndCache(cleanRemote);
+      notifyScoreUpdate();
+    }
+
+    lastFetchTimePerStudent.set(cId, Date.now());
+    return cleanRemote;
+  })().finally(() => {
+    inFlightStudentAttemptFetches.delete(cId);
+  });
+
+  inFlightStudentAttemptFetches.set(cId, fetchPromise);
+  return fetchPromise;
 }
 
 /**
@@ -311,14 +338,19 @@ export function mergeAttemptsIntoMemoryAndCache(newAttempts: TestAttemptRecord[]
   saveLocalTestAttemptsCache(combined);
 }
 
+let scoreUpdateDebounceTimeout: any = null;
+
 /**
- * Dispatches window events to notify UI components to re-render with latest scores
+ * Dispatches window events to notify UI components to re-render with latest scores.
+ * Debounced to prevent event thrashing. Strictly dispatches test-attempts-updated only.
  */
 export function notifyScoreUpdate(): void {
-  if (typeof window !== "undefined") {
+  if (typeof window === "undefined") return;
+
+  if (scoreUpdateDebounceTimeout) clearTimeout(scoreUpdateDebounceTimeout);
+  scoreUpdateDebounceTimeout = setTimeout(() => {
     window.dispatchEvent(new CustomEvent("test-attempts-updated"));
-    window.dispatchEvent(new CustomEvent("practice-tests-updated"));
-  }
+  }, 250);
 }
 
 /**

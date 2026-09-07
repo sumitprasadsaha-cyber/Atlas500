@@ -53,6 +53,7 @@ import {
 import { getAllTestAttempts } from "../utils/assessmentParser";
 import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
 import { recordNoteOpenedOrDownloaded } from "../utils/chapterProgressHelper";
+import { isPracticeTestActive } from "../lib/testSessionManager";
 
 export interface TopicTestStats {
   bestScore: number;
@@ -262,8 +263,9 @@ export default function SubjectNotes({
   } | null>(null);
 
   useEffect(() => {
+    if (isPracticeTestActive()) return;
+
     if (subject) {
-      console.log(`[PracticeTest] Subject Notes Space Loaded: { subject: "${subject}", classGrade: "${classGrade || ''}" }`);
       preloadSubjectPracticeTests(classGrade || "", subject, notes);
     }
 
@@ -272,24 +274,26 @@ export default function SubjectNotes({
       fetchStudentTestAttempts(studentId, studentName);
     }
 
-    const handleUpdate = () => {
+    const handleAttemptsUpdate = () => {
+      // Synchronously update attempt display version without triggering a new fetch
+      setAttemptsVersion((prev) => prev + 1);
+    };
+
+    const handleTestsUpdate = () => {
+      if (isPracticeTestActive()) return;
       if (subject) {
         preloadSubjectPracticeTests(classGrade || "", subject, notes);
       }
-      if (studentId) {
-        fetchStudentTestAttempts(studentId, studentName);
-      }
       setAttemptsVersion((prev) => prev + 1);
     };
-    window.addEventListener("test-attempts-updated", handleUpdate);
-    window.addEventListener("practice-tests-updated", handleUpdate);
-    window.addEventListener("storage", handleUpdate);
+
+    window.addEventListener("test-attempts-updated", handleAttemptsUpdate);
+    window.addEventListener("practice-tests-updated", handleTestsUpdate);
     return () => {
-      window.removeEventListener("test-attempts-updated", handleUpdate);
-      window.removeEventListener("practice-tests-updated", handleUpdate);
-      window.removeEventListener("storage", handleUpdate);
+      window.removeEventListener("test-attempts-updated", handleAttemptsUpdate);
+      window.removeEventListener("practice-tests-updated", handleTestsUpdate);
     };
-  }, [subject, classGrade, studentId, notes]);
+  }, [subject, classGrade, studentId, notes?.length]);
 
   const allAttempts = useMemo(() => {
     return getAllTestAttempts();

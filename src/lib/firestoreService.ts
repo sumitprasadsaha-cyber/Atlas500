@@ -2387,12 +2387,24 @@ export function getLocalTestAttempts(): TestAttemptRecord[] {
   return [];
 }
 
+let lastSavedAttemptsJson: string = "";
+let attemptsDispatchTimeout: any = null;
+
 export function saveLocalTestAttemptsCache(attempts: TestAttemptRecord[]) {
   if (typeof window === "undefined") return;
-  safeSetStorage(STORAGE_KEY_TEST_ATTEMPTS, JSON.stringify(attempts));
+  const serialized = JSON.stringify(attempts);
+  if (serialized === lastSavedAttemptsJson) {
+    return; // Idempotent: skip duplicate write and event emission
+  }
+  lastSavedAttemptsJson = serialized;
+  safeSetStorage(STORAGE_KEY_TEST_ATTEMPTS, serialized);
   testAttemptsListeners.forEach((listener) => listener(attempts));
-  window.dispatchEvent(new Event("storage"));
-  window.dispatchEvent(new CustomEvent("test-attempts-updated"));
+
+  // Debounced notification without synthetic storage event
+  if (attemptsDispatchTimeout) clearTimeout(attemptsDispatchTimeout);
+  attemptsDispatchTimeout = setTimeout(() => {
+    window.dispatchEvent(new CustomEvent("test-attempts-updated"));
+  }, 250);
 }
 
 export async function saveTestAttemptDoc(attempt: TestAttemptRecord): Promise<void> {

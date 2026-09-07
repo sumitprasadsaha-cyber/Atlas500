@@ -102,6 +102,7 @@ import StudentPracticeTestModal from "./StudentPracticeTestModal";
 import { getTopicPracticeTest, getStudentTestAttempts, getAllTestAttempts, fetchAllPracticeTests } from "../utils/assessmentParser";
 import { getScoreButtonStyles, preloadSubjectPracticeTests } from "../lib/practiceTestService";
 import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
+import { isPracticeTestActive } from "../lib/testSessionManager";
 
 interface StudentDashboardProps {
   student: Student;
@@ -1795,6 +1796,8 @@ export function StudentMyTab({
   const [testBankVersion, setTestBankVersion] = useState(0);
 
   useEffect(() => {
+    if (isPracticeTestActive()) return;
+
     if (selectedSubject) {
       preloadSubjectPracticeTests(localStudent.classGrade || "", selectedSubject, allClassNotes);
     }
@@ -1804,30 +1807,26 @@ export function StudentMyTab({
     }
 
     const handlePracticeTestsUpdate = () => {
+      if (isPracticeTestActive()) return;
       if (selectedSubject) {
         preloadSubjectPracticeTests(localStudent.classGrade || "", selectedSubject, allClassNotes);
-      }
-      if (student?.id) {
-        fetchStudentTestAttempts(student.id, student.name);
       }
       setTestBankVersion((v) => v + 1);
     };
 
-    const handleOtherUpdate = () => {
+    const handleAttemptsUpdate = () => {
       setTestBankVersion((v) => v + 1);
     };
 
     if (typeof window !== "undefined") {
       window.addEventListener("practice-tests-updated", handlePracticeTestsUpdate);
-      window.addEventListener("test-attempts-updated", handleOtherUpdate);
-      window.addEventListener("storage", handleOtherUpdate);
+      window.addEventListener("test-attempts-updated", handleAttemptsUpdate);
     }
 
     return () => {
       if (typeof window !== "undefined") {
         window.removeEventListener("practice-tests-updated", handlePracticeTestsUpdate);
-        window.removeEventListener("test-attempts-updated", handleOtherUpdate);
-        window.removeEventListener("storage", handleOtherUpdate);
+        window.removeEventListener("test-attempts-updated", handleAttemptsUpdate);
       }
     };
   }, [selectedSubject, localStudent?.id, localStudent?.classGrade, allClassNotes.length]);

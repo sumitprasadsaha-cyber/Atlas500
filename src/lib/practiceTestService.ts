@@ -11,6 +11,7 @@ import {
   deleteAllAttemptsAndScoresFromPersistence,
   clearTestScoreCache
 } from "./testScorePersistence";
+import { isPracticeTestActive } from "./testSessionManager";
 
 const TESTS_CACHE_KEY = "tuition_topic_practice_tests_bank";
 const SYNC_QUEUE_KEY = "tuition_practice_tests_sync_queue";
@@ -652,15 +653,25 @@ export async function resolveQuestionImageUrls(
 }
 
 /**
- * Preload question diagram/formula images into browser cache so they appear instantly
+ * Preload question diagram/formula images into browser cache lazily (capped to prevent OOM).
  */
-export function preloadQuestionImages(questions: ParsedAssessmentQuestion[]): void {
-  if (typeof window === "undefined" || !Array.isArray(questions)) return;
-  questions.forEach((q) => {
+export function preloadQuestionImages(questions: ParsedAssessmentQuestion[], limit: number = 2): void {
+  if (typeof window === "undefined" || !Array.isArray(questions) || questions.length === 0) return;
+  
+  // Only preload up to 'limit' upcoming questions to prevent memory saturation
+  const targetQuestions = questions.slice(0, limit);
+
+  targetQuestions.forEach((q) => {
     if (q.imageUrl && !preloadedImagesSet.has(q.imageUrl)) {
+      if (preloadedImagesSet.size > 30) {
+        const firstKey = preloadedImagesSet.values().next().value;
+        if (firstKey) preloadedImagesSet.delete(firstKey);
+      }
       preloadedImagesSet.add(q.imageUrl);
       try {
         const img = new Image();
+        img.onload = () => { img.onload = null; img.onerror = null; };
+        img.onerror = () => { img.onload = null; img.onerror = null; };
         img.src = q.imageUrl;
       } catch {}
     }
@@ -684,8 +695,6 @@ export async function warmPracticeTestCache(): Promise<Record<string, TopicPract
       if (Array.isArray(test.questions) && test.questions.length > 0) {
         totalQuestions += test.questions.length;
         console.log(`[PracticeTest] Practice Test Cached: { id: "${test.id}", questionCount: ${test.questions.length} }`);
-        // Preload diagram images
-        preloadQuestionImages(test.questions);
       }
     }
 
@@ -701,13 +710,18 @@ export async function warmPracticeTestCache(): Promise<Record<string, TopicPract
 
 /**
  * Preloads all practice tests for a specific subject in the background.
- * Never blocks the main UI.
+ * Automatically suspended while an active practice test is taking place.
  */
 export async function preloadSubjectPracticeTests(
   classGrade: string,
   subject: string,
   notes?: (ClassNote | ChapterNote)[]
 ): Promise<void> {
+  // If a student is currently taking a test, suspend background preloading to eliminate memory pressure
+  if (isPracticeTestActive()) {
+    return;
+  }
+
   const normClass = String(classGrade || "").toLowerCase().trim();
   const normSubj = String(subject || "").toLowerCase().trim();
   const preloadKey = `${normClass}__${normSubj}`;
@@ -721,7 +735,7 @@ export async function preloadSubjectPracticeTests(
     // 1. Ensure test bank is loaded in memory
     const bank = Object.keys(memoryTestBank).length > 0 ? memoryTestBank : await fetchAllPracticeTests();
 
-    // 2. Preload and resolve images for all tests matching this subject
+    // 2. Cache questions matching this subject
     const matchingTests = Object.values(bank).filter((test) => {
       const matchClass = !normClass || (test.classGrade || "").toLowerCase().includes(normClass) || normClass.includes((test.classGrade || "").toLowerCase());
       const matchSubj = isSubjectCompatible(subject, test.subject);
@@ -730,12 +744,7 @@ export async function preloadSubjectPracticeTests(
 
     for (const test of matchingTests) {
       if (Array.isArray(test.questions) && test.questions.length > 0) {
-        // Resolve images and warm image cache
-        const resolved = await resolveQuestionImageUrls(test.questions);
-        test.questions = resolved;
-        memoryQuestionsCache.set(test.id, resolved);
-        preloadQuestionImages(resolved);
-        console.log(`[PracticeTest] Practice Test Cached: { id: "${test.id}", questionCount: ${resolved.length} }`);
+        memoryQuestionsCache.set(test.id, test.questions);
       }
     }
   } catch (err) {
@@ -1153,7 +1162,6 @@ export function getFullChapterQuestionsSync(
     }
   });
 
-  preloadQuestionImages(aggregated);
   return aggregated;
 }
 
