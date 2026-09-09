@@ -50,6 +50,8 @@ export interface ClassNote {
   topicTitle?: string; // e.g. "Introduction"
   r2Key?: string; // Hierarchical R2 path: class_notes/Class_9/Mathematics/Chapter_01_Number_Systems/Topic_01_Introduction/note.pdf
   practiceTestId?: string | null; // Attached practice test ID
+  hasPracticeTest?: boolean;
+  hasTest?: boolean;
   visibility?: "public" | "visible" | "all" | "selected" | "hidden" | string;
   accessRules?: {
     accessType?: "all" | "selected";

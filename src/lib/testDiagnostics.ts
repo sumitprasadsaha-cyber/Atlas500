@@ -1,5 +1,5 @@
 /**
- * Structured Diagnostics & Runtime Validation Engine for Practice Testing (v7.9.2)
+ * Structured Diagnostics & Runtime Validation Engine for Practice Testing (v7.9.3)
  * 
  * Provides unified, structured telemetry across all test engine layers:
  * [Test], [Attempt], [Timer], [React], [Firestore], [Cache], [Memory], [Render], [Autosave], [Network], [Resume], [Recovery]

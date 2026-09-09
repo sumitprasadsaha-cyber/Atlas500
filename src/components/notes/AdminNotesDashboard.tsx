@@ -19,7 +19,8 @@ import {
   FileCheck,
   ChevronDown,
   MoreVertical,
-  MoreHorizontal
+  MoreHorizontal,
+  Share2
 } from "lucide-react";
 import { ClassNote, Student } from "../../types";
 import { 
@@ -44,6 +45,7 @@ import CreateHierarchyNodeModal, {
 } from "./CreateHierarchyNodeModal";
 import NotesPreviewModal from "./NotesPreviewModal";
 import AdminPracticeTestModal from "../AdminPracticeTestModal";
+import ShareSubjectNotesModal from "./ShareSubjectNotesModal";
 import NotesMainPanel from "./NotesMainPanel";
 import Toast from "../Toast";
 import {
@@ -214,6 +216,12 @@ export default function AdminNotesDashboard({
     newSubject: string;
   } | null>(null);
   const [isRenamingSubject, setIsRenamingSubject] = useState(false);
+
+  // Share Subject to Other Classes Modal state (v7.9.3)
+  const [sharingSubject, setSharingSubject] = useState<{
+    subject: string;
+    className: string;
+  } | null>(null);
 
   // Rename Chapter / Module Modal State
   const [renamingChapter, setRenamingChapter] = useState<{
@@ -1388,7 +1396,7 @@ export default function AdminNotesDashboard({
                               )}
                             </button>
 
-                            {/* Subject Actions: Delete & 3-dots Kebab for Rename */}
+                            {/* Subject Actions: Delete, Share & 3-dots Kebab for Rename */}
                             <div className="flex items-center gap-0.5 shrink-0">
                               {/* Delete Subject Button (🗑️) */}
                               <button
@@ -1410,6 +1418,27 @@ export default function AdminNotesDashboard({
                                 id={`delete-subj-${subj.replace(/\s+/g, "-")}`}
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Share Subject Button */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSharingSubject({
+                                    subject: subj,
+                                    className: selectedSchoolClass,
+                                  });
+                                }}
+                                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                  isSelected 
+                                    ? "hover:bg-blue-700 text-blue-100 hover:text-blue-200" 
+                                    : "text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200 dark:hover:bg-slate-700"
+                                }`}
+                                title={`Share ${subj} to other classes`}
+                                id={`share-subj-${subj.replace(/\s+/g, "-")}`}
+                              >
+                                <Share2 className="w-3.5 h-3.5" />
                               </button>
 
                               {/* 3-dots Kebab for Rename */}
@@ -2528,6 +2557,21 @@ export default function AdminNotesDashboard({
             loadPracticeTests();
             if (onRefresh) onRefresh();
           }}
+        />
+      )}
+
+      {/* 14. Share Subject Notes to Other Classes Modal (v7.9.3) */}
+      {sharingSubject && (
+        <ShareSubjectNotesModal
+          isOpen={Boolean(sharingSubject)}
+          onClose={() => setSharingSubject(null)}
+          currentSubject={sharingSubject.subject}
+          currentClass={sharingSubject.className}
+          allClasses={schoolClasses}
+          notes={notes}
+          schoolHierarchy={schoolHierarchy}
+          practiceTestBank={practiceTestBank}
+          onRefresh={onRefresh}
         />
       )}
     </div>

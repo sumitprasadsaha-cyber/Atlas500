@@ -1,5 +1,5 @@
 /**
- * Test Session Lifecycle, Autosave, & Crash Recovery Coordinator (v7.9.2)
+ * Test Session Lifecycle, Autosave, & Crash Recovery Coordinator (v7.9.3)
  * 
  * Provides:
  * 1. Single authoritative state owner for the active test session.
