@@ -1,4 +1,4 @@
-import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord } from "../types";
+import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ComprehensionPassage } from "../types";
 
 export interface ParsedMetadata {
   chapter?: string;
@@ -9,6 +9,7 @@ export interface ParsedMetadata {
 export interface ParseResult {
   success: boolean;
   questions: ParsedAssessmentQuestion[];
+  passages?: Record<string, ComprehensionPassage>;
   errors: string[];
   metadata?: ParsedMetadata;
 }
@@ -57,23 +58,97 @@ function extractMetadataLine(line: string, metadata: ParsedMetadata): boolean {
 /**
  * Helper to recognize section headers
  */
-function matchSectionHeader(line: string): "mcq" | "assertion_reason" | "true_false" | null {
-  const trimmed = line.trim();
-  if (/^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?)$/i.test(trimmed)) {
-    return "mcq";
+function matchSectionHeader(line: string): "mcq" | "assertion_reason" | "true_false" | "comprehension" | null {
+  const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
+  if (!trimmed) return null;
+
+  // Also strip any leading numbering like "1. ", "2. ", "Part 1: ", "Section A: "
+  const stripped = trimmed
+    .replace(/^(?:(?:Part|Section)\s+[A-Za-z0-9]+[\s\:\-]+|\d+[\.\):\-]\s*)/i, "")
+    .replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "")
+    .trim();
+
+  for (const candidate of [trimmed, stripped]) {
+    if (!candidate) continue;
+    if (
+      /^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?|Standalone\s+Questions?|General\s+Questions?|Independent\s+Questions?)$/i.test(candidate) ||
+      /^Section\s+[A-Za-z0-9]+[\s\:\-]+(?:MCQs?|Multiple\s+Choice)$/i.test(candidate)
+    ) {
+      return "mcq";
+    }
+    if (
+      /^Assertion\s*(?:&|and)\s*Reasoning$/i.test(candidate) ||
+      /^Assertion\s*(?:&|and)\s*Reason$/i.test(candidate) ||
+      /^Assertion\s*-\s*Reasoning$/i.test(candidate)
+    ) {
+      return "assertion_reason";
+    }
+    if (
+      /^(?:True\s*[\/\\]\s*False|True[\/\\]False|True\s+or\s+False|T\/F)$/i.test(candidate) ||
+      /^Section\s+[A-Za-z0-9]+[\s\:\-]+(?:True\s*[\/\\]\s*False|True[\/\\]False)$/i.test(candidate)
+    ) {
+      return "true_false";
+    }
+    if (
+      /^(?:(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section|Questions?))?|Passage|Case\s+Study)(?:\s*\d+)?[\:\.]?$/i.test(candidate) ||
+      /^Section\s+[A-Za-z0-9]+[\s\:\-]+(?:Reading\s+)?Comprehension$/i.test(candidate)
+    ) {
+      return "comprehension";
+    }
   }
-  if (
-    /^Assertion\s*(?:&|and)\s*Reasoning$/i.test(trimmed) ||
-    /^Assertion\s*(?:&|and)\s*Reason$/i.test(trimmed) ||
-    /^Assertion\s*-\s*Reasoning$/i.test(trimmed)
-  ) {
-    return "assertion_reason";
+  return null;
+}
+
+/**
+ * Detects whether a line is the beginning of a comprehension reading passage.
+ * Supports headings such as:
+ * - Read the following passage
+ * - Read the passage carefully
+ * - Study the passage
+ * - Read the following
+ * - Comprehension / Reading Comprehension
+ * - Similar variations, including inline text after colons/periods
+ */
+export function detectComprehensionStart(line: string): { title: string; firstLine?: string } | null {
+  const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
+  if (!trimmed) return null;
+
+  const stripped = trimmed
+    .replace(/^(?:(?:Part|Section)\s+[A-Za-z0-9]+[\s\:\-]+|\d+[\.\):\-]\s*)/i, "")
+    .replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "")
+    .trim();
+
+  // Standalone comprehension headers
+  for (const candidate of [trimmed, stripped]) {
+    if (!candidate) continue;
+    if (
+      /^(?:(?:Section\s+[A-Za-z0-9]+[\s\:\-]+)?(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section|Questions?))?(?:\s*\d+)?|Passage(?:\s*\d+)?|Case\s+Study(?:\s*\d+)?)[\:\.]?$/i.test(
+        candidate
+      )
+    ) {
+      return { title: trimmed };
+    }
+
+    // Headings that encompass the whole line
+    const phrasePattern =
+      /^(?:(?:Section\s+[A-Za-z0-9]+[\s\:\-]+)?(?:Directions?\s*[\:\-]\s*)?)?(?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|story|poem|paragraph|case|information)?(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|and\s+choose|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?[\.\:\-]?$/i;
+
+    if (phrasePattern.test(candidate)) {
+      return { title: trimmed };
+    }
   }
-  if (
-    /^(?:True\s*[\/\\]\s*False|True[\/\\]False|True\s+or\s+False|T\/F)$/i.test(trimmed)
-  ) {
-    return "true_false";
+
+  // Heading that contains inline passage text on the same line (e.g. "Read the following passage carefully: Water is...")
+  const inlineMatch = trimmed.match(
+    /^(?:(?:Section\s+[A-Za-z0-9]+[\s\:\-]+)?(?:Directions?\s*[\:\-]\s*)?)?((?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|story|poem|paragraph|case|information)?(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|and\s+choose|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?[\.\:\-])\s+(.+)$/i
+  );
+
+  if (inlineMatch) {
+    const title = inlineMatch[1].trim();
+    const firstLine = inlineMatch[2].trim();
+    return { title, firstLine };
   }
+
   return null;
 }
 
@@ -247,10 +322,19 @@ export function parseAssessmentText(
   const rawLines = processedText.split("\n");
 
   let currentSection: "mcq" | "assertion_reason" | "true_false" = "mcq";
+  let activePassage: {
+    id: string;
+    title: string;
+    textLines: string[];
+    questionCount: number;
+  } | null = null;
+  const allPassages: Map<string, { id: string; title: string; textLines: string[]; questionCount: number }> = new Map();
+  let passageCounter = 1;
 
   interface RawQuestionBlock {
     qNum: number;
     section: "mcq" | "assertion_reason" | "true_false";
+    passageId?: string;
     lines: string[];
     rawBlockLines: string[];
   }
@@ -264,8 +348,11 @@ export function parseAssessmentText(
 
     // Skip empty lines when no active block or just accumulate within active block if relevant
     if (!trimmed) {
-      if (activeBlock && activeBlock.lines.length > 0) {
-        // Keep newline separation in multiline questions (e.g., between Assertion and Reason)
+      if (activePassage && activePassage.questionCount === 0) {
+        if (activePassage.textLines.length > 0 && activePassage.textLines[activePassage.textLines.length - 1] !== "") {
+          activePassage.textLines.push("");
+        }
+      } else if (activeBlock && activeBlock.lines.length > 0) {
         activeBlock.lines.push("");
       }
       continue;
@@ -276,38 +363,91 @@ export function parseAssessmentText(
       continue;
     }
 
-    // 2. Check for section headers
+    // 2. Check for comprehension start heading (e.g. "Read the following passage carefully." or "3. Comprehension")
+    const compMatch = detectComprehensionStart(trimmed);
+    if (compMatch) {
+      if (activeBlock) {
+        rawBlocks.push(activeBlock);
+        activeBlock = null;
+      }
+      // If we already have an activePassage with no text or questions yet, merge headers
+      if (activePassage && activePassage.questionCount === 0 && activePassage.textLines.length === 0) {
+        activePassage.title = compMatch.title;
+        if (compMatch.firstLine) {
+          activePassage.textLines.push(compMatch.firstLine);
+        }
+        continue;
+      }
+      const pId = `passage_${passageCounter++}`;
+      activePassage = {
+        id: pId,
+        title: compMatch.title,
+        textLines: compMatch.firstLine ? [compMatch.firstLine] : [],
+        questionCount: 0
+      };
+      allPassages.set(pId, activePassage);
+      continue;
+    }
+
+    // 3. Check for other section headers (e.g. "1. Multiple Choice Questions", "2. True / False", "MCQs")
     const sectionHeader = matchSectionHeader(trimmed);
     if (sectionHeader) {
       if (activeBlock) {
         rawBlocks.push(activeBlock);
         activeBlock = null;
       }
-      currentSection = sectionHeader;
+      if (sectionHeader === "comprehension") {
+        if (activePassage && activePassage.questionCount === 0 && activePassage.textLines.length === 0) {
+          activePassage.title = trimmed;
+          continue;
+        }
+        const pId = `passage_${passageCounter++}`;
+        activePassage = {
+          id: pId,
+          title: trimmed,
+          textLines: [],
+          questionCount: 0
+        };
+        allPassages.set(pId, activePassage);
+      } else {
+        // Any standalone section header (MCQs, True/False, Assertion & Reasoning) ends comprehension mode
+        activePassage = null;
+        currentSection = sectionHeader;
+      }
       continue;
     }
 
-    // 3. Check for divider or other parser markers
+    // 4. Check for divider or other parser markers
     if (isIgnoredMarkerOrDivider(trimmed)) {
       continue;
     }
 
-    // 4. Check if line starts a new numbered question
+    // 5. Check if line starts a new numbered question
     const qHeader = matchQuestionHeader(trimmed);
     if (qHeader) {
       if (activeBlock) {
         rawBlocks.push(activeBlock);
       }
+      if (activePassage) {
+        activePassage.questionCount++;
+      }
       activeBlock = {
         qNum: qHeader.qNum,
-        section: currentSection,
+        section: activePassage ? "mcq" : currentSection,
+        passageId: activePassage ? activePassage.id : undefined,
         lines: qHeader.remainder ? [qHeader.remainder] : [],
         rawBlockLines: [rawLine]
       };
       continue;
     }
 
-    // 5. If we have an active question block, append line
+    // 6. If currently reading passage body before the first question
+    if (activePassage && activePassage.questionCount === 0) {
+      activePassage.textLines.push(trimmed);
+      continue;
+    }
+
+    // 7. If we have an active question block, append line
     if (activeBlock) {
       activeBlock.lines.push(trimmed);
       activeBlock.rawBlockLines.push(rawLine);
@@ -318,7 +458,24 @@ export function parseAssessmentText(
     rawBlocks.push(activeBlock);
   }
 
-  console.log(`[AssessmentParser] Found ${rawBlocks.length} raw question candidate blocks.`);
+  console.log(`[AssessmentParser] Found ${rawBlocks.length} raw question candidate blocks and ${allPassages.size} comprehension passages.`);
+
+  // Validate and consolidate comprehension passages
+  const passagesResult: Record<string, ComprehensionPassage> = {};
+  allPassages.forEach((pass) => {
+    const cleanPassageText = pass.textLines.join("\n").trim();
+    if (!cleanPassageText) {
+      errors.push(`Comprehension section ("${pass.title}"): Missing reading passage text.`);
+    } else if (pass.questionCount === 0) {
+      errors.push(`Comprehension passage ("${pass.title}"): Must contain at least one linked question.`);
+    } else {
+      passagesResult[pass.id] = {
+        id: pass.id,
+        title: pass.title,
+        text: cleanPassageText
+      };
+    }
+  });
 
   // Process each block individually
   rawBlocks.forEach((block, idx) => {
@@ -326,8 +483,10 @@ export function parseAssessmentText(
       .map((l) => l.trim())
       .filter((l) => l.length > 0 && !isIgnoredMarkerOrDivider(l) && !extractMetadataLine(l, metadata));
 
+    const blockTypeLabel = block.passageId ? " (Comprehension)" : (block.section === "true_false" ? " (True/False)" : "");
+
     if (cleanLines.length === 0) {
-      errors.push(`Question #${block.qNum}: Skipped - empty question block.`);
+      errors.push(`Question #${block.qNum}${blockTypeLabel}: Skipped - empty question block.`);
       return;
     }
 
@@ -359,42 +518,51 @@ export function parseAssessmentText(
     });
 
     if (linesAfterImage.length === 0) {
-      errors.push(`Question #${block.qNum}: Skipped - missing question text and options.`);
+      errors.push(`Question #${block.qNum}${blockTypeLabel}: Skipped - missing question text and options.`);
       return;
     }
 
     const fullBlockText = linesAfterImage.join("\n");
 
-    // Detect if this question is True / False
-    const isExplicitTFSection = block.section === "true_false";
+    // Check if question belongs to a comprehension passage
+    const isComprehensionQuestion = !!block.passageId;
+    if (isComprehensionQuestion && block.passageId && !passagesResult[block.passageId]) {
+      errors.push(`Question #${block.qNum} (Comprehension): Missing parent comprehension passage.`);
+      return;
+    }
+
+    // Detect if this question is True / False (Comprehension questions are strictly MCQs)
+    const isExplicitTFSection = !isComprehensionQuestion && block.section === "true_false";
     const hasTFAnswer =
-      explicitCorrectAnswer.toLowerCase() === "true" ||
-      explicitCorrectAnswer.toLowerCase() === "false" ||
-      explicitCorrectAnswer.toLowerCase() === "t" ||
-      explicitCorrectAnswer.toLowerCase() === "f";
+      !isComprehensionQuestion &&
+      (explicitCorrectAnswer.toLowerCase() === "true" ||
+        explicitCorrectAnswer.toLowerCase() === "false" ||
+        explicitCorrectAnswer.toLowerCase() === "t" ||
+        explicitCorrectAnswer.toLowerCase() === "f");
 
-    // Detect if lines contain True and False options
-    const tfLines = linesAfterImage.filter(
-      (l) => /^(?:True|False)\s*[✅❌]?$/i.test(l) || /^[A-B][\.\)]\s*(?:True|False)/i.test(l)
-    );
+    const tfLines = !isComprehensionQuestion
+      ? linesAfterImage.filter(
+          (l) => /^(?:True|False)\s*[✅❌]?$/i.test(l) || /^[A-B][\.\)]\s*(?:True|False)/i.test(l)
+        )
+      : [];
 
-    const isTFQuestion = isExplicitTFSection || hasTFAnswer || tfLines.length >= 2;
+    const isTFQuestion = !isComprehensionQuestion && (isExplicitTFSection || hasTFAnswer || tfLines.length >= 2);
 
     // Detect if this question is Assertion & Reasoning
-    const isExplicitAssertionSection = block.section === "assertion_reason";
+    const isExplicitAssertionSection = !isComprehensionQuestion && block.section === "assertion_reason";
     const isAssertionContent =
-      /Assertion\s*\([A-Za-z]\)/i.test(fullBlockText) ||
-      /Reason\s*\([A-Za-z]\)/i.test(fullBlockText) ||
-      /^Assertion\s*:/i.test(fullBlockText) ||
-      /^Reason\s*:/i.test(fullBlockText);
+      !isComprehensionQuestion &&
+      (/Assertion\s*\([A-Za-z]\)/i.test(fullBlockText) ||
+        /Reason\s*\([A-Za-z]\)/i.test(fullBlockText) ||
+        /^Assertion\s*:/i.test(fullBlockText) ||
+        /^Reason\s*:/i.test(fullBlockText));
 
-    const isAssertionQuestion = isExplicitAssertionSection || isAssertionContent;
+    const isAssertionQuestion = !isComprehensionQuestion && (isExplicitAssertionSection || isAssertionContent);
 
     if (isTFQuestion) {
       // ----------------------------------------------------
       // TRUE / FALSE PARSING
       // ----------------------------------------------------
-      // Remove standalone "True" / "False" option lines from statement
       const statementLines = linesAfterImage.filter(
         (l) =>
           !/^(?:True|False)\s*[✅❌]?$/i.test(l) &&
@@ -437,12 +605,12 @@ export function parseAssessmentText(
 
       // Validation
       if (!cleanQuestion) {
-        errors.push(`Question #${block.qNum}: Skipped - empty True/False statement.`);
+        errors.push(`Question #${block.qNum} (True/False): Empty True/False statement.`);
         return;
       }
 
       if (!resolvedAnswer) {
-        errors.push(`Question #${block.qNum}: Skipped - missing valid True/False correct answer.`);
+        errors.push(`Question #${block.qNum} (True/False): True/False question must have a valid answer (True or False).`);
         return;
       }
 
@@ -462,9 +630,8 @@ export function parseAssessmentText(
       });
     } else {
       // ----------------------------------------------------
-      // MCQ or ASSERTION & REASONING PARSING
+      // MCQ or COMPREHENSION or ASSERTION & REASONING PARSING
       // ----------------------------------------------------
-      // Find option lines
       const optionIndices: number[] = [];
       linesAfterImage.forEach((l, i) => {
         if (matchOptionLine(l)) {
@@ -473,7 +640,7 @@ export function parseAssessmentText(
       });
 
       if (optionIndices.length === 0) {
-        errors.push(`Question #${block.qNum}: Skipped - no options (A, B, C, D) found.`);
+        errors.push(`Question #${block.qNum}${blockTypeLabel}: No options (A, B, C, D) found.`);
         return;
       }
 
@@ -484,14 +651,14 @@ export function parseAssessmentText(
       const questionText = rawQLines.join("\n").trim();
 
       if (!questionText) {
-        errors.push(`Question #${block.qNum}: Skipped - empty question text.`);
+        errors.push(`Question #${block.qNum}${blockTypeLabel}: Empty question text.`);
         return;
       }
 
-      // Extract options
+      // Extract options and check for correct answers
       const optLines = linesAfterImage.slice(firstOptIdx);
       const rawParsedOptions: string[] = [];
-      let inlineCorrectAnswer = "";
+      const markedCheckmarkLetters: string[] = [];
 
       optLines.forEach((optLine) => {
         const optMatch = matchOptionLine(optLine);
@@ -511,14 +678,13 @@ export function parseAssessmentText(
             .replace(/\s*\(answer\)/gi, "")
             .trim();
 
-          if (isCheckMark && !inlineCorrectAnswer) {
-            inlineCorrectAnswer = letter;
+          if (isCheckMark) {
+            markedCheckmarkLetters.push(letter);
           }
 
           if (optVal) {
             rawParsedOptions.push(`${letter}. ${optVal}`);
           } else {
-            // Isolated label on this line (e.g. "A." with text on the next line)
             rawParsedOptions.push(`${letter}.`);
           }
         } else if (optLine.trim()) {
@@ -537,6 +703,18 @@ export function parseAssessmentText(
 
       const parsedOptions = normalizeQuestionOptions(rawParsedOptions);
 
+      // Validate option count
+      if (parsedOptions.length < 2) {
+        errors.push(`Question #${block.qNum}${blockTypeLabel}: Requires at least two valid options.`);
+        return;
+      }
+
+      // Check for multiple correct answer checkmarks
+      if (markedCheckmarkLetters.length > 1) {
+        errors.push(`Question #${block.qNum}${blockTypeLabel}: Multiple correct answers marked (${markedCheckmarkLetters.join(", ")}). Exactly one correct answer is required.`);
+        return;
+      }
+
       // Resolve correct answer letter
       let resolvedAnswer = "";
       if (explicitCorrectAnswer) {
@@ -551,30 +729,27 @@ export function parseAssessmentText(
         }
       }
 
+      const inlineCorrectAnswer = markedCheckmarkLetters.length === 1 ? markedCheckmarkLetters[0] : "";
+
+      if (resolvedAnswer && inlineCorrectAnswer && resolvedAnswer !== inlineCorrectAnswer) {
+        errors.push(`Question #${block.qNum}${blockTypeLabel}: Conflicting correct answers found (Option ${inlineCorrectAnswer} marked with ✅, but Correct Answer specifies Option ${resolvedAnswer}).`);
+        return;
+      }
+
       if (!resolvedAnswer && inlineCorrectAnswer) {
         resolvedAnswer = inlineCorrectAnswer;
       }
 
-      // Validation
-      if (parsedOptions.length < 2) {
-        errors.push(`Question #${block.qNum}: Skipped - requires at least two valid options.`);
-        return;
-      }
-
       if (!resolvedAnswer) {
-        errors.push(`Question #${block.qNum}: Skipped - missing valid Correct Answer.`);
+        errors.push(`Question #${block.qNum}${blockTypeLabel}: Missing valid Correct Answer. Mark one option with ✅ or include 'Correct Answer: [Option]'.`);
         return;
       }
 
       // Verify that resolvedAnswer matches one of the parsed options
-      const hasMatchingOption = parsedOptions.some((opt) => opt.startsWith(resolvedAnswer + "."));
-      if (!hasMatchingOption) {
-        // Fallback: check if the answer is valid among available option letters
-        const availableLetters = parsedOptions.map((o) => o.charAt(0));
-        if (!availableLetters.includes(resolvedAnswer)) {
-          errors.push(`Question #${block.qNum}: Skipped - Correct Answer '${resolvedAnswer}' does not match available options.`);
-          return;
-        }
+      const availableLetters = parsedOptions.map((o) => o.charAt(0));
+      if (!availableLetters.includes(resolvedAnswer)) {
+        errors.push(`Question #${block.qNum}${blockTypeLabel}: Correct Answer '${resolvedAnswer}' does not match available options.`);
+        return;
       }
 
       const qType: "mcq" | "assertion_reason" = isAssertionQuestion ? "assertion_reason" : "mcq";
@@ -591,17 +766,31 @@ export function parseAssessmentText(
         options: parsedOptions,
         correctAnswer: resolvedAnswer,
         imageLabel: extractedImageLabel || undefined,
+        passageId: block.passageId,
+        parentPassageId: block.passageId,
         rawText: block.rawBlockLines.join("\n")
       });
     }
   });
 
-  console.log(`[AssessmentParser] Successfully imported ${questions.length} questions. Errors encountered: ${errors.length}`);
+  console.log(`[AssessmentParser] Processed ${questions.length} questions. Passages: ${Object.keys(passagesResult).length}. Errors: ${errors.length}`);
+
+  // Reject incomplete sections with clear validation messages instead of partially importing them
+  if (errors.length > 0) {
+    return {
+      success: false,
+      questions: [],
+      passages: {},
+      errors,
+      metadata
+    };
+  }
 
   return {
     success: questions.length > 0,
     questions,
-    errors,
+    passages: passagesResult,
+    errors: [],
     metadata
   };
 }

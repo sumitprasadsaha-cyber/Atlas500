@@ -1,4 +1,4 @@
-import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote, ChapterNote } from "../types";
+import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote, ChapterNote, ComprehensionPassage } from "../types";
 import { getResolvedViewUrl } from "./storageService";
 import { uploadToR2, downloadFromR2, getR2BucketName } from "./r2Client";
 import { doc, setDoc, onSnapshot, collection, deleteDoc, getDoc, getDocs, Unsubscribe } from "firebase/firestore";
@@ -1355,12 +1355,27 @@ export function createPracticeTestQuestion(
     imageUrl: typeof q.imageUrl === "string" ? q.imageUrl.trim() : "",
     imageLabel: typeof q.imageLabel === "string" ? q.imageLabel.trim() : "",
     imagePosition: q.imagePosition === "above" || q.imagePosition === "below" ? q.imagePosition : "below",
+    passageId: q.passageId ? String(q.passageId).trim() : undefined,
+    parentPassageId: q.passageId ? String(q.passageId).trim() : (q.parentPassageId ? String(q.parentPassageId).trim() : undefined),
     rawText: String(q.rawText || context.rawText || "").trim(),
     published: q.published !== false,
     orderIndex: Number(q.orderIndex) || idx + 1,
     createdAt: q.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Returns any comprehension passages associated with a topic practice test synchronously from cache.
+ */
+export function getPassagesForTopicSync(
+  classGrade: string,
+  subject: string,
+  chapterNo: number,
+  topicName: string
+): Record<string, ComprehensionPassage> {
+  const test = getTopicPracticeTestSync(classGrade, subject, chapterNo, topicName);
+  return test?.passages || {};
 }
 
 export async function saveTopicPracticeTest(
@@ -1373,6 +1388,7 @@ export async function saveTopicPracticeTest(
     rawText: string;
     noteId?: string;
     topicNoteId?: string;
+    passages?: Record<string, ComprehensionPassage>;
   },
   questions: ParsedAssessmentQuestion[]
 ): Promise<SaveTopicResult> {
@@ -1422,6 +1438,7 @@ export async function saveTopicPracticeTest(
     rawText: String(context.rawText || "").trim(),
     questions: formattedQuestions,
     questionCount: formattedQuestions.length,
+    passages: context.passages && Object.keys(context.passages).length > 0 ? context.passages : undefined,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     uploadedBy: "Admin",

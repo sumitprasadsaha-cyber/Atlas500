@@ -317,6 +317,12 @@ export interface TuitionStats {
 // SMART TOPIC-WISE ASSESSMENT SYSTEM TYPES
 // ----------------------------------------------------
 
+export interface ComprehensionPassage {
+  id: string;
+  title?: string;
+  text: string;
+}
+
 export interface ParsedAssessmentQuestion {
   id: string;
   classGrade: string;
@@ -337,6 +343,8 @@ export interface ParsedAssessmentQuestion {
   orderIndex?: number;
   createdAt?: string;
   updatedAt?: string;
+  passageId?: string; // Reference to parent ComprehensionPassage ID
+  parentPassageId?: string; // Alias reference to parent ComprehensionPassage ID
 }
 
 export interface TopicPracticeTest {
@@ -354,6 +362,7 @@ export interface TopicPracticeTest {
   topicName: string;
   rawText: string;
   questions: ParsedAssessmentQuestion[];
+  passages?: Record<string, ComprehensionPassage>;
   createdAt: string;
   updatedAt: string;
   uploadedBy?: string;

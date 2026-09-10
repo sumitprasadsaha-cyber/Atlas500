@@ -18,7 +18,7 @@ import {
   Loader2
 } from "lucide-react";
 import ImageZoomModal from "./ImageZoomModal";
-import { ParsedAssessmentQuestion, TestAttemptRecord } from "../types";
+import { ParsedAssessmentQuestion, TestAttemptRecord, ComprehensionPassage } from "../types";
 import { 
   saveTestAttempt, 
   getStudentNextAttemptNumber,
@@ -29,6 +29,7 @@ import {
   buildTopicTestId,
   fetchQuestions,
   getQuestionsSync,
+  getPassagesForTopicSync,
   preloadQuestionImages
 } from "../lib/practiceTestService";
 import { fetchStudentScore } from "../lib/testScorePersistence";
@@ -136,6 +137,9 @@ export default function StudentPracticeTestModal({
   const [userAnswers, setUserAnswers] = useState<Record<string, string>>({});
   const [zoomImage, setZoomImage] = useState<{ url: string; label?: string } | null>(null);
   const [restoredFromDraft, setRestoredFromDraft] = useState<boolean>(false);
+  const [passages, setPassages] = useState<Record<string, ComprehensionPassage>>(() => {
+    return getPassagesForTopicSync(classGrade, subject, chapterNo, topicName);
+  });
   
   // Timer State - decoupled from parent modal rendering to prevent 1-second full-page rerenders
   const [initialElapsedSeconds, setInitialElapsedSeconds] = useState(0);
@@ -567,7 +571,7 @@ export default function StudentPracticeTestModal({
                   Question {currentQuestionIdx + 1} of {questions.length}
                 </span>
                 <span className="text-[11px] sm:text-xs font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
-                  {currentQuestion.type === "mcq" ? "MCQ" : (currentQuestion.type === "assertion_reason" ? "ASSERTION & REASON" : "TRUE / FALSE")}
+                  {currentQuestion.passageId ? "COMPREHENSION MCQ" : (currentQuestion.type === "mcq" ? "MCQ" : (currentQuestion.type === "assertion_reason" ? "ASSERTION & REASON" : "TRUE / FALSE"))}
                 </span>
                 <span className="text-[11px] sm:text-xs font-extrabold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
                   {Object.keys(userAnswers).length} / {questions.length} Answered
@@ -578,6 +582,25 @@ export default function StudentPracticeTestModal({
                 <div className="p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300 text-xs font-semibold flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
                   <span>Interrupted test session recovered. Your previous answers and timer have been restored.</span>
+                </div>
+              )}
+
+              {/* Comprehension Reading Passage (Linked once and rendered for all connected questions) */}
+              {currentQuestion.passageId && (
+                <div className="p-4 sm:p-5 rounded-xl bg-indigo-50/90 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800/80 text-slate-800 dark:text-slate-200 space-y-2.5 shadow-2xs">
+                  <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs uppercase tracking-wider">
+                    <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                    <span>{passages[currentQuestion.passageId]?.title || "Reading Passage"}</span>
+                  </div>
+                  {passages[currentQuestion.passageId]?.text ? (
+                    <div className="text-xs sm:text-sm leading-relaxed text-slate-800 dark:text-slate-200 whitespace-pre-line bg-white/80 dark:bg-slate-900/70 p-3.5 sm:p-4 rounded-lg border border-indigo-100 dark:border-indigo-900/60 font-normal shadow-2xs">
+                      {passages[currentQuestion.passageId].text}
+                    </div>
+                  ) : (
+                    <div className="text-xs italic text-indigo-600 dark:text-indigo-400">
+                      Reading passage reference linked to this question.
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -926,9 +949,16 @@ export default function StudentPracticeTestModal({
                         }`}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <span className="text-xs font-bold text-slate-800 dark:text-slate-200 leading-snug break-words flex-1">
-                            Q{idx + 1}. {q.question}
-                          </span>
+                          <div className="flex-1 space-y-1">
+                            {q.passageId && (
+                              <span className="inline-block text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
+                                Comprehension
+                              </span>
+                            )}
+                            <p className="text-xs font-bold text-slate-800 dark:text-slate-200 leading-snug break-words">
+                              Q{idx + 1}. {q.question}
+                            </p>
+                          </div>
                           {!isAttempted ? (
                             <span className="text-[11px] font-bold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded-md border border-amber-300 dark:border-amber-800 flex items-center gap-1 shrink-0">
                               <HelpCircle className="w-3 h-3 text-amber-600 dark:text-amber-400" /> Not Attempted

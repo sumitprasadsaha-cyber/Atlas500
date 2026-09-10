@@ -19,7 +19,8 @@ import {
   Loader2,
   Image as ImageIcon,
   Upload,
-  ZoomIn
+  ZoomIn,
+  BookOpen
 } from "lucide-react";
 import ImageZoomModal from "./ImageZoomModal";
 import { TopicPracticeTest, TestAttemptRecord, ParsedAssessmentQuestion } from "../types";
@@ -61,14 +62,23 @@ interface AdminPracticeTestModalProps {
 
 const SAMPLE_TEST_TEXT = `Chapter 8: World Geography: Some Glimpses
 
-Topic 1: The Blue Planet – Oceans
+Topic 1: The Blue Planet – Water and Oceans
 
 Sample Test
 
-MCQs
+1. Multiple Choice Questions
 
-1. Approximately what percentage of Earth’s surface is covered by oceans?
+1. What is the capital of Nepal?
+A. Pokhara
+B. Kathmandu ✅
+C. Biratnagar
+D. Butwal
 
+Correct Answer: B
+
+⸻
+
+2. Approximately what percentage of Earth’s surface is covered by oceans?
 A. 29%
 B. 50%
 C. 71% ✅
@@ -78,49 +88,9 @@ Correct Answer: C
 
 ⸻
 
-2. Oceans contain approximately what percentage of all the water on Earth?
+2. True / False
 
-A. 29%
-B. 71%
-C. 90%
-D. 97% ✅
-
-Correct Answer: D
-
-⸻
-
-Assertion & Reasoning
-
-3. Assertion (A): Oceans help regulate the Earth’s climate.
-
-Reason (R): Oceans absorb heat and release it slowly while also adding moisture to the atmosphere.
-
-A. Both A and R are true, and R is the correct explanation of A. ✅
-B. Both A and R are true, but R is not the correct explanation of A.
-C. A is true, but R is false.
-D. A is false, but R is true.
-
-Correct Answer: A
-
-⸻
-
-4. Assertion (A): The ocean floor is completely flat.
-
-Reason (R): The ocean floor contains features such as continental shelves, slopes, abyssal plains and trenches.
-
-A. Both A and R are true, and R is the correct explanation of A.
-B. Both A and R are true, but R is not the correct explanation of A.
-C. A is true, but R is false.
-D. A is false, but R is true. ✅
-
-Correct Answer: D
-
-⸻
-
-True / False
-
-5. The Earth is called the “Blue Planet” because most of its surface is covered by oceans.
-
+3. Earth revolves around the Sun.
 True ✅
 False
 
@@ -128,42 +98,42 @@ Correct Answer: True
 
 ⸻
 
-6. Ocean trenches are shallower than continental shelves.
-
+4. Sound travels faster than light.
 True
-False ✅
+False ❌
 
 Correct Answer: False
 
 ⸻
 
-MCQs with Image
+3. Comprehension
 
-7. [Image Upload: Ocean-floor diagram]
+Read the following passage carefully.
+Water is one of the most important natural resources on Earth. It is essential for drinking, agriculture, industries, and maintaining ecosystems. Although nearly 71% of the Earth's surface is covered with water, only a small percentage is freshwater that can be used by humans. Therefore, conserving water is necessary for sustainable development.
 
-Question:
-Which feature shown in the image represents the deepest part of the ocean floor?
+5. Why is water considered an important natural resource?
+A. It is only used for drinking.
+B. It is essential for life and many human activities. ✅
+C. It is available in unlimited quantities.
+D. It is only useful for industries.
 
-A. Continental shelf
-B. Continental slope
-C. Abyssal plain
-D. Ocean trench ✅
+Correct Answer: B
 
-Correct Answer: D
+6. Approximately what percentage of the Earth's surface is covered with water?
+A. 51%
+B. 61%
+C. 71% ✅
+D. 81%
 
-⸻
+Correct Answer: C
 
-8. [Image Upload: Marine food-chain diagram]
+7. Why should we conserve water?
+A. Freshwater resources are limited. ✅
+B. Oceans are drying up.
+C. Water cannot be recycled.
+D. Rainfall has stopped.
 
-Question:
-Which organism forms the base of the marine food chain shown in the image?
-
-A. Large fish
-B. Small fish
-C. Plankton ✅
-D. Giant marine animals
-
-Correct Answer: C`;
+Correct Answer: A`;
 
 export default function AdminPracticeTestModal({
   isOpen,
@@ -426,7 +396,8 @@ export default function AdminPracticeTestModal({
           topicName,
           rawText,
           noteId,
-          topicNoteId
+          topicNoteId,
+          passages: parseRes.passages
         },
         parseRes.questions
       );
@@ -443,17 +414,24 @@ export default function AdminPracticeTestModal({
           topicName,
           rawText,
           questions: parseRes.questions,
+          passages: parseRes.passages,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           uploadedBy: "Admin"
         };
         setSavedTest(freshTest);
 
-        const mcqCount = freshTest.questions.filter((q) => q.type === "mcq").length;
+        const mcqCount = freshTest.questions.filter((q) => q.type === "mcq" && !q.passageId).length;
         const tfCount = freshTest.questions.filter((q) => q.type === "true_false").length;
+        const compCount = freshTest.questions.filter((q) => !!q.passageId).length;
+
+        const breakdownParts: string[] = [];
+        if (mcqCount > 0) breakdownParts.push(`${mcqCount} MCQs`);
+        if (tfCount > 0) breakdownParts.push(`${tfCount} True/False`);
+        if (compCount > 0) breakdownParts.push(`${compCount} Comprehension`);
 
         setValidationSuccess(
-          `Practice Test saved successfully. Total ${freshTest.questions.length} Questions (${mcqCount} MCQs, ${tfCount} True/False).`
+          `Practice Test saved successfully. Total ${freshTest.questions.length} Questions (${breakdownParts.join(", ")}).`
         );
 
         notifyPracticeTestChanged();
@@ -830,10 +808,10 @@ export default function AdminPracticeTestModal({
                   <HelpCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
                   <div className="text-xs text-slate-700 dark:text-slate-300">
                     <p className="font-bold text-slate-900 dark:text-slate-100 mb-0.5">
-                      Automatic Question Parsing & Assessment
+                      Automatic Question Parsing (MCQs, True/False & Comprehension)
                     </p>
                     <p>
-                      Paste questions text below. Mark correct option with <span className="font-bold text-emerald-600">✅</span> symbol. True/False questions are detected automatically with <span className="font-bold">True ✅</span> or <span className="font-bold">False ❌</span>. Each question is saved as an individual row linked to Class, Subject, Chapter, and Topic.
+                      Paste questions text below. Supports 3 question formats: <strong>Multiple Choice Questions (MCQs)</strong> with ✅ marker, <strong>True / False</strong> (<span className="font-bold text-emerald-600">True ✅</span> or <span className="font-bold text-rose-600">False ❌</span>), and <strong>Comprehension passages</strong> with linked MCQs.
                     </p>
                   </div>
                 </div>
@@ -927,7 +905,7 @@ export default function AdminPracticeTestModal({
                           Q{idx + 1}
                         </span>
                         <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded">
-                          {q.type === "mcq" ? "MCQ" : (q.type === "assertion_reason" ? "Assertion & Reason" : "True / False")}
+                          {q.passageId ? "Comprehension MCQ" : (q.type === "mcq" ? "MCQ" : (q.type === "assertion_reason" ? "Assertion & Reason" : "True / False"))}
                         </span>
                         {q.published === false && (
                           <span className="text-[10px] font-bold text-amber-600 bg-amber-100 dark:bg-amber-950 px-2 py-0.5 rounded flex items-center gap-1">
@@ -995,6 +973,19 @@ export default function AdminPracticeTestModal({
                         </button>
                       </div>
                     </div>
+
+                    {/* Comprehension Parent Passage Excerpt if linked */}
+                    {q.passageId && savedTest.passages && savedTest.passages[q.passageId] && (
+                      <div className="p-3 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-xs my-2 space-y-1">
+                        <div className="flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300 font-bold text-[11px] uppercase tracking-wider">
+                          <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          <span>{savedTest.passages[q.passageId].title || "Comprehension Passage"}</span>
+                        </div>
+                        <p className="text-slate-700 dark:text-slate-300 text-[11px] line-clamp-2 leading-relaxed italic bg-white/60 dark:bg-slate-900/60 p-2 rounded border border-indigo-100 dark:border-indigo-900/40 font-normal">
+                          "{savedTest.passages[q.passageId].text}"
+                        </p>
+                      </div>
+                    )}
 
                     {/* Image / Diagram Banner or Upload */}
                     {q.imageUrl ? (
