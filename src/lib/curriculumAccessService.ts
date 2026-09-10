@@ -10,7 +10,7 @@
  * - Automatic migration of legacy copied/shared subjects into canonical allowedClasses references
  */
 
-import { doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import { getFirebaseDb } from "./firebase";
 import { ClassNote } from "../types";
 import { SchoolHierarchyData, getSchoolHierarchy, saveSchoolHierarchy } from "./curriculumService";
@@ -24,6 +24,12 @@ export interface SubjectClassAccess {
   allowedClasses: string[]; // list of allowed classes, e.g. ["Class 6", "Class 7", "Class 8"]
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface AccessibleClassInfo {
+  ownerClass: string;
+  ownerClassKey: string;
+  subjects: string[];
 }
 
 const STORAGE_KEY_SUBJECT_ACCESS = "tuition_school_subject_access_v1";
@@ -53,6 +59,86 @@ function notifyAccessListeners() {
     window.dispatchEvent(new CustomEvent("subject-access-updated"));
     window.dispatchEvent(new CustomEvent("curriculum-hierarchy-updated"));
   }
+}
+
+// Active Firestore real-time listener for subject access rules
+let activeSubjectAccessUnsub: (() => void) | null = null;
+let isFirestoreListenerInitialized = false;
+
+export function initSubjectAccessFirestoreListener(): () => void {
+  if (isFirestoreListenerInitialized) {
+    return () => {};
+  }
+  isFirestoreListenerInitialized = true;
+
+  try {
+    getFirebaseDb().then((db) => {
+      if (!db) return;
+      const accessDocRef = doc(db, "curriculum_hierarchy", "subject_access");
+
+      // Initial read
+      getDoc(accessDocRef).then((snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data && data.rules && typeof data.rules === "object") {
+            inMemorySubjectAccess = { ...data.rules };
+            safeLocalStorageSetItem(STORAGE_KEY_SUBJECT_ACCESS, JSON.stringify(data.rules));
+            notifyAccessListeners();
+          }
+        }
+      }).catch((e) => console.warn("[CurriculumAccessService] initial read error:", e));
+
+      // Realtime listener
+      activeSubjectAccessUnsub = onSnapshot(
+        accessDocRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data && data.rules && typeof data.rules === "object") {
+              inMemorySubjectAccess = { ...data.rules };
+              safeLocalStorageSetItem(STORAGE_KEY_SUBJECT_ACCESS, JSON.stringify(data.rules));
+              notifyAccessListeners();
+            }
+          }
+        },
+        (err) => {
+          console.warn("[CurriculumAccessService] realtime snapshot error:", err);
+        }
+      );
+    }).catch((e) => console.warn("[CurriculumAccessService] getFirebaseDb error:", e));
+  } catch (e) {
+    console.warn("[CurriculumAccessService] init error:", e);
+  }
+
+  // Cross-tab storage synchronization
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", (e) => {
+      if (e.key === STORAGE_KEY_SUBJECT_ACCESS && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed && typeof parsed === "object") {
+            inMemorySubjectAccess = parsed;
+            notifyAccessListeners();
+          }
+        } catch {}
+      }
+    });
+  }
+
+  return () => {
+    if (activeSubjectAccessUnsub) {
+      activeSubjectAccessUnsub();
+      activeSubjectAccessUnsub = null;
+    }
+    isFirestoreListenerInitialized = false;
+  };
+}
+
+// Auto-initialize real-time listener in browser
+if (typeof window !== "undefined") {
+  setTimeout(() => {
+    initSubjectAccessFirestoreListener();
+  }, 100);
 }
 
 /**
@@ -474,6 +560,65 @@ export function getAccessibleSubjectsForClass(
   return Array.from(subjectsSet)
     .filter((s) => !removedSet.has(s.toLowerCase().trim()))
     .sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Retrieves all accessible classes and permitted subjects granted to a target class.
+ * Filters out:
+ * - The student's own class (owner matches targetClass)
+ * - Classes with 0 permitted subjects (empty classes)
+ */
+export function getAccessibleClassesGrantedToClass(
+  targetClass: string
+): AccessibleClassInfo[] {
+  if (!targetClass) return [];
+  const normTarget = normalizeClassId(targetClass);
+  const rules = getAllSubjectAccessRules();
+
+  // Map: ownerClassKey -> { ownerClass, subjects: Set<string> }
+  const classMap = new Map<string, { ownerClass: string; subjects: Set<string> }>();
+
+  Object.values(rules).forEach((rule) => {
+    if (!rule || !rule.ownerClassId || !rule.name) return;
+    const normOwner = normalizeClassId(rule.ownerClassId);
+
+    // Skip if owner is the target class itself (that belongs to student's own class)
+    if (normOwner === normTarget) return;
+
+    // Check if targetClass is granted permission
+    if (isClassAllowedForSubject(rule, targetClass)) {
+      const cleanSubj = rule.name.trim();
+      if (!cleanSubj) return;
+
+      const ownerKey = normOwner;
+      if (!classMap.has(ownerKey)) {
+        classMap.set(ownerKey, {
+          ownerClass: rule.ownerClassId.trim(),
+          subjects: new Set<string>(),
+        });
+      }
+      classMap.get(ownerKey)!.subjects.add(cleanSubj);
+    }
+  });
+
+  const result: AccessibleClassInfo[] = [];
+  classMap.forEach((entry, key) => {
+    const subjectsList = Array.from(entry.subjects).sort((a, b) => a.localeCompare(b));
+    if (subjectsList.length > 0) {
+      result.push({
+        ownerClass: entry.ownerClass,
+        ownerClassKey: key,
+        subjects: subjectsList,
+      });
+    }
+  });
+
+  return result.sort((a, b) => {
+    const numA = parseInt(a.ownerClass.replace(/\D/g, ""), 10) || 0;
+    const numB = parseInt(b.ownerClass.replace(/\D/g, ""), 10) || 0;
+    if (numA && numB) return numA - numB;
+    return a.ownerClass.localeCompare(b.ownerClass, undefined, { numeric: true });
+  });
 }
 
 /**

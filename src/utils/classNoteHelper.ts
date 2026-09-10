@@ -302,6 +302,11 @@ export function filterClassNotesForStudent(
       return true;
     }
 
+    // If note is accessible to student's class via Class Access permission, allow it
+    if (isNoteAccessibleInClass(note, studentGrade)) {
+      return true;
+    }
+
     const noteSubj = (note.subject || "").trim();
     const noteGS = (note.generalStudiesPaper || (note as any).gs_paper || "").trim();
     const inferredGS = inferGSPaperFromSubject(noteSubj) || "";
@@ -400,6 +405,13 @@ export function getStudentSubjects(student: Student, allClassNotes: ClassNote[] 
       rawEnrolled.forEach((sub) => {
         if (!removed.includes(sub.trim())) {
           subjectsSet.add(sub.trim());
+        }
+      });
+      // Automatically include all permitted accessible subjects granted to student's class
+      const accessibleSubjs = getAccessibleSubjectsForClass(studentClass, schoolHierarchy, allClassNotes);
+      accessibleSubjs.forEach((sub) => {
+        if (!removed.includes(sub)) {
+          subjectsSet.add(sub);
         }
       });
     } else {

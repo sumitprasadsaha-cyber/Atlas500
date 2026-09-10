@@ -305,7 +305,7 @@ export default function StudentSchoolTree({
                           mod.topics.map((topic) => {
                             const isDownloading = Boolean(downloadingIds[topic.id] || (activeDownloadingId === topic.id) || topicDownloadProgress.isDownloading(topic.id));
                             const hasError = (openErrorNoteId === topic.id) || (localErrorId === topic.id);
-                            const targetClass = className || student.classGrade || (topic.note as any).classGrade || "";
+                            const targetClass = subj.ownerClass || className || (topic.note as any).classGrade || student.classGrade || "";
                             const targetSubj = subj.subject || (topic.note as any).subject || "";
                             const chapterNo = mod.moduleNo || (topic.note as any).chapterNo || 1;
 

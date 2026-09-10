@@ -1700,8 +1700,17 @@ export default function App() {
           {activeTab === "Dashboard" && (
             <StudentDashboard
               student={activeStudent}
-              onSelectSubject={(subject) => {
+              onSelectSubject={(subject, ownerClass) => {
                 setActiveSubject(subject);
+                if (ownerClass) {
+                  try {
+                    sessionStorage.setItem(`student_selected_owner_class_${activeStudent.id}`, ownerClass);
+                  } catch {}
+                } else {
+                  try {
+                    sessionStorage.removeItem(`student_selected_owner_class_${activeStudent.id}`);
+                  } catch {}
+                }
                 setActiveTab("My");
               }}
               onNavigateToTab={setActiveTab}

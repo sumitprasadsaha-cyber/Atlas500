@@ -94,7 +94,15 @@ import { filterNotesForStudent, filterSubjectsForStudent } from "../utils/noteAc
 import { filterClassNotesForStudent, getStudentSubjects, isSubjectMatching, inferGSPaperFromSubject } from "../utils/classNoteHelper";
 import { isUPSCClass } from "../utils/upscHierarchyHelper";
 import { buildStudentUPSCHierarchy, StudentUPSCGSPaper } from "../utils/studentUPSCHierarchyHelper";
-import { buildStudentSchoolHierarchy, StudentSchoolSubject, StudentSchoolClassHierarchy, StudentSchoolModule } from "../utils/studentSchoolHierarchyHelper";
+import {
+  buildStudentSchoolHierarchy,
+  buildCompleteStudentSchoolHierarchy,
+  StudentSchoolSubject,
+  StudentSchoolClassHierarchy,
+  StudentSchoolModule,
+  AccessibleClassGroup,
+} from "../utils/studentSchoolHierarchyHelper";
+import { subscribeToSubjectAccess, normalizeClassId } from "../lib/curriculumAccessService";
 import StudentUPSCTree from "./StudentUPSCTree";
 import StudentSchoolTree from "./StudentSchoolTree";
 import { subscribeToCurriculumHierarchy } from "../lib/curriculumService";
@@ -106,7 +114,7 @@ import { isPracticeTestActive } from "../lib/testSessionManager";
 
 interface StudentDashboardProps {
   student: Student;
-  onSelectSubject: (subject: string) => void;
+  onSelectSubject: (subject: string, ownerClass?: string) => void;
   onNavigateToTab: (tab: "Settings" | "My") => void;
   onOpenAvatarModal: () => void;
   onUpdateChapterRemark: (subject: string, noteId: string, remark: string) => void;
@@ -1342,6 +1350,8 @@ interface SubjectProgressCardProps {
   subject: {
     name?: string;
     subject?: string;
+    ownerClass?: string;
+    isAccessible?: boolean;
     totalModules?: number;
     totalTopics?: number;
     completedTopics?: number;
@@ -1350,12 +1360,14 @@ interface SubjectProgressCardProps {
     modules?: StudentSchoolModule[];
   };
   index: number;
-  onSelectSubject: (subject: string) => void;
+  onSelectSubject: (subject: string, ownerClass?: string) => void;
   student: Student;
+  badgeLabel?: string;
 }
 
-function SubjectProgressCard({ subject, index, onSelectSubject, student }: SubjectProgressCardProps) {
+function SubjectProgressCard({ subject, index, onSelectSubject, student, badgeLabel }: SubjectProgressCardProps) {
   const subjectName = subject.subject || subject.name || "Subject";
+  const displayClass = subject.ownerClass || badgeLabel || student.classGrade || "School";
   const totalModules = subject.totalModules ?? 0;
   const totalTopics = subject.totalTopics ?? 0;
   const completedTopics = subject.completedTopics ?? 0;
@@ -1374,7 +1386,7 @@ function SubjectProgressCard({ subject, index, onSelectSubject, student }: Subje
     >
       <button
         type="button"
-        onClick={() => onSelectSubject(subjectName)}
+        onClick={() => onSelectSubject(subjectName, subject.ownerClass)}
         className={`group relative flex flex-col justify-between overflow-hidden rounded-[22px] border border-white/15 bg-gradient-to-br ${palette.shell} p-4 text-white transition-all hover:-translate-y-1 shadow-xs cursor-pointer text-left w-full`}
       >
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.18),transparent_35%)]" />
@@ -1387,7 +1399,7 @@ function SubjectProgressCard({ subject, index, onSelectSubject, student }: Subje
             </div>
             <div className="min-w-0 text-left">
               <span className="inline-block text-[9px] font-black uppercase tracking-[0.2em] text-white/80 bg-white/15 px-2 py-0.5 rounded-full mb-0.5 backdrop-blur-xs">
-                {student.classGrade || "School"}
+                {displayClass}
               </span>
               <h4 className="truncate text-sm sm:text-base font-black text-white drop-shadow-xs">{subjectName}</h4>
               <p className="text-xs font-bold text-white/90 mt-0.5">{progressPercent}% Complete</p>

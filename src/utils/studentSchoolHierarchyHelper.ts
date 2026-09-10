@@ -25,8 +25,10 @@ import {
 import { getChapterProgressRecord, normalizeStatusLabel, getStatusConfig } from "./chapterProgressHelper";
 import {
   getAccessibleSubjectsForClass,
+  getAccessibleClassesGrantedToClass,
   getCanonicalOwnerClass,
-  isNoteAccessibleInClass
+  isNoteAccessibleInClass,
+  normalizeClassId,
 } from "../lib/curriculumAccessService";
 
 export interface StudentSchoolTopicNote {
@@ -56,6 +58,8 @@ export interface StudentSchoolModule {
 export interface StudentSchoolSubject {
   subject: string;
   subjectKey: string;
+  ownerClass?: string;
+  isAccessible?: boolean;
   modules: StudentSchoolModule[];
   totalModules: number;
   totalTopics: number;
@@ -72,6 +76,21 @@ export interface StudentSchoolClassHierarchy {
   totalTopics: number;
   completedTopics: number;
   progressPercent: number;
+}
+
+export interface AccessibleClassGroup {
+  ownerClass: string;
+  ownerClassKey: string;
+  subjects: StudentSchoolSubject[];
+  totalModules: number;
+  totalTopics: number;
+  completedTopics: number;
+  progressPercent: number;
+}
+
+export interface StudentCurriculumHierarchyResult {
+  myClass: StudentSchoolClassHierarchy;
+  accessibleClasses: AccessibleClassGroup[];
 }
 
 /**
@@ -216,267 +235,366 @@ export function getStudentEnrolledSchoolSubjects(
 }
 
 /**
+ * Builds a single StudentSchoolSubject directly from the canonical owner's curriculum:
+ * - Reads chapters from schoolHierarchy.chapters[targetClass][subjectName]
+ * - Reads topic notes from allClassNotes where note belongs to targetClass & subjectName
+ * - Computes topic completion for the student via student.chapterProgress
+ * - Computes module progress and subject progress bottom-up
+ */
+export function buildSingleSchoolSubject(
+  subjectName: string,
+  targetClass: string,
+  student: Student,
+  allClassNotes: ClassNote[] = [],
+  isAccessible: boolean = false
+): StudentSchoolSubject {
+  const schoolHierarchy = getSchoolHierarchy();
+  const normTargetClass = normalizeClassGrade(targetClass).toLowerCase();
+
+  const matchingClassKey =
+    schoolHierarchy.classes.find(
+      (c) => normalizeClassGrade(c).toLowerCase() === normTargetClass || c.toLowerCase().trim() === normTargetClass
+    ) ||
+    Object.keys(schoolHierarchy.subjects || {}).find(
+      (c) => normalizeClassGrade(c).toLowerCase() === normTargetClass || c.toLowerCase().trim() === normTargetClass
+    ) ||
+    targetClass;
+
+  const sKey = subjectName.toLowerCase().trim();
+
+  // Module map: moduleKey -> module info
+  const moduleMap = new Map<
+    string,
+    {
+      moduleNo: number;
+      moduleName: string;
+      moduleTitle: string;
+      topics: StudentSchoolTopicNote[];
+    }
+  >();
+
+  // 1. Populate chapters from schoolHierarchy.chapters
+  let adminChapters: ChapterInfo[] = [];
+
+  Object.entries(schoolHierarchy.chapters || {}).forEach(([clsKey, chMap]) => {
+    if (
+      clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() ||
+      normalizeClassGrade(clsKey).toLowerCase() === normTargetClass
+    ) {
+      Object.entries(chMap || {}).forEach(([subjKey, chList]) => {
+        if (isSubjectMatching(subjKey, subjectName)) {
+          adminChapters = chList || [];
+        }
+      });
+    }
+  });
+
+  // If no chapters found directly under matchingClassKey, check canonical owner if any
+  if (adminChapters.length === 0) {
+    const canonicalOwner = getCanonicalOwnerClass(subjectName, targetClass);
+    if (canonicalOwner && schoolHierarchy.chapters?.[canonicalOwner]) {
+      const ownerSubjMatch = Object.keys(schoolHierarchy.chapters[canonicalOwner]).find((sub) =>
+        isSubjectMatching(sub, subjectName)
+      );
+      if (ownerSubjMatch) {
+        adminChapters = schoolHierarchy.chapters[canonicalOwner][ownerSubjMatch] || [];
+      }
+    }
+  }
+
+  // Pre-seed modules from admin chapters
+  adminChapters.forEach((ch) => {
+    const mKey = `mod_${ch.number}`;
+    if (!moduleMap.has(mKey)) {
+      moduleMap.set(mKey, {
+        moduleNo: ch.number,
+        moduleName: ch.name,
+        moduleTitle:
+          ch.name.toLowerCase().startsWith("chapter") || ch.name.toLowerCase().startsWith("module")
+            ? ch.name
+            : `Chapter ${ch.number}: ${ch.name}`,
+        topics: [],
+      });
+    }
+  });
+
+  // 2. Gather notes belonging to targetClass and subjectName
+  if (Array.isArray(allClassNotes)) {
+    allClassNotes.forEach((cn) => {
+      // Must match subject
+      if (!isSubjectMatching(cn.subject, subjectName)) return;
+
+      // Must belong to targetClass directly (canonical source)
+      const cnClass = (cn as any).className || cn.classGrade || (cn as any).class || "";
+      if (!isClassGradeMatching(cnClass, targetClass) && normalizeClassId(cnClass) !== normalizeClassId(targetClass)) {
+        return;
+      }
+
+      // Check student accessibility
+      if (!isNoteAccessibleToStudent(cn, student.id, false)) return;
+
+      const details = extractSchoolDetails(cn);
+      const mKey = `mod_${details.moduleNo}`;
+
+      if (!moduleMap.has(mKey)) {
+        moduleMap.set(mKey, {
+          moduleNo: details.moduleNo,
+          moduleName: details.moduleName,
+          moduleTitle: details.moduleTitle,
+          topics: [],
+        });
+      }
+
+      const modEntry = moduleMap.get(mKey)!;
+      const isDup = modEntry.topics.some(
+        (t) => t.id === cn.id || (t.note.storagePath && cn.storagePath && t.note.storagePath === cn.storagePath)
+      );
+
+      if (!isDup) {
+        const isCompleted = isStudentSchoolTopicCompleted(cn, subjectName, student);
+        const fileSize = (cn as any).fileSize || (cn as any).file_size;
+        const fileName = cn.pdfFileName || (cn as any).fileName || (cn as any).filename;
+        const createdAt = (cn as any).createdAt || (cn as any).uploadedAt;
+        const fileType = (cn as any).fileType || ((fileName && /\.(png|jpe?g|webp)$/i.test(fileName)) ? "image" : "pdf");
+
+        modEntry.topics.push({
+          id: cn.id,
+          topicNo: details.topicNo,
+          topicName: details.topicName,
+          topicLabel: details.topicLabel,
+          note: cn,
+          isCompleted,
+          fileSize,
+          fileName,
+          createdAt,
+          fileType,
+        });
+      }
+    });
+  }
+
+  // 3. Sort modules & topics and aggregate progress bottom-up
+  const sortedModKeys = Array.from(moduleMap.keys()).sort((a, b) => {
+    const mA = moduleMap.get(a)!.moduleNo;
+    const mB = moduleMap.get(b)!.moduleNo;
+    return mA - mB;
+  });
+
+  const modules: StudentSchoolModule[] = [];
+  let subjTotalTopics = 0;
+  let subjCompletedTopics = 0;
+
+  for (const mKey of sortedModKeys) {
+    const mEntry = moduleMap.get(mKey)!;
+
+    mEntry.topics.sort((t1, t2) => {
+      const num1 = typeof t1.topicNo === "number" ? t1.topicNo : parseInt(String(t1.topicNo), 10);
+      const num2 = typeof t2.topicNo === "number" ? t2.topicNo : parseInt(String(t2.topicNo), 10);
+      if (!isNaN(num1) && !isNaN(num2) && num1 !== num2) return num1 - num2;
+      return t1.topicLabel.localeCompare(t2.topicLabel, undefined, { numeric: true });
+    });
+
+    const modTotalTopics = mEntry.topics.length;
+    const modCompletedTopics = mEntry.topics.filter((t) => t.isCompleted).length;
+    const modProgress = modTotalTopics > 0 ? Math.round((modCompletedTopics / modTotalTopics) * 100) : 0;
+
+    subjTotalTopics += modTotalTopics;
+    subjCompletedTopics += modCompletedTopics;
+
+    modules.push({
+      moduleNo: mEntry.moduleNo,
+      moduleName: mEntry.moduleName,
+      moduleTitle: mEntry.moduleTitle,
+      moduleKey: mKey,
+      topics: mEntry.topics,
+      totalTopics: modTotalTopics,
+      completedTopics: modCompletedTopics,
+      progressPercent: modProgress,
+    });
+  }
+
+  const subjProgress = subjTotalTopics > 0 ? Math.round((subjCompletedTopics / subjTotalTopics) * 100) : 0;
+
+  return {
+    subject: subjectName,
+    subjectKey: sKey,
+    ownerClass: targetClass,
+    isAccessible,
+    modules,
+    totalModules: modules.length,
+    totalTopics: subjTotalTopics,
+    completedTopics: subjCompletedTopics,
+    progressPercent: subjProgress,
+  };
+}
+
+/**
  * Builds the complete 4-tier hierarchy for School students:
- * Class -> Subject -> Module/Chapter -> Topic Note
+ * Partitioned into:
+ * 1. `myClass`: student's enrolled/native class curriculum
+ * 2. `accessibleClasses`: permission-granted classes with canonical owner subjects
  * 
- * Uses live Admin Curriculum Hierarchy & Class Notes as single source of truth.
- * Progress is computed bottom-up: Topic Completion -> Module Progress -> Subject Progress -> Class Progress.
+ * Rules:
+ * - Content belongs to the owner class.
+ * - Progress belongs to the student.
+ * - Only classes containing at least one accessible subject are included.
+ */
+export function buildCompleteStudentSchoolHierarchy(
+  student: Student,
+  allClassNotes: ClassNote[] = []
+): StudentCurriculumHierarchyResult {
+  const schoolHierarchy = getSchoolHierarchy();
+  const studentClass = student.classGrade ? normalizeClassGrade(student.classGrade) : "Class 10";
+
+  const matchingClassKey =
+    schoolHierarchy.classes.find(
+      (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase() || c.toLowerCase().trim() === studentClass.toLowerCase()
+    ) ||
+    Object.keys(schoolHierarchy.subjects || {}).find(
+      (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase() || c.toLowerCase().trim() === studentClass.toLowerCase()
+    ) ||
+    studentClass;
+
+  const removedSubjs = Object.entries(schoolHierarchy.removedSubjects || {}).flatMap(([clsKey, list]) => {
+    if (
+      clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() ||
+      normalizeClassGrade(clsKey).toLowerCase() === studentClass.toLowerCase()
+    ) {
+      return (list || []).map((s) => s.toLowerCase().trim());
+    }
+    return [];
+  });
+
+  const rawEnrolled = (student?.enrolledSubjects || []).filter(
+    (s) => typeof s === "string" && s.trim().length > 0
+  );
+
+  // A. Build My Class (Native Subjects)
+  const nativeSubjectsSet = new Set<string>();
+
+  // From hierarchy.subjects
+  const hierarchySubjs = (matchingClassKey && schoolHierarchy.subjects?.[matchingClassKey]) || [];
+  hierarchySubjs.forEach((s) => {
+    if (s && s.trim()) nativeSubjectsSet.add(s.trim());
+  });
+
+  // From hierarchy.chapters
+  const hierarchyChapters = (matchingClassKey && schoolHierarchy.chapters?.[matchingClassKey]) || {};
+  Object.keys(hierarchyChapters).forEach((s) => {
+    if (s && s.trim()) nativeSubjectsSet.add(s.trim());
+  });
+
+  // From notes belonging directly to student's own class
+  if (Array.isArray(allClassNotes)) {
+    allClassNotes.forEach((cn) => {
+      if (isClassGradeMatching(cn.classGrade, studentClass)) {
+        if (cn.subject && cn.subject.trim()) {
+          nativeSubjectsSet.add(cn.subject.trim());
+        }
+      }
+    });
+  }
+
+  let myClassSubjNames = Array.from(nativeSubjectsSet).filter(
+    (s) => !removedSubjs.includes(s.toLowerCase().trim())
+  );
+
+  if (rawEnrolled.length > 0) {
+    myClassSubjNames = myClassSubjNames.filter((sName) =>
+      rawEnrolled.some((enrolled) => isSubjectMatching(enrolled, sName))
+    );
+  }
+
+  myClassSubjNames.sort((a, b) => a.localeCompare(b));
+
+  const myClassSubjects: StudentSchoolSubject[] = myClassSubjNames.map((sName) =>
+    buildSingleSchoolSubject(sName, studentClass, student, allClassNotes, false)
+  );
+
+  let myClassTotalModules = 0;
+  let myClassTotalTopics = 0;
+  let myClassCompletedTopics = 0;
+
+  myClassSubjects.forEach((sub) => {
+    myClassTotalModules += sub.totalModules;
+    myClassTotalTopics += sub.totalTopics;
+    myClassCompletedTopics += sub.completedTopics;
+  });
+
+  const myClassProgress =
+    myClassTotalTopics > 0 ? Math.round((myClassCompletedTopics / myClassTotalTopics) * 100) : 0;
+
+  const myClassHierarchy: StudentSchoolClassHierarchy = {
+    className: matchingClassKey,
+    classKey: matchingClassKey.toLowerCase().replace(/\s+/g, "_"),
+    subjects: myClassSubjects,
+    totalSubjects: myClassSubjects.length,
+    totalModules: myClassTotalModules,
+    totalTopics: myClassTotalTopics,
+    completedTopics: myClassCompletedTopics,
+    progressPercent: myClassProgress,
+  };
+
+  // B. Build Accessible Classes (Permission-Based)
+  // Retrieve:
+  // 1. the student’s own class
+  // 2. all Class Access permissions granted to that class
+  // 3. the owner classes
+  // 4. the permitted subjects
+  const accessibleClassesInfo = getAccessibleClassesGrantedToClass(studentClass);
+  const accessibleClassGroups: AccessibleClassGroup[] = [];
+
+  accessibleClassesInfo.forEach((classInfo) => {
+    const groupSubjects: StudentSchoolSubject[] = [];
+
+    classInfo.subjects.forEach((sName) => {
+      // Build subject directly from owner's curriculum
+      const subjObj = buildSingleSchoolSubject(sName, classInfo.ownerClass, student, allClassNotes, true);
+      // Only include if subject has modules/topics or is valid in owner curriculum
+      groupSubjects.push(subjObj);
+    });
+
+    // Only show classes that contain at least one accessible subject. Do not show empty classes.
+    if (groupSubjects.length > 0) {
+      let groupTotalModules = 0;
+      let groupTotalTopics = 0;
+      let groupCompletedTopics = 0;
+
+      groupSubjects.forEach((s) => {
+        groupTotalModules += s.totalModules;
+        groupTotalTopics += s.totalTopics;
+        groupCompletedTopics += s.completedTopics;
+      });
+
+      const groupProgress =
+        groupTotalTopics > 0 ? Math.round((groupCompletedTopics / groupTotalTopics) * 100) : 0;
+
+      accessibleClassGroups.push({
+        ownerClass: classInfo.ownerClass,
+        ownerClassKey: classInfo.ownerClassKey,
+        subjects: groupSubjects,
+        totalModules: groupTotalModules,
+        totalTopics: groupTotalTopics,
+        completedTopics: groupCompletedTopics,
+        progressPercent: groupProgress,
+      });
+    }
+  });
+
+  return {
+    myClass: myClassHierarchy,
+    accessibleClasses: accessibleClassGroups,
+  };
+}
+
+/**
+ * Backwards-compatible wrapper returning the StudentSchoolClassHierarchy.
  */
 export function buildStudentSchoolHierarchy(
   student: Student,
   allClassNotes: ClassNote[] = [],
   enrolledSubjectsFilter?: string[]
 ): StudentSchoolClassHierarchy {
-  const schoolHierarchy = getSchoolHierarchy();
-  const studentClass = student.classGrade ? normalizeClassGrade(student.classGrade) : "Class 10";
-  
-  const matchingClassKey = schoolHierarchy.classes.find(
-    (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase() || c.toLowerCase().trim() === studentClass.toLowerCase()
-  ) || Object.keys(schoolHierarchy.subjects || {}).find(
-    (c) => normalizeClassGrade(c).toLowerCase() === studentClass.toLowerCase() || c.toLowerCase().trim() === studentClass.toLowerCase()
-  ) || studentClass;
-
-  const removedSubjs = Object.entries(schoolHierarchy.removedSubjects || {}).flatMap(([clsKey, list]) => {
-    if (clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() || normalizeClassGrade(clsKey).toLowerCase() === studentClass.toLowerCase()) {
-      return (list || []).map((s) => s.toLowerCase().trim());
-    }
-    return [];
-  });
-
-  const rawEnrolled = enrolledSubjectsFilter || (student?.enrolledSubjects || []).filter(
-    (s) => typeof s === "string" && s.trim().length > 0
-  );
-
-  // Subject Map: subjectKey -> { subjectName, moduleMap }
-  const subjMap = new Map<
-    string,
-    {
-      subjectName: string;
-      moduleMap: Map<
-        string,
-        {
-          moduleNo: number;
-          moduleName: string;
-          moduleTitle: string;
-          topics: StudentSchoolTopicNote[];
-        }
-      >;
-    }
-  >();
-
-  // 1. Pre-populate subjects and chapters/modules from Admin School Hierarchy & Accessible Subject Rules
-  const accessibleSubjs = getAccessibleSubjectsForClass(studentClass, schoolHierarchy, allClassNotes);
-
-  const adminChaptersMap: Record<string, ChapterInfo[]> = {};
-  Object.entries(schoolHierarchy.chapters || {}).forEach(([clsKey, chMap]) => {
-    if (clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() || normalizeClassGrade(clsKey).toLowerCase() === studentClass.toLowerCase()) {
-      Object.entries(chMap || {}).forEach(([sKey, chList]) => {
-        adminChaptersMap[sKey.toLowerCase().trim()] = chList || [];
-      });
-    }
-  });
-
-  accessibleSubjs.forEach((sName) => {
-    if (removedSubjs.includes(sName.toLowerCase().trim())) return;
-
-    if (rawEnrolled.length > 0) {
-      const matches = rawEnrolled.some((enrolled) => isSubjectMatching(enrolled, sName));
-      if (!matches) return;
-    }
-
-    const sKey = sName.toLowerCase().trim();
-    if (!subjMap.has(sKey)) {
-      subjMap.set(sKey, {
-        subjectName: sName,
-        moduleMap: new Map(),
-      });
-    }
-
-    const subjEntry = subjMap.get(sKey)!;
-
-    // Load chapters: first check if canonical owner class has the chapters
-    const canonicalOwner = getCanonicalOwnerClass(sName, studentClass);
-    let adminChapters = adminChaptersMap[sKey] || [];
-    if (adminChapters.length === 0 && canonicalOwner && schoolHierarchy.chapters?.[canonicalOwner]) {
-      const ownerSubjMatch = Object.keys(schoolHierarchy.chapters[canonicalOwner]).find(
-        (sub) => sub.toLowerCase().trim() === sKey
-      );
-      if (ownerSubjMatch) {
-        adminChapters = schoolHierarchy.chapters[canonicalOwner][ownerSubjMatch] || [];
-      }
-    }
-
-    adminChapters.forEach((ch) => {
-      const mKey = `mod_${ch.number}`;
-      if (!subjEntry.moduleMap.has(mKey)) {
-        subjEntry.moduleMap.set(mKey, {
-          moduleNo: ch.number,
-          moduleName: ch.name,
-          moduleTitle: ch.name.toLowerCase().startsWith("chapter") || ch.name.toLowerCase().startsWith("module")
-            ? ch.name
-            : `Chapter ${ch.number}: ${ch.name}`,
-          topics: [],
-        });
-      }
-    });
-  });
-
-  // 2. Gather accessible notes from live Class Notes (admin repository)
-  const accessibleNotes: (ClassNote | ChapterNote)[] = [];
-  if (Array.isArray(allClassNotes)) {
-    allClassNotes.forEach((cn) => {
-      const isDirectMatch = isClassGradeMatching(cn.classGrade, studentClass);
-      const isAccessAllowed = isNoteAccessibleInClass(cn, studentClass);
-      if (!isDirectMatch && !isAccessAllowed) return;
-      if (!isNoteAccessibleToStudent(cn, student.id, false)) return;
-
-      const details = extractSchoolDetails(cn);
-      if (removedSubjs.includes(details.subject)) return;
-
-      if (rawEnrolled.length > 0) {
-        const matches = rawEnrolled.some(
-          (enrolled) => isSubjectMatching(enrolled, details.subject) || isSubjectMatching(enrolled, cn.subject)
-        );
-        if (!matches) return;
-      }
-
-      accessibleNotes.push(cn);
-    });
-  }
-
-  // 3. Populate live topic notes into the hierarchy
-  accessibleNotes.forEach((note) => {
-    const details = extractSchoolDetails(note);
-    const sKey = details.subject.toLowerCase().trim();
-
-    if (!subjMap.has(sKey)) {
-      subjMap.set(sKey, {
-        subjectName: details.subject,
-        moduleMap: new Map(),
-      });
-    }
-    const subjEntry = subjMap.get(sKey)!;
-
-    const mKey = `mod_${details.moduleNo}`;
-    if (!subjEntry.moduleMap.has(mKey)) {
-      subjEntry.moduleMap.set(mKey, {
-        moduleNo: details.moduleNo,
-        moduleName: details.moduleName,
-        moduleTitle: details.moduleTitle,
-        topics: [],
-      });
-    }
-    const modEntry = subjEntry.moduleMap.get(mKey)!;
-
-    const isDup = modEntry.topics.some(
-      (t) => t.id === note.id || (t.note.storagePath && note.storagePath && t.note.storagePath === note.storagePath)
-    );
-
-    if (!isDup) {
-      const isCompleted = isStudentSchoolTopicCompleted(note, details.subject, student);
-      const fileSize = (note as any).fileSize || (note as any).file_size;
-      const fileName = note.pdfFileName || (note as any).fileName || (note as any).filename;
-      const createdAt = (note as any).createdAt || (note as any).uploadedAt;
-      const fileType = (note as any).fileType || ((fileName && /\.(png|jpe?g|webp)$/i.test(fileName)) ? "image" : "pdf");
-
-      modEntry.topics.push({
-        id: note.id,
-        topicNo: details.topicNo,
-        topicName: details.topicName,
-        topicLabel: details.topicLabel,
-        note,
-        isCompleted,
-        fileSize,
-        fileName,
-        createdAt,
-        fileType,
-      });
-    }
-  });
-
-  // 4. Aggregate progress bottom-up
-  const sortedSubjKeys = Array.from(subjMap.keys()).sort((a, b) => {
-    const nameA = subjMap.get(a)!.subjectName;
-    const nameB = subjMap.get(b)!.subjectName;
-    return nameA.localeCompare(nameB);
-  });
-
-  const subjects: StudentSchoolSubject[] = [];
-  let classTotalModules = 0;
-  let classTotalTopics = 0;
-  let classCompletedTopics = 0;
-
-  for (const sKey of sortedSubjKeys) {
-    const sEntry = subjMap.get(sKey)!;
-    const sortedModKeys = Array.from(sEntry.moduleMap.keys()).sort((a, b) => {
-      const mA = sEntry.moduleMap.get(a)!.moduleNo;
-      const mB = sEntry.moduleMap.get(b)!.moduleNo;
-      return mA - mB;
-    });
-
-    const modules: StudentSchoolModule[] = [];
-    let subjTotalTopics = 0;
-    let subjCompletedTopics = 0;
-
-    for (const mKey of sortedModKeys) {
-      const mEntry = sEntry.moduleMap.get(mKey)!;
-
-      // Sort topics numerically
-      mEntry.topics.sort((t1, t2) => {
-        const num1 = typeof t1.topicNo === "number" ? t1.topicNo : parseInt(String(t1.topicNo), 10);
-        const num2 = typeof t2.topicNo === "number" ? t2.topicNo : parseInt(String(t2.topicNo), 10);
-        if (!isNaN(num1) && !isNaN(num2) && num1 !== num2) return num1 - num2;
-        return t1.topicLabel.localeCompare(t2.topicLabel, undefined, { numeric: true });
-      });
-
-      const modTotalTopics = mEntry.topics.length;
-      const modCompletedTopics = mEntry.topics.filter((t) => t.isCompleted).length;
-      const modProgress = modTotalTopics > 0 ? Math.round((modCompletedTopics / modTotalTopics) * 100) : 0;
-
-      subjTotalTopics += modTotalTopics;
-      subjCompletedTopics += modCompletedTopics;
-
-      modules.push({
-        moduleNo: mEntry.moduleNo,
-        moduleName: mEntry.moduleName,
-        moduleTitle: mEntry.moduleTitle,
-        moduleKey: mKey,
-        topics: mEntry.topics,
-        totalTopics: modTotalTopics,
-        completedTopics: modCompletedTopics,
-        progressPercent: modProgress,
-      });
-    }
-
-    const subjTotalModules = modules.length;
-    const subjProgress = subjTotalTopics > 0 ? Math.round((subjCompletedTopics / subjTotalTopics) * 100) : 0;
-
-    classTotalModules += subjTotalModules;
-    classTotalTopics += subjTotalTopics;
-    classCompletedTopics += subjCompletedTopics;
-
-    subjects.push({
-      subject: sEntry.subjectName,
-      subjectKey: sKey,
-      modules,
-      totalModules: subjTotalModules,
-      totalTopics: subjTotalTopics,
-      completedTopics: subjCompletedTopics,
-      progressPercent: subjProgress,
-    });
-  }
-
-  const classTotalSubjects = subjects.length;
-  const classProgress = classTotalTopics > 0 ? Math.round((classCompletedTopics / classTotalTopics) * 100) : 0;
-
-  return {
-    className: matchingClassKey,
-    classKey: matchingClassKey.toLowerCase().replace(/\s+/g, "_"),
-    subjects,
-    totalSubjects: classTotalSubjects,
-    totalModules: classTotalModules,
-    totalTopics: classTotalTopics,
-    completedTopics: classCompletedTopics,
-    progressPercent: classProgress,
-  };
+  const result = buildCompleteStudentSchoolHierarchy(student, allClassNotes);
+  return result.myClass;
 }
