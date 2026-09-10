@@ -78,6 +78,89 @@ export default async function handler(req: any, res: any) {
 
     switch (action) {
       // ========================================================
+      // 0. SUBJECT CLASS ACCESS & PERMISSIONS (v7.9.5 Security Enforcement)
+      // ========================================================
+      case "manage-access":
+      case "subject-access": {
+        const parsedBody = parseRequestBody(req.body) || {};
+        const { subjectName, ownerClassId, allowedClasses } = parsedBody;
+
+        // 1. ownerClassId exists
+        if (!ownerClassId || typeof ownerClassId !== "string" || !ownerClassId.trim()) {
+          return res.status(400).json({
+            success: false,
+            code: "INVALID_OWNER_CLASS",
+            error: "ownerClassId is required and cannot be empty.",
+          });
+        }
+
+        // 2. subjectName exists
+        if (!subjectName || typeof subjectName !== "string" || !subjectName.trim()) {
+          return res.status(400).json({
+            success: false,
+            code: "INVALID_SUBJECT_NAME",
+            error: "subjectName is required and cannot be empty.",
+          });
+        }
+
+        // 3. allowedClasses is an array
+        if (!Array.isArray(allowedClasses)) {
+          return res.status(400).json({
+            success: false,
+            code: "INVALID_ALLOWED_CLASSES",
+            error: "allowedClasses must be an array of class strings.",
+          });
+        }
+
+        // 4. Invalid class IDs rejected
+        for (const cls of allowedClasses) {
+          if (!cls || typeof cls !== "string" || !cls.trim() || /[<>{}]/.test(cls)) {
+            return res.status(400).json({
+              success: false,
+              code: "INVALID_CLASS_ID",
+              error: `Invalid class ID: "${cls}". Empty strings or illegal characters are rejected.`,
+            });
+          }
+        }
+
+        // 5. Duplicate class IDs are rejected
+        const normOwner = ownerClassId.trim().toLowerCase().replace(/[\s_-]/g, "");
+        const normalizedSeen = new Set<string>();
+        for (const cls of allowedClasses) {
+          const norm = cls.trim().toLowerCase().replace(/[\s_-]/g, "");
+          if (normalizedSeen.has(norm)) {
+            return res.status(400).json({
+              success: false,
+              code: "DUPLICATE_CLASS_ID",
+              error: `Duplicate class ID rejected: "${cls}".`,
+            });
+          }
+          normalizedSeen.add(norm);
+        }
+
+        // 6. allowedClasses always includes ownerClassId & ownerClassId cannot be removed
+        if (!normalizedSeen.has(normOwner)) {
+          return res.status(400).json({
+            success: false,
+            code: "OWNER_CLASS_REQUIRED",
+            error: `ownerClassId "${ownerClassId}" must always be included in allowedClasses and cannot be removed.`,
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: "Subject class access permissions successfully validated.",
+          access: {
+            id: `school_${normOwner}_${subjectName.trim().toLowerCase().replace(/[^a-z0-9]/g, "_")}`,
+            name: subjectName.trim(),
+            ownerClassId: ownerClassId.trim(),
+            allowedClasses: allowedClasses.map((c: string) => c.trim()),
+            updatedAt: new Date().toISOString(),
+          },
+        });
+      }
+
+      // ========================================================
       // 1. NOTES UPLOAD (Atlas v5.0.8 Production Hardening)
       // Form -> buildCanonicalNoteMetadata() -> validate -> Cloudflare R2 -> Verify -> Response
       // ========================================================
@@ -85,6 +168,19 @@ export default async function handler(req: any, res: any) {
         const payload = await extractUploadPayload(req);
         const fields = payload.fields || {};
         const parsedBody = parseRequestBody(req.body) || {};
+
+        // Security check: Only owner class can modify curriculum
+        if (fields.currentClass && fields.ownerClassId) {
+          const normCurrent = fields.currentClass.trim().toLowerCase().replace(/[\s_-]/g, "");
+          const normOwner = fields.ownerClassId.trim().toLowerCase().replace(/[\s_-]/g, "");
+          if (normCurrent !== normOwner) {
+            return res.status(403).json({
+              success: false,
+              code: "FORBIDDEN_NOT_CURRICULUM_OWNER",
+              error: `Authorization Error: Only the owner class (${fields.ownerClassId}) can modify this curriculum. ${fields.currentClass} has read-only access.`,
+            });
+          }
+        }
 
         // 1. Validate file presence
         if (!payload.buffer || payload.buffer.length === 0) {
@@ -248,6 +344,19 @@ export default async function handler(req: any, res: any) {
         const fields = payload.fields || {};
         const parsedBody = parseRequestBody(req.body) || {};
 
+        // Security check: Only owner class can modify curriculum
+        if (fields.currentClass && fields.ownerClassId) {
+          const normCurrent = fields.currentClass.trim().toLowerCase().replace(/[\s_-]/g, "");
+          const normOwner = fields.ownerClassId.trim().toLowerCase().replace(/[\s_-]/g, "");
+          if (normCurrent !== normOwner) {
+            return res.status(403).json({
+              success: false,
+              code: "FORBIDDEN_NOT_CURRICULUM_OWNER",
+              error: `Authorization Error: Only the owner class (${fields.ownerClassId}) can modify this curriculum. ${fields.currentClass} has read-only access.`,
+            });
+          }
+        }
+
         if (!payload.buffer || payload.buffer.length === 0) {
           return res.status(400).json({
             success: false,
@@ -376,6 +485,19 @@ export default async function handler(req: any, res: any) {
       // ========================================================
       case "delete": {
         const parsedBody = parseRequestBody(req.body) || {};
+
+        // Security check: Only owner class can modify curriculum
+        if (parsedBody.currentClass && parsedBody.ownerClassId) {
+          const normCurrent = parsedBody.currentClass.trim().toLowerCase().replace(/[\s_-]/g, "");
+          const normOwner = parsedBody.ownerClassId.trim().toLowerCase().replace(/[\s_-]/g, "");
+          if (normCurrent !== normOwner) {
+            return res.status(403).json({
+              success: false,
+              code: "FORBIDDEN_NOT_CURRICULUM_OWNER",
+              error: `Authorization Error: Only the owner class (${parsedBody.ownerClassId}) can modify this curriculum. ${parsedBody.currentClass} has read-only access.`,
+            });
+          }
+        }
         const storageKey = sanitizeKey(parsedBody.storageKey || parsedBody.storagePath || query.storageKey || query.storagePath || "");
         const targetId = noteIdFromUrl || parsedBody.id || query.id;
 

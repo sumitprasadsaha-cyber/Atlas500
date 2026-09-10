@@ -20,7 +20,7 @@ import {
   ChevronDown,
   MoreVertical,
   MoreHorizontal,
-  Share2
+  Shield
 } from "lucide-react";
 import { ClassNote, Student } from "../../types";
 import { 
@@ -45,9 +45,16 @@ import CreateHierarchyNodeModal, {
 } from "./CreateHierarchyNodeModal";
 import NotesPreviewModal from "./NotesPreviewModal";
 import AdminPracticeTestModal from "../AdminPracticeTestModal";
-import ShareSubjectNotesModal from "./ShareSubjectNotesModal";
+import ManageClassAccessModal from "./ManageClassAccessModal";
 import NotesMainPanel from "./NotesMainPanel";
 import Toast from "../Toast";
+import {
+  getAccessibleSubjectsForClass,
+  getCanonicalOwnerClass,
+  isSubjectOwner,
+  verifyCurriculumEditPermission,
+  migrateExistingSharedSubjects
+} from "../../lib/curriculumAccessService";
 import {
   getSchoolHierarchy,
   getUpscHierarchy,
@@ -217,8 +224,8 @@ export default function AdminNotesDashboard({
   } | null>(null);
   const [isRenamingSubject, setIsRenamingSubject] = useState(false);
 
-  // Share Subject to Other Classes Modal state (v7.9.3)
-  const [sharingSubject, setSharingSubject] = useState<{
+  // Manage Class Access Modal state (v7.9.5)
+  const [managingAccessSubject, setManagingAccessSubject] = useState<{
     subject: string;
     className: string;
   } | null>(null);
@@ -317,6 +324,20 @@ export default function AdminNotesDashboard({
     };
   }, [loadPracticeTests]);
 
+  // v7.9.5: Automatically migrate legacy copy-based shared subjects to canonical ownership model
+  useEffect(() => {
+    const runMigration = async () => {
+      try {
+        await migrateExistingSharedSubjects(schoolHierarchy, notes);
+      } catch (migErr) {
+        console.warn("[AdminNotesDashboard] Migration warning:", migErr);
+      }
+    };
+    if (notes && notes.length > 0) {
+      runMigration();
+    }
+  }, []);
+
   // Helper to check if a topic note has an active practice test
   const checkIfTopicHasPracticeTest = useCallback((note: ClassNote): boolean => {
     if (!note) return false;
@@ -389,24 +410,20 @@ export default function AdminNotesDashboard({
 
   const schoolSubjectsForSelectedClass = useMemo(() => {
     if (!selectedSchoolClass) return [];
-    const set = new Set<string>();
+    const accessible = getAccessibleSubjectsForClass(selectedSchoolClass, schoolHierarchy, schoolNotes);
     const removedForClass = new Set(removedSchoolSubjects[selectedSchoolClass] || []);
+    return accessible.filter((s) => !removedForClass.has(s)).sort();
+  }, [selectedSchoolClass, schoolHierarchy, schoolNotes, removedSchoolSubjects]);
 
-    const customList = customSchoolSubjects[selectedSchoolClass] || [];
-    customList.forEach((s) => {
-      if (s && s.trim() && !removedForClass.has(s.trim())) set.add(s.trim());
-    });
+  const isCurriculumReadOnly = useMemo(() => {
+    if (activeTab !== "school" || !selectedSchoolSubject || !selectedSchoolClass) return false;
+    return !isSubjectOwner(selectedSchoolSubject, selectedSchoolClass);
+  }, [activeTab, selectedSchoolSubject, selectedSchoolClass]);
 
-    schoolNotes.forEach((n) => {
-      const c = (n as any).className || n.classGrade || (n as any).class || "";
-      if (c.toLowerCase() === selectedSchoolClass.toLowerCase()) {
-        const s = (n as any).subjectName || n.subject || "";
-        if (s && s.trim() && !removedForClass.has(s.trim())) set.add(s.trim());
-      }
-    });
-
-    return Array.from(set).sort();
-  }, [selectedSchoolClass, schoolNotes, customSchoolSubjects, removedSchoolSubjects]);
+  const curriculumOwnerClass = useMemo(() => {
+    if (activeTab !== "school" || !selectedSchoolSubject || !selectedSchoolClass) return selectedSchoolClass;
+    return getCanonicalOwnerClass(selectedSchoolSubject, selectedSchoolClass);
+  }, [activeTab, selectedSchoolSubject, selectedSchoolClass]);
 
   useEffect(() => {
     if (schoolSubjectsForSelectedClass.length > 0) {
@@ -421,16 +438,23 @@ export default function AdminNotesDashboard({
   const schoolChaptersForSelected = useMemo(() => {
     if (!selectedSchoolClass || !selectedSchoolSubject) return [];
     const map = new Map<number, string>();
+    const canonicalOwner = getCanonicalOwnerClass(selectedSchoolSubject, selectedSchoolClass);
 
-    const customList = customSchoolChapters[selectedSchoolClass]?.[selectedSchoolSubject] || [];
+    // 1. Check custom chapters under canonicalOwner first, then selectedSchoolClass
+    const customList = (customSchoolChapters[canonicalOwner]?.[selectedSchoolSubject] || []).length > 0
+      ? (customSchoolChapters[canonicalOwner]?.[selectedSchoolSubject] || [])
+      : (customSchoolChapters[selectedSchoolClass]?.[selectedSchoolSubject] || []);
+
     customList.forEach((ch) => {
       map.set(ch.number, ch.name || `Chapter ${ch.number}`);
     });
 
+    // 2. Check schoolNotes under selectedSchoolClass OR canonicalOwner
     schoolNotes.forEach((n) => {
-      const c = (n as any).className || n.classGrade || (n as any).class || "";
-      const s = (n as any).subjectName || n.subject || "";
-      if (c.toLowerCase() === selectedSchoolClass.toLowerCase() && s.toLowerCase() === selectedSchoolSubject.toLowerCase()) {
+      const c = ((n as any).className || n.classGrade || (n as any).class || "").trim().toLowerCase();
+      const isMatch = c === selectedSchoolClass.trim().toLowerCase() || c === canonicalOwner.trim().toLowerCase();
+      const s = ((n as any).subjectName || n.subject || "").trim().toLowerCase();
+      if (isMatch && s === selectedSchoolSubject.trim().toLowerCase()) {
         const rawChNo = (n as any).chapterNumber ?? n.chapterNo ?? 1;
         const chNo = typeof rawChNo === "number" ? rawChNo : parseInt(String(rawChNo).replace(/\D/g, ""), 10) || 1;
         const chName = (n as any).chapterTitle || (n as any).chapterName || `Chapter ${chNo}`;
@@ -570,7 +594,9 @@ export default function AdminNotesDashboard({
 
       if (activeTab === "school") {
         const c = ((n as any).className || n.classGrade || (n as any).class || "").trim().toLowerCase();
-        if (c !== selectedSchoolClass.trim().toLowerCase()) return;
+        const canonicalOwner = getCanonicalOwnerClass(selectedSchoolSubject, selectedSchoolClass).trim().toLowerCase();
+        const isMatch = c === selectedSchoolClass.trim().toLowerCase() || c === canonicalOwner;
+        if (!isMatch) return;
         const rawCh = (n as any).chapterNumber ?? n.chapterNo ?? 1;
         const chNum = typeof rawCh === "number" ? rawCh : parseInt(String(rawCh).replace(/\D/g, ""), 10) || 1;
         if (!map.has(chNum)) map.set(chNum, []);
@@ -731,6 +757,14 @@ export default function AdminNotesDashboard({
 
   const handleConfirmReplace = async () => {
     if (!replacingNote || !replaceFile) return;
+    const noteSubj = (replacingNote as any).subjectName || replacingNote.subject || "";
+    if (activeTab === "school" && !isSubjectOwner(noteSubj, selectedSchoolClass)) {
+      const owner = getCanonicalOwnerClass(noteSubj, selectedSchoolClass);
+      showToast(`Authorization Error: Only the owner class (${owner}) can replace this curriculum note. ${selectedSchoolClass} has read-only access.`, "error");
+      setReplacingNote(null);
+      setReplaceFile(null);
+      return;
+    }
     setIsReplacing(true);
     try {
       await replaceNotePipeline({
@@ -751,6 +785,13 @@ export default function AdminNotesDashboard({
 
   const handleConfirmDelete = async () => {
     if (!deletingNote) return;
+    const noteSubj = (deletingNote as any).subjectName || deletingNote.subject || "";
+    if (activeTab === "school" && !isSubjectOwner(noteSubj, selectedSchoolClass)) {
+      const owner = getCanonicalOwnerClass(noteSubj, selectedSchoolClass);
+      showToast(`Authorization Error: Only the owner class (${owner}) can delete this curriculum note. ${selectedSchoolClass} has read-only access.`, "error");
+      setDeletingNote(null);
+      return;
+    }
     setIsDeleting(true);
     try {
       await deleteNotePipeline(deletingNote.id, deletingNote);
@@ -770,6 +811,12 @@ export default function AdminNotesDashboard({
   // Subject Rename Handlers
   const handleOpenRenameSubject = (subj: string) => {
     if (activeTab === "school") {
+      const isOwner = isSubjectOwner(subj, selectedSchoolClass);
+      if (!isOwner) {
+        const owner = getCanonicalOwnerClass(subj, selectedSchoolClass);
+        showToast(`Authorization Error: Only the owner class (${owner}) can rename this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
+        return;
+      }
       setRenamingSubject({
         type: "school",
         className: selectedSchoolClass,
@@ -857,6 +904,12 @@ export default function AdminNotesDashboard({
   const handleConfirmDeleteSubject = async () => {
     if (!deletingSubject) return;
     const { type, className, gsPaper, subject } = deletingSubject;
+    if (type === "school" && className && !isSubjectOwner(subject, className)) {
+      const owner = getCanonicalOwnerClass(subject, className);
+      showToast(`Authorization Error: Only the owner class (${owner}) can delete this curriculum. ${className} has read-only access.`, "error");
+      setDeletingSubject(null);
+      return;
+    }
     setIsDeletingSubject(true);
 
     try {
@@ -1017,6 +1070,12 @@ export default function AdminNotesDashboard({
   // Chapter / Module Rename & Delete Handlers
   const handleOpenRenameChapter = (chNumber: number, chName: string) => {
     if (activeTab === "school") {
+      const isOwner = isSubjectOwner(selectedSchoolSubject, selectedSchoolClass);
+      if (!isOwner) {
+        const owner = getCanonicalOwnerClass(selectedSchoolSubject, selectedSchoolClass);
+        showToast(`Authorization Error: Only the owner class (${owner}) can edit chapters in this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
+        return;
+      }
       setRenamingChapter({
         type: "school",
         className: selectedSchoolClass,
@@ -1107,6 +1166,12 @@ export default function AdminNotesDashboard({
   const handleConfirmDeleteChapter = async () => {
     if (!deletingChapter) return;
     const { type, className, gsPaper, subject, chapterNumber, chapterName } = deletingChapter;
+    if (type === "school" && className && !isSubjectOwner(subject, className)) {
+      const owner = getCanonicalOwnerClass(subject, className);
+      showToast(`Authorization Error: Only the owner class (${owner}) can delete chapters in this curriculum. ${className} has read-only access.`, "error");
+      setDeletingChapter(null);
+      return;
+    }
     setIsDeletingChapter(true);
 
     try {
@@ -1396,13 +1461,19 @@ export default function AdminNotesDashboard({
                               )}
                             </button>
 
-                            {/* Subject Actions: Delete, Share & 3-dots Kebab for Rename */}
+                            {/* Subject Actions: Delete, Manage Class Access & 3-dots Kebab for Rename */}
                             <div className="flex items-center gap-0.5 shrink-0">
                               {/* Delete Subject Button (🗑️) */}
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  const isOwner = isSubjectOwner(subj, selectedSchoolClass);
+                                  if (!isOwner) {
+                                    const owner = getCanonicalOwnerClass(subj, selectedSchoolClass);
+                                    showToast(`Authorization Error: Only the owner class (${owner}) can delete this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
+                                    return;
+                                  }
                                   setDeletingSubject({
                                     type: "school",
                                     className: selectedSchoolClass,
@@ -1420,25 +1491,25 @@ export default function AdminNotesDashboard({
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
 
-                              {/* Share Subject Button */}
+                              {/* Manage Class Access Button (v7.9.5 permission-based) */}
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setSharingSubject({
+                                  setManagingAccessSubject({
                                     subject: subj,
                                     className: selectedSchoolClass,
                                   });
                                 }}
                                 className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
                                   isSelected 
-                                    ? "hover:bg-blue-700 text-blue-100 hover:text-blue-200" 
-                                    : "text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200 dark:hover:bg-slate-700"
+                                    ? "hover:bg-blue-700 text-blue-100 hover:text-indigo-200" 
+                                    : "text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-200 dark:hover:bg-slate-700"
                                 }`}
-                                title={`Share ${subj} to other classes`}
-                                id={`share-subj-${subj.replace(/\s+/g, "-")}`}
+                                title={`Manage Class Access for ${subj}`}
+                                id={`manage-access-subj-${subj.replace(/\s+/g, "-")}`}
                               >
-                                <Share2 className="w-3.5 h-3.5" />
+                                <Shield className="w-3.5 h-3.5" />
                               </button>
 
                               {/* 3-dots Kebab for Rename */}
@@ -1747,10 +1818,16 @@ export default function AdminNotesDashboard({
           selectedChapterNo={activeTab === "school" ? selectedSchoolChapterNo : selectedUpscModuleNo}
           selectedTopicNoteId={selectedTopicNoteId}
           expandedChapters={expandedChapters}
+          isReadOnly={isCurriculumReadOnly}
+          ownerClassName={curriculumOwnerClass}
           onToggleExpand={handleToggleExpand}
           onSelectChapter={handleSelectChapter}
           onSelectTopic={handleSelectTopic}
           onAddChapter={() => {
+            if (isCurriculumReadOnly) {
+              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can add chapters to this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
+              return;
+            }
             const list = activeTab === "school" ? schoolChaptersForSelected : upscModulesForSelected;
             const nextNum = list.length > 0 ? Math.max(...list.map((c) => c.number)) + 1 : 1;
             setCreateNodeContext({
@@ -1763,6 +1840,10 @@ export default function AdminNotesDashboard({
             });
           }}
           onAddTopic={(chNum, chName) => {
+            if (isCurriculumReadOnly) {
+              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can upload notes to this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
+              return;
+            }
             if (activeTab === "school") {
               setSelectedSchoolChapterNo(chNum);
               setSelectedSchoolChapterName(chName);
@@ -1774,6 +1855,10 @@ export default function AdminNotesDashboard({
           }}
           onRenameChapter={handleOpenRenameChapter}
           onDeleteChapter={(chNum, chName) => {
+            if (isCurriculumReadOnly) {
+              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can delete chapters from this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
+              return;
+            }
             setDeletingChapter({
               type: activeTab,
               className: activeTab === "school" ? selectedSchoolClass : undefined,
@@ -1783,10 +1868,28 @@ export default function AdminNotesDashboard({
               chapterName: chName,
             });
           }}
-          onRenameTopic={handleOpenRename}
-          onDeleteTopic={(note) => setDeletingNote(note)}
+          onRenameTopic={(note) => {
+            if (isCurriculumReadOnly) {
+              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can rename notes in this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
+              return;
+            }
+            handleOpenRename(note);
+          }}
+          onDeleteTopic={(note) => {
+            if (isCurriculumReadOnly) {
+              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can delete notes from this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
+              return;
+            }
+            setDeletingNote(note);
+          }}
           onPreviewTopic={(note) => setPreviewNote(note)}
-          onReplaceTopic={handleOpenReplace}
+          onReplaceTopic={(note) => {
+            if (isCurriculumReadOnly) {
+              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can replace notes in this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
+              return;
+            }
+            handleOpenReplace(note);
+          }}
           onOpenPracticeTest={handleOpenPracticeTest}
           checkIfTopicHasPracticeTest={checkIfTopicHasPracticeTest}
         />
@@ -2560,18 +2663,17 @@ export default function AdminNotesDashboard({
         />
       )}
 
-      {/* 14. Share Subject Notes to Other Classes Modal (v7.9.3) */}
-      {sharingSubject && (
-        <ShareSubjectNotesModal
-          isOpen={Boolean(sharingSubject)}
-          onClose={() => setSharingSubject(null)}
-          currentSubject={sharingSubject.subject}
-          currentClass={sharingSubject.className}
-          allClasses={schoolClasses}
-          notes={notes}
-          schoolHierarchy={schoolHierarchy}
-          practiceTestBank={practiceTestBank}
-          onRefresh={onRefresh}
+      {/* 14. Manage Class Access Modal (v7.9.5 permission-based) */}
+      {managingAccessSubject && (
+        <ManageClassAccessModal
+          isOpen={Boolean(managingAccessSubject)}
+          onClose={() => setManagingAccessSubject(null)}
+          subjectName={managingAccessSubject.subject}
+          currentClass={managingAccessSubject.className}
+          availableClasses={schoolClasses}
+          onAccessSaved={() => {
+            if (onRefresh) onRefresh();
+          }}
         />
       )}
     </div>

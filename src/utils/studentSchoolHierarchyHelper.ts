@@ -23,6 +23,11 @@ import {
   getFormattedTopicLabel
 } from "./chapterNotesHelper";
 import { getChapterProgressRecord, normalizeStatusLabel, getStatusConfig } from "./chapterProgressHelper";
+import {
+  getAccessibleSubjectsForClass,
+  getCanonicalOwnerClass,
+  isNoteAccessibleInClass
+} from "../lib/curriculumAccessService";
 
 export interface StudentSchoolTopicNote {
   id: string;
@@ -182,7 +187,14 @@ export function getStudentEnrolledSchoolSubjects(
       }
     });
   } else {
-    // If student has no specific subjects enrolled, automatically receive all subjects from Admin hierarchy
+    // If student has no specific subjects enrolled, automatically receive all subjects from Admin hierarchy & allowed access
+    const accessibleSubjs = getAccessibleSubjectsForClass(studentClass, schoolHierarchy, allClassNotes);
+    accessibleSubjs.forEach((sub) => {
+      if (!removed.includes(sub.toLowerCase().trim())) {
+        subjectsSet.add(sub);
+      }
+    });
+
     adminSubjs.forEach((sub) => {
       if (!removed.includes(sub.toLowerCase().trim())) {
         subjectsSet.add(sub);
@@ -191,7 +203,7 @@ export function getStudentEnrolledSchoolSubjects(
 
     if (Array.isArray(allClassNotes)) {
       allClassNotes.forEach((cn) => {
-        if (cn.subject && cn.subject.trim() && isClassGradeMatching(cn.classGrade, student.classGrade)) {
+        if (cn.subject && cn.subject.trim() && (isClassGradeMatching(cn.classGrade, student.classGrade) || isNoteAccessibleInClass(cn, studentClass))) {
           if (!removed.includes(cn.subject.trim().toLowerCase())) {
             subjectsSet.add(cn.subject.trim());
           }
@@ -252,13 +264,8 @@ export function buildStudentSchoolHierarchy(
     }
   >();
 
-  // 1. Pre-populate subjects and chapters/modules from Admin School Hierarchy
-  const adminSubjs = Object.entries(schoolHierarchy.subjects || {}).flatMap(([clsKey, list]) => {
-    if (clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() || normalizeClassGrade(clsKey).toLowerCase() === studentClass.toLowerCase()) {
-      return list || [];
-    }
-    return [];
-  });
+  // 1. Pre-populate subjects and chapters/modules from Admin School Hierarchy & Accessible Subject Rules
+  const accessibleSubjs = getAccessibleSubjectsForClass(studentClass, schoolHierarchy, allClassNotes);
 
   const adminChaptersMap: Record<string, ChapterInfo[]> = {};
   Object.entries(schoolHierarchy.chapters || {}).forEach(([clsKey, chMap]) => {
@@ -269,7 +276,7 @@ export function buildStudentSchoolHierarchy(
     }
   });
 
-  adminSubjs.forEach((sName) => {
+  accessibleSubjs.forEach((sName) => {
     if (removedSubjs.includes(sName.toLowerCase().trim())) return;
 
     if (rawEnrolled.length > 0) {
@@ -286,7 +293,19 @@ export function buildStudentSchoolHierarchy(
     }
 
     const subjEntry = subjMap.get(sKey)!;
-    const adminChapters = adminChaptersMap[sKey] || [];
+
+    // Load chapters: first check if canonical owner class has the chapters
+    const canonicalOwner = getCanonicalOwnerClass(sName, studentClass);
+    let adminChapters = adminChaptersMap[sKey] || [];
+    if (adminChapters.length === 0 && canonicalOwner && schoolHierarchy.chapters?.[canonicalOwner]) {
+      const ownerSubjMatch = Object.keys(schoolHierarchy.chapters[canonicalOwner]).find(
+        (sub) => sub.toLowerCase().trim() === sKey
+      );
+      if (ownerSubjMatch) {
+        adminChapters = schoolHierarchy.chapters[canonicalOwner][ownerSubjMatch] || [];
+      }
+    }
+
     adminChapters.forEach((ch) => {
       const mKey = `mod_${ch.number}`;
       if (!subjEntry.moduleMap.has(mKey)) {
@@ -306,7 +325,9 @@ export function buildStudentSchoolHierarchy(
   const accessibleNotes: (ClassNote | ChapterNote)[] = [];
   if (Array.isArray(allClassNotes)) {
     allClassNotes.forEach((cn) => {
-      if (!isClassGradeMatching(cn.classGrade, studentClass)) return;
+      const isDirectMatch = isClassGradeMatching(cn.classGrade, studentClass);
+      const isAccessAllowed = isNoteAccessibleInClass(cn, studentClass);
+      if (!isDirectMatch && !isAccessAllowed) return;
       if (!isNoteAccessibleToStudent(cn, student.id, false)) return;
 
       const details = extractSchoolDetails(cn);

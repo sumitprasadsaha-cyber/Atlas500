@@ -1,6 +1,7 @@
 import { ClassNote, Student, ChapterNote } from "../types";
 import { groupUPSCNotesHierarchy, GroupedUPSCGSPaperItem } from "./upscHierarchyHelper";
 import { getSchoolHierarchy, getUpscHierarchy } from "../lib/curriculumService";
+import { isNoteAccessibleInClass, getAccessibleSubjectsForClass } from "../lib/curriculumAccessService";
 
 export function normalizeClassGrade(grade?: string): string {
   if (!grade) return "";
@@ -286,7 +287,7 @@ export function filterClassNotesForStudent(
     } else if (note.accessType === "selected" && Array.isArray(note.allowedStudentIds) && note.allowedStudentIds.length > 0) {
       classMatches = note.allowedStudentIds.includes(student.id);
     } else {
-      classMatches = isClassGradeMatching(note.classGrade, studentGrade);
+      classMatches = isClassGradeMatching(note.classGrade, studentGrade) || isNoteAccessibleInClass(note, studentGrade);
     }
 
     if (!classMatches) return false;
@@ -402,7 +403,14 @@ export function getStudentSubjects(student: Student, allClassNotes: ClassNote[] 
         }
       });
     } else {
-      // Automatically include all subjects under student's class from Admin hierarchy!
+      // Automatically include all accessible subjects under student's class from Admin hierarchy & access rules!
+      const accessibleSubjs = getAccessibleSubjectsForClass(studentClass, schoolHierarchy, allClassNotes);
+      accessibleSubjs.forEach((sub) => {
+        if (!removed.includes(sub)) {
+          subjectsSet.add(sub);
+        }
+      });
+
       adminSubjs.forEach((sub) => {
         if (!removed.includes(sub)) {
           subjectsSet.add(sub);
@@ -411,7 +419,7 @@ export function getStudentSubjects(student: Student, allClassNotes: ClassNote[] 
 
       if (Array.isArray(allClassNotes)) {
         allClassNotes.forEach((cn) => {
-          if (cn.subject && cn.subject.trim() && isClassGradeMatching(cn.classGrade, student.classGrade)) {
+          if (cn.subject && cn.subject.trim() && (isClassGradeMatching(cn.classGrade, student.classGrade) || isNoteAccessibleInClass(cn, studentClass))) {
             if (!removed.includes(cn.subject.trim())) {
               subjectsSet.add(cn.subject.trim());
             }
