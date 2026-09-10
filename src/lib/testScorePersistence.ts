@@ -5,7 +5,7 @@
  * Enforces per-student isolation, duplicate attempt prevention, and instant real-time UI updates.
  */
 
-import { TestAttemptRecord } from "../types";
+import { TestAttemptRecord, AssessmentTestType } from "../types";
 import { 
   getLocalTestAttempts, 
   saveLocalTestAttemptsCache, 
@@ -410,7 +410,7 @@ export async function fetchStudentScore(
   subject?: string,
   chapterNo?: number,
   topicName?: string,
-  testType: "topic" | "full_chapter" = "topic"
+  testType: AssessmentTestType | "topic" | "full_chapter" | string = "topic"
 ): Promise<TestAttemptRecord | null> {
   if (!studentId) return null;
 

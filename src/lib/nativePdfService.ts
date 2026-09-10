@@ -384,6 +384,14 @@ export async function fetchNoteBlobWithCache(
       errorDetails,
     });
 
+    console.error("[Trace 5: Client Final Response]", {
+      statusCode: responseStatus,
+      errorPayload: errorDetails || { error: response.statusText },
+      exactLineOfCodeThrowingError: responseStatus === 403 ? "src/lib/nativePdfService.ts:405" : "src/lib/nativePdfService.ts:407",
+      targetUrl,
+      canonicalStoragePath,
+    });
+
     notesLogger.error("DOWNLOAD_ERROR", { storageKey: canonicalStoragePath, fileName, status: responseStatus, extra: { details: errorDetails } });
     if (responseStatus === 404) {
       throw new Error(`Note not found: The file "${canonicalStoragePath}" was not found in storage.`);

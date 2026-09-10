@@ -35,7 +35,17 @@ import {
   deletePaperPipeline
 } from "../../lib/notesService";
 import { searchHierarchicalNotes } from "../../utils/notesHierarchyHelper";
-import { fetchAllPracticeTests, buildTopicTestId, subscribeToPracticeTests, getTopicPracticeTestSync } from "../../lib/practiceTestService";
+import { 
+  fetchAllPracticeTests, 
+  buildTopicTestId, 
+  buildChapterTestId,
+  buildSubjectTestId,
+  subscribeToPracticeTests, 
+  getTopicPracticeTestSync,
+  getChapterPracticeTestSync,
+  getSubjectPracticeTestSync
+} from "../../lib/practiceTestService";
+import { AssessmentTestType } from "../../types";
 
 import TopicCard from "./TopicCard";
 import QuickAddTopicModal, { ParentContext } from "./QuickAddTopicModal";
@@ -277,10 +287,11 @@ export default function AdminNotesDashboard({
   const [practiceTestTarget, setPracticeTestTarget] = useState<{
     classGrade: string;
     subject: string;
-    chapterNo: number;
-    chapterName: string;
-    topicName: string;
+    chapterNo?: number;
+    chapterName?: string;
+    topicName?: string;
     noteId?: string;
+    testType?: AssessmentTestType;
   } | null>(null);
 
   // Toast feedback
@@ -353,6 +364,29 @@ export default function AdminNotesDashboard({
     const syncTest = getTopicPracticeTestSync(classGrade, subject, Number(chapterNo), topicName);
     return Boolean(syncTest && Array.isArray(syncTest.questions) && syncTest.questions.length > 0);
   }, [practiceTestBank]);
+
+  // Helper to check if a chapter has an active test
+  const checkIfChapterHasTest = useCallback((chapterNo: number): boolean => {
+    const classGrade = activeTab === "school" ? selectedSchoolClass : selectedUpscPaper;
+    const subject = activeTab === "school" ? selectedSchoolSubject : selectedUpscSubject;
+    const testId = buildChapterTestId(classGrade, subject, chapterNo);
+    if (practiceTestBank[testId] && Array.isArray(practiceTestBank[testId].questions) && practiceTestBank[testId].questions.length > 0) {
+      return true;
+    }
+    const syncTest = getChapterPracticeTestSync(classGrade, subject, chapterNo);
+    return Boolean(syncTest && Array.isArray(syncTest.questions) && syncTest.questions.length > 0);
+  }, [activeTab, selectedSchoolClass, selectedUpscPaper, selectedSchoolSubject, selectedUpscSubject, practiceTestBank]);
+
+  // Helper to check if a subject has an active test
+  const checkIfSubjectHasTest = useCallback((subject: string): boolean => {
+    const classGrade = activeTab === "school" ? selectedSchoolClass : selectedUpscPaper;
+    const testId = buildSubjectTestId(classGrade, subject);
+    if (practiceTestBank[testId] && Array.isArray(practiceTestBank[testId].questions) && practiceTestBank[testId].questions.length > 0) {
+      return true;
+    }
+    const syncTest = getSubjectPracticeTestSync(classGrade, subject);
+    return Boolean(syncTest && Array.isArray(syncTest.questions) && syncTest.questions.length > 0);
+  }, [activeTab, selectedSchoolClass, selectedUpscPaper, practiceTestBank]);
 
   // Separate Notes by Category: School vs UPSC
   const { schoolNotes, upscNotes } = useMemo(() => {
@@ -1266,7 +1300,7 @@ export default function AdminNotesDashboard({
     }
   };
 
-  // Practice Test Launcher
+  // Practice Test Launcher (Topic Test)
   const handleOpenPracticeTest = (note: ClassNote) => {
     const classGrade = (note as any).className || note.classGrade || (note as any).class || "";
     const subject = (note as any).subjectName || note.subject || "";
@@ -1280,7 +1314,35 @@ export default function AdminNotesDashboard({
       chapterNo: Number(chapterNo),
       chapterName,
       topicName,
-      noteId: note.id
+      noteId: note.id,
+      testType: "TOPIC"
+    });
+  };
+
+  // Chapter Assessment Launcher
+  const handleOpenChapterTest = (chNo: number, chName: string) => {
+    const classGrade = activeTab === "school" ? selectedSchoolClass : selectedUpscPaper;
+    const subject = activeTab === "school" ? selectedSchoolSubject : selectedUpscSubject;
+    setPracticeTestTarget({
+      classGrade,
+      subject,
+      chapterNo: chNo,
+      chapterName: chName,
+      topicName: "",
+      testType: "CHAPTER"
+    });
+  };
+
+  // Subject Assessment Launcher
+  const handleOpenSubjectTest = (subject: string) => {
+    const classGrade = activeTab === "school" ? selectedSchoolClass : selectedUpscPaper;
+    setPracticeTestTarget({
+      classGrade,
+      subject,
+      chapterNo: 0,
+      chapterName: "",
+      topicName: "",
+      testType: "SUBJECT"
     });
   };
 
@@ -1890,6 +1952,10 @@ export default function AdminNotesDashboard({
           }}
           onOpenPracticeTest={handleOpenPracticeTest}
           checkIfTopicHasPracticeTest={checkIfTopicHasPracticeTest}
+          onOpenChapterTest={handleOpenChapterTest}
+          onOpenSubjectTest={handleOpenSubjectTest}
+          checkIfChapterHasTest={checkIfChapterHasTest}
+          checkIfSubjectHasTest={checkIfSubjectHasTest}
         />
       </div>
 
@@ -2649,11 +2715,12 @@ export default function AdminNotesDashboard({
           onClose={() => setPracticeTestTarget(null)}
           classGrade={practiceTestTarget.classGrade}
           subject={practiceTestTarget.subject}
-          chapterNo={practiceTestTarget.chapterNo}
-          chapterName={practiceTestTarget.chapterName}
-          topicName={practiceTestTarget.topicName}
+          chapterNo={practiceTestTarget.chapterNo || 0}
+          chapterName={practiceTestTarget.chapterName || ""}
+          topicName={practiceTestTarget.topicName || ""}
           noteId={practiceTestTarget.noteId}
           topicNoteId={practiceTestTarget.noteId}
+          testType={practiceTestTarget.testType || "TOPIC"}
           onPracticeTestChanged={() => {
             loadPracticeTests();
             if (onRefresh) onRefresh();

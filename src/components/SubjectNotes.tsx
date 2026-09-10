@@ -521,6 +521,31 @@ export default function SubjectNotes({
       setOpeningNoteId((current) => (current === note.id ? null : current));
     }, 15000);
 
+    console.log("[Trace 1: Student Clicks Topic]", {
+      topicId: (note as any).topicId || (note as any).topicNo || note.id,
+      chapterId: (note as any).chapterId || (note as any).chapterNo || "chapter_1",
+      subject: subject || note.subject || "Economics",
+      studentId: studentId || "anonymous_student",
+    });
+
+    console.log("[Trace 2: Firestore Document]", {
+      storagePath: note.storagePath || (note as any).storage_path || (note as any).objectKey || (note as any).r2Key || "",
+      bucket: note.bucket || "academy-connect-files",
+      contentType: note.mimeType || (note as any).contentType || (note as any).mime_type || (note.fileType === "image" ? "image/png" : "application/pdf"),
+      fileName: note.pdfFileName || note.fileName || (note as any).filename || "document.pdf",
+      urlFields: {
+        pdfUrl: note.pdfUrl || null,
+        storagePath: note.storagePath || null,
+        storageKey: (note as any).storageKey || null,
+        objectKey: (note as any).objectKey || null,
+        r2Key: (note as any).r2Key || null,
+        downloadKey: (note as any).downloadKey || null,
+        downloadUrl: (note as any).downloadUrl || null,
+        fileUrl: (note as any).fileUrl || null,
+        publicUrl: (note as any).publicUrl || null,
+      },
+    });
+
     try {
       await openNoteInNativeViewer({
         storageKey: finalStorageKey,

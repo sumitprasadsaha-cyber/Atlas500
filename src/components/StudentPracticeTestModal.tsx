@@ -15,10 +15,12 @@ import {
   BookOpen,
   FileCheck,
   ZoomIn,
-  Loader2
+  Loader2,
+  AlertTriangle,
+  Info
 } from "lucide-react";
 import ImageZoomModal from "./ImageZoomModal";
-import { ParsedAssessmentQuestion, TestAttemptRecord, ComprehensionPassage } from "../types";
+import { ParsedAssessmentQuestion, TestAttemptRecord, ComprehensionPassage, AssessmentTestType, TopicPracticeTest } from "../types";
 import { 
   saveTestAttempt, 
   getStudentNextAttemptNumber,
@@ -27,10 +29,15 @@ import {
 } from "../utils/assessmentParser";
 import {
   buildTopicTestId,
+  buildChapterTestId,
+  buildSubjectTestId,
+  buildAssessmentTestId,
   fetchQuestions,
   getQuestionsSync,
   getPassagesForTopicSync,
-  preloadQuestionImages
+  preloadQuestionImages,
+  getAssessmentPracticeTestSync,
+  getAssessmentPracticeTest
 } from "../lib/practiceTestService";
 import { fetchStudentScore } from "../lib/testScorePersistence";
 import { TestTimerDisplay } from "./TestTimerDisplay";
@@ -51,11 +58,12 @@ interface StudentPracticeTestModalProps {
   studentName: string;
   classGrade: string;
   subject: string;
-  chapterNo: number;
-  chapterName: string;
-  topicName: string; // Specific topic name OR "Full Chapter Test"
-  testType: "topic" | "full_chapter";
+  chapterNo?: number;
+  chapterName?: string;
+  topicName?: string; // Specific topic name OR "Full Chapter Test" OR "Subject Test"
+  testType: AssessmentTestType;
   serviceStatus?: string;
+  title?: string;
 }
 
 export default function StudentPracticeTestModal({
@@ -69,7 +77,8 @@ export default function StudentPracticeTestModal({
   chapterName,
   topicName,
   testType,
-  serviceStatus
+  serviceStatus,
+  title
 }: StudentPracticeTestModalProps) {
   const normStatus = String(serviceStatus || "").toLowerCase();
 
@@ -116,18 +125,39 @@ export default function StudentPracticeTestModal({
       </div>
     );
   }
+  // Normalize test types & level
+  const normTestType = String(testType || "topic").toLowerCase();
+  const isSubjectLevel = normTestType === "subject";
+  const isChapterLevel = normTestType === "chapter" || normTestType === "full_chapter";
+  const resolvedAssessmentTestType: AssessmentTestType = isSubjectLevel ? "SUBJECT" : isChapterLevel ? "CHAPTER" : "TOPIC";
+
+  const resolvedChapterNo = chapterNo ?? 0;
+  const resolvedChapterName = chapterName ?? "";
+  const resolvedTopicName = topicName ?? "";
+
+  const testId = buildAssessmentTestId(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType);
+
+  const [testMeta, setTestMeta] = useState<TopicPracticeTest | null>(() => {
+    return getAssessmentPracticeTestSync(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType);
+  });
+
+  const durationMinutes = testMeta?.durationMinutes || testMeta?.duration_minutes;
+
   // Test State
   const initialQuestions = React.useMemo(() => {
     if (!isOpen) return [];
+    if (testMeta && Array.isArray(testMeta.questions) && testMeta.questions.length > 0) {
+      return testMeta.questions;
+    }
     return getQuestionsSync(
       classGrade,
       subject,
-      chapterNo,
-      topicName,
+      resolvedChapterNo,
+      resolvedTopicName,
       testType,
       { publishedOnly: true }
     ) || [];
-  }, [isOpen, classGrade, subject, chapterNo, topicName, testType]);
+  }, [isOpen, classGrade, subject, resolvedChapterNo, resolvedTopicName, testType, testMeta]);
 
   const [isLoading, setIsLoading] = useState<boolean>(!initialQuestions || initialQuestions.length === 0);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -137,8 +167,9 @@ export default function StudentPracticeTestModal({
   const [userAnswers, setUserAnswers] = useState<Record<string, string>>({});
   const [zoomImage, setZoomImage] = useState<{ url: string; label?: string } | null>(null);
   const [restoredFromDraft, setRestoredFromDraft] = useState<boolean>(false);
+  const [autoSubmittedByTimer, setAutoSubmittedByTimer] = useState<boolean>(false);
   const [passages, setPassages] = useState<Record<string, ComprehensionPassage>>(() => {
-    return getPassagesForTopicSync(classGrade, subject, chapterNo, topicName);
+    return testMeta?.passages || getPassagesForTopicSync(classGrade, subject, resolvedChapterNo, resolvedTopicName);
   });
   
   // Timer State - decoupled from parent modal rendering to prevent 1-second full-page rerenders
@@ -173,19 +204,35 @@ export default function StudentPracticeTestModal({
     if (!isOpen) return;
 
     const openStartTime = performance.now();
-    const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
     let isMounted = true;
+
+    // Load fresh assessment metadata
+    const syncMeta = getAssessmentPracticeTestSync(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType);
+    if (syncMeta) {
+      setTestMeta(syncMeta);
+      if (syncMeta.passages) setPassages(syncMeta.passages);
+    } else {
+      getAssessmentPracticeTest(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType)
+        .then((m) => {
+          if (isMounted && m) {
+            setTestMeta(m);
+            if (m.passages) setPassages(m.passages);
+          }
+        })
+        .catch(() => {});
+    }
 
     // Calculate next attempt number
     const nextNum = getStudentNextAttemptNumber(
       studentId,
       classGrade,
       subject,
-      chapterNo,
-      topicName,
+      resolvedChapterNo,
+      resolvedTopicName,
       testType
     );
     setAttemptCount(nextNum);
+    setAutoSubmittedByTimer(false);
 
     const applyQuestionsAndRestore = (loadedQuestions: ParsedAssessmentQuestion[]) => {
       setQuestions(loadedQuestions);
@@ -227,14 +274,16 @@ export default function StudentPracticeTestModal({
     };
 
     // 1. Check synchronous in-memory cache first
-    const cached = getQuestionsSync(
-      classGrade,
-      subject,
-      chapterNo,
-      topicName,
-      testType,
-      { publishedOnly: true }
-    );
+    const cached = syncMeta?.questions?.length 
+      ? syncMeta.questions 
+      : getQuestionsSync(
+          classGrade,
+          subject,
+          resolvedChapterNo,
+          resolvedTopicName,
+          testType,
+          { publishedOnly: true }
+        );
 
     if (cached && cached.length > 0) {
       const durationMs = Math.round(performance.now() - openStartTime);
@@ -243,7 +292,7 @@ export default function StudentPracticeTestModal({
 
       // Fetch student score history in background without blocking UI
       if (studentId) {
-        fetchStudentScore(studentId, classGrade, subject, chapterNo, topicName, testType)
+        fetchStudentScore(studentId, classGrade, subject, resolvedChapterNo, resolvedTopicName, testType)
           .then((studentScore) => {
             if (isMounted && studentScore && testStageRef.current !== "result") {
               setLastAttemptRecord(studentScore);
@@ -256,26 +305,26 @@ export default function StudentPracticeTestModal({
       setIsLoading(true);
       setFetchError(null);
 
-      fetchQuestions(classGrade, subject, chapterNo, topicName, testType, { publishedOnly: true })
+      fetchQuestions(classGrade, subject, resolvedChapterNo, resolvedTopicName, testType, { publishedOnly: true })
         .then((qList) => {
           if (!isMounted) return;
           if (Array.isArray(qList) && qList.length > 0) {
             applyQuestionsAndRestore(qList);
           } else {
             setQuestions([]);
-            setFetchError("No practice questions found for this topic yet.");
+            setFetchError("No assessment questions found for this test yet.");
             setIsLoading(false);
           }
         })
         .catch((err) => {
           if (!isMounted) return;
           console.warn("[StudentPracticeTestModal] Error loading test questions on cache miss:", err);
-          setFetchError("Unable to load Practice Test. Please try again.");
+          setFetchError("Unable to load Assessment Test. Please try again.");
           setIsLoading(false);
         });
 
       if (studentId) {
-        fetchStudentScore(studentId, classGrade, subject, chapterNo, topicName, testType)
+        fetchStudentScore(studentId, classGrade, subject, resolvedChapterNo, resolvedTopicName, testType)
           .then((studentScore) => {
             if (isMounted && studentScore && testStageRef.current !== "result") {
               setLastAttemptRecord(studentScore);
@@ -292,13 +341,12 @@ export default function StudentPracticeTestModal({
         endTestSession();
       }
     };
-  }, [isOpen, studentId, classGrade, subject, chapterNo, topicName, testType]);
+  }, [isOpen, studentId, classGrade, subject, resolvedChapterNo, resolvedTopicName, testType, testId]);
 
   if (!isOpen) return null;
 
   const handleStartTest = () => {
     if (questions.length === 0) return;
-    const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
     const nextAttempt = testStage === "result" ? attemptCount + 1 : attemptCount;
     setAttemptCount(nextAttempt);
     startTestSession({
@@ -315,6 +363,7 @@ export default function StudentPracticeTestModal({
     setInitialElapsedSeconds(0);
     timerSecondsRef.current = 0;
     setRestoredFromDraft(false);
+    setAutoSubmittedByTimer(false);
     updateTestDraft({ userAnswers: {}, currentQuestionIdx: 0, elapsedSeconds: 0 });
   };
 
@@ -374,7 +423,10 @@ export default function StudentPracticeTestModal({
     onClose();
   };
 
-  const handleSubmitTest = () => {
+  const handleSubmitTest = (isAutoSubmittedByTimer: boolean = false) => {
+    if (isAutoSubmittedByTimer) {
+      setAutoSubmittedByTimer(true);
+    }
     const finalElapsedSeconds = timerSecondsRef.current;
     let correctCount = 0;
     let wrongCount = 0;
@@ -403,8 +455,12 @@ export default function StudentPracticeTestModal({
     });
 
     const totalQuestions = questions.length;
-    const score = correctCount;
+    const totalMarks = testMeta?.totalMarks && testMeta.totalMarks > 0 ? testMeta.totalMarks : totalQuestions;
+    const markPerQuestion = totalMarks / (totalQuestions || 1);
+    const score = Math.round(correctCount * markPerQuestion * 10) / 10;
     const percentage = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
+    const passingMarks = testMeta?.passingMarks;
+    const isPassed = passingMarks != null ? (score >= passingMarks) : percentage >= 40;
 
     const formattedDate = new Date().toLocaleDateString("en-IN", {
       day: "numeric",
@@ -414,9 +470,8 @@ export default function StudentPracticeTestModal({
       minute: "2-digit"
     });
 
-    const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
-    const topicId = (topicName || "").toLowerCase().replace(/[^a-z0-9]/g, "_");
-    const chapterId = `ch_${chapterNo}`;
+    const topicId = (resolvedTopicName || "").toLowerCase().replace(/[^a-z0-9]/g, "_");
+    const chapterId = `ch_${resolvedChapterNo}`;
     const subjectId = (subject || "").toLowerCase().replace(/\s+/g, "_");
 
     const attemptRecord: TestAttemptRecord = {
@@ -429,16 +484,18 @@ export default function StudentPracticeTestModal({
       subjectId,
       classGrade,
       subject,
-      chapterNo,
-      chapterName,
-      topicName: testType === "full_chapter" ? "🏆 Full Chapter Test" : topicName,
-      testType,
+      chapterNo: resolvedChapterNo,
+      chapterName: resolvedChapterName,
+      topicName: isSubjectLevel ? `${subject} Subject Test` : isChapterLevel ? `Chapter ${resolvedChapterNo} Test` : resolvedTopicName,
+      testType: resolvedAssessmentTestType,
       attemptNumber: attemptCount,
       date: formattedDate,
       timestamp: Date.now(),
       timeTakenSeconds: finalElapsedSeconds,
       score,
-      totalMarks: totalQuestions,
+      totalMarks,
+      passingMarks,
+      isPassed,
       totalQuestions,
       percentage,
       correctAnswersCount: correctCount,
@@ -461,10 +518,10 @@ export default function StudentPracticeTestModal({
       <div className="relative w-full max-w-3xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[92vh] sm:max-h-[90vh] overflow-hidden">
         
         {/* Compact Mobile Header */}
-        <div className="px-3.5 py-2.5 sm:px-6 sm:py-3 bg-blue-600 dark:bg-blue-700 text-white flex items-center justify-between shrink-0 min-h-[72px] sm:min-h-[84px] shadow-md border-b border-blue-700/50">
+        <div className="px-3.5 py-2.5 sm:px-6 sm:py-3 bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-700 text-white flex items-center justify-between shrink-0 min-h-[72px] sm:min-h-[84px] shadow-md border-b border-blue-700/50">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 pr-2">
             <div className="w-8 h-8 sm:w-10 sm:h-10 bg-white/15 dark:bg-white/20 backdrop-blur-md rounded-xl border border-white/20 shrink-0 flex items-center justify-center">
-              {testType === "full_chapter" ? (
+              {isSubjectLevel || isChapterLevel ? (
                 <Trophy className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300" />
               ) : (
                 <BookOpen className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
@@ -472,10 +529,10 @@ export default function StudentPracticeTestModal({
             </div>
             <div className="min-w-0 flex-1 flex flex-col justify-center">
               <p className="text-[11px] sm:text-xs font-semibold leading-tight text-blue-100 uppercase tracking-wider">
-                {testType === "full_chapter" ? "Full Chapter Test" : "Topic Practice Test"}
+                {isSubjectLevel ? "Subject Assessment" : isChapterLevel ? "Chapter Assessment" : "Topic Practice Test"}
               </p>
               <h2 className="text-xs sm:text-sm font-bold leading-snug text-white mt-0.5 break-words whitespace-normal max-w-full">
-                {testType === "full_chapter" ? `Chapter ${chapterNo}: ${chapterName}` : topicName}
+                {testMeta?.title || title || (isSubjectLevel ? `${subject} Assessment` : isChapterLevel ? `Chapter ${resolvedChapterNo}: ${resolvedChapterName}` : resolvedTopicName)}
               </h2>
             </div>
           </div>
@@ -485,6 +542,10 @@ export default function StudentPracticeTestModal({
               isActive={testStage === "active"}
               initialSeconds={initialElapsedSeconds}
               timerSecondsRef={timerSecondsRef}
+              durationMinutes={durationMinutes}
+              onTimeExpired={() => {
+                handleSubmitTest(true);
+              }}
               onPeriodicAutosave={handlePeriodicAutosave}
             />
             <button
@@ -504,7 +565,7 @@ export default function StudentPracticeTestModal({
           {testStage === "intro" && (
             <div className="text-center py-4 sm:py-6 space-y-5 max-w-lg mx-auto">
               <div className="p-4 bg-indigo-50 dark:bg-indigo-950/40 rounded-full w-16 h-16 sm:w-20 sm:h-20 mx-auto flex items-center justify-center border border-indigo-200 dark:border-indigo-800 shadow-sm">
-                {testType === "full_chapter" ? (
+                {isSubjectLevel || isChapterLevel ? (
                   <Trophy className="w-8 h-8 sm:w-10 sm:h-10 text-amber-500" />
                 ) : (
                   <FileCheck className="w-8 h-8 sm:w-10 sm:h-10 text-indigo-600 dark:text-indigo-400" />
@@ -513,10 +574,10 @@ export default function StudentPracticeTestModal({
 
               <div>
                 <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-slate-100 break-words max-w-full px-1">
-                  {testType === "full_chapter" ? `Chapter ${chapterNo}: ${chapterName}` : topicName}
+                  {testMeta?.title || title || (isSubjectLevel ? `${subject} Assessment` : isChapterLevel ? `Chapter ${resolvedChapterNo}: ${resolvedChapterName}` : resolvedTopicName)}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 break-words">
-                  [{classGrade}] {subject} • Ch {chapterNo}: {chapterName}
+                  [{classGrade}] {subject} {isChapterLevel ? `• Ch ${resolvedChapterNo}: ${resolvedChapterName}` : ""}
                 </p>
               </div>
 
@@ -526,7 +587,7 @@ export default function StudentPracticeTestModal({
                 </div>
               ) : fetchError ? (
                 <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl text-amber-800 dark:text-amber-300 text-xs font-semibold">
-                  Unable to load Practice Test. Please try again.
+                  {fetchError}
                 </div>
               ) : questions.length === 0 ? (
                 <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl text-amber-800 dark:text-amber-300 text-xs font-semibold">
@@ -534,28 +595,65 @@ export default function StudentPracticeTestModal({
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-3 gap-2.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                     <div className="p-2.5 sm:p-3 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700">
                       <p className="text-[10px] font-bold text-slate-400 uppercase">Questions</p>
                       <p className="text-base sm:text-lg font-black text-slate-900 dark:text-slate-100">{questions.length}</p>
                     </div>
                     <div className="p-2.5 sm:p-3 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase">Attempt</p>
-                      <p className="text-base sm:text-lg font-black text-blue-600 dark:text-blue-400">#{attemptCount}</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Total Marks</p>
+                      <p className="text-base sm:text-lg font-black text-slate-900 dark:text-slate-100">{testMeta?.totalMarks || questions.length}</p>
                     </div>
-                    <div className="p-2.5 sm:p-3 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col justify-center">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase">Attempts</p>
-                      <p className="text-xs sm:text-sm font-black text-emerald-600 dark:text-emerald-400 truncate mt-0.5">Unlimited</p>
+                    <div className="p-2.5 sm:p-3 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Duration</p>
+                      <p className="text-base sm:text-lg font-black text-indigo-600 dark:text-indigo-400">
+                        {durationMinutes ? `${durationMinutes}m` : "No limit"}
+                      </p>
+                    </div>
+                    <div className="p-2.5 sm:p-3 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Attempt</p>
+                      <p className="text-base sm:text-lg font-black text-blue-600 dark:text-blue-400">
+                        #{attemptCount} {testMeta?.maxAttempts ? `/ ${testMeta.maxAttempts}` : ""}
+                      </p>
                     </div>
                   </div>
 
-                  <button
-                    onClick={handleStartTest}
-                    className="w-full py-3 sm:py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-98 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-blue-900/30 transition-all cursor-pointer flex items-center justify-center gap-2"
-                  >
-                    <span>Start Test Now</span>
-                    <ChevronRight className="w-4 h-4 stroke-[3]" />
-                  </button>
+                  {testMeta?.passingMarks != null && (
+                    <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 text-purple-900 dark:text-purple-200 text-xs font-semibold flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Award className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                        <span>Passing Criteria:</span>
+                      </span>
+                      <span className="font-bold">{testMeta.passingMarks} Marks to Pass</span>
+                    </div>
+                  )}
+
+                  {testMeta?.instructions && (
+                    <div className="text-left p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-1">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-300">
+                        <Info className="w-3.5 h-3.5 text-blue-500" />
+                        <span>Instructions:</span>
+                      </div>
+                      <p className="text-xs text-slate-600 dark:text-slate-300 whitespace-pre-line leading-relaxed">
+                        {testMeta.instructions}
+                      </p>
+                    </div>
+                  )}
+
+                  {testMeta?.maxAttempts && attemptCount > testMeta.maxAttempts ? (
+                    <div className="p-3.5 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 rounded-xl text-amber-900 dark:text-amber-200 text-xs font-semibold flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Maximum attempts reached ({testMeta.maxAttempts} of {testMeta.maxAttempts}). You cannot retake this test.</span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleStartTest}
+                      className="w-full py-3 sm:py-3.5 bg-blue-600 hover:bg-blue-500 active:scale-98 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-blue-900/30 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <span>Start Test Now</span>
+                      <ChevronRight className="w-4 h-4 stroke-[3]" />
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -855,7 +953,7 @@ export default function StudentPracticeTestModal({
                   </button>
                 ) : (
                   <button
-                    onClick={handleSubmitTest}
+                    onClick={() => handleSubmitTest(false)}
                     className="h-11 sm:h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl shadow-md shadow-emerald-900/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   >
                     <Send className="w-4 h-4" />
@@ -871,6 +969,14 @@ export default function StudentPracticeTestModal({
           {testStage === "result" && lastAttemptRecord && (
             <div className="space-y-5">
               
+              {/* Timer auto-submit indicator */}
+              {autoSubmittedByTimer && (
+                <div className="p-3 bg-amber-500/20 border border-amber-400/40 rounded-xl text-amber-200 text-xs font-bold flex items-center justify-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>Time Expired! Your test was automatically submitted when the countdown reached 0:00.</span>
+                </div>
+              )}
+
               {/* Score Header Card */}
               <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-850 to-slate-900 bg-slate-900 text-white text-center shadow-xl border border-slate-700/80 relative overflow-hidden">
                 <div className="p-2.5 bg-amber-500/20 rounded-full w-12 h-12 mx-auto mb-2 flex items-center justify-center border border-amber-400/30">
@@ -878,10 +984,10 @@ export default function StudentPracticeTestModal({
                 </div>
 
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-400">
-                  {testType === "full_chapter" ? "Full Chapter Test Result" : "Topic Result"}
+                  {isSubjectLevel ? "Subject Assessment Result" : isChapterLevel ? "Chapter Assessment Result" : "Topic Practice Result"}
                 </p>
                 <h3 className="text-xs sm:text-sm font-bold text-slate-100 mt-0.5 break-words whitespace-normal max-w-full">
-                  {testType === "full_chapter" ? `Chapter ${chapterNo}: ${chapterName}` : topicName}
+                  {testMeta?.title || title || (isSubjectLevel ? `${subject} Assessment` : isChapterLevel ? `Chapter ${resolvedChapterNo}: ${resolvedChapterName}` : resolvedTopicName)}
                 </h3>
 
                 {/* Score & Percentage Display */}
@@ -890,11 +996,27 @@ export default function StudentPracticeTestModal({
                     Marks Obtained
                   </div>
                   <div className="text-2xl sm:text-3xl font-black tracking-tight text-white">
-                    {lastAttemptRecord.score} / {lastAttemptRecord.totalQuestions}
+                    {lastAttemptRecord.score} / {lastAttemptRecord.totalMarks || lastAttemptRecord.totalQuestions}
                   </div>
                   <div className="text-xl font-black text-amber-300 mt-0.5">
                     {lastAttemptRecord.percentage}%
                   </div>
+
+                  {lastAttemptRecord.passingMarks != null && (
+                    <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-center">
+                      {lastAttemptRecord.isPassed ? (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-xs">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          PASSED (Passing: {lastAttemptRecord.passingMarks} Marks)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-xs">
+                          <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                          NEEDS IMPROVEMENT (Passing: {lastAttemptRecord.passingMarks} Marks)
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 mt-3 text-xs font-bold text-slate-200 border-t border-slate-800/80 pt-3">
@@ -997,13 +1119,23 @@ export default function StudentPracticeTestModal({
 
               {/* Action Buttons - sticky at bottom for easy closing */}
               <div className="sticky -bottom-4 sm:-bottom-6 -mx-4 sm:-mx-6 p-4 sm:p-6 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 z-10 shadow-lg mt-6">
-                <button
-                  onClick={handleStartTest}
-                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-1.5"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Re-attempt Test</span>
-                </button>
+                {testMeta?.maxAttempts && attemptCount >= testMeta.maxAttempts ? (
+                  <button
+                    disabled
+                    className="px-4 py-2.5 bg-slate-200 dark:bg-slate-800 text-slate-400 text-xs font-bold rounded-xl opacity-60 cursor-not-allowed flex items-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Max Attempts Reached ({testMeta.maxAttempts}/{testMeta.maxAttempts})</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleStartTest}
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Re-attempt Test</span>
+                  </button>
+                )}
 
                 <button
                   onClick={handleClose}

@@ -1,4 +1,4 @@
-import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote, ChapterNote, ComprehensionPassage } from "../types";
+import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote, ChapterNote, ComprehensionPassage, AssessmentTestType } from "../types";
 import { getResolvedViewUrl } from "./storageService";
 import { uploadToR2, downloadFromR2, getR2BucketName } from "./r2Client";
 import { doc, setDoc, onSnapshot, collection, deleteDoc, getDoc, getDocs, Unsubscribe } from "firebase/firestore";
@@ -89,6 +89,38 @@ export function buildTopicTestId(
   const normSubj = String(subject || "").toLowerCase().trim().replace(/\s+/g, "_");
   const normTopic = String(topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
   return `${normClass}__${normSubj}__ch${chapterNo}__${normTopic}`;
+}
+
+export function buildChapterTestId(
+  classGrade: string = "",
+  subject: string = "",
+  chapterNo: number = 0
+): string {
+  const normClass = String(classGrade || "").toLowerCase().trim().replace(/\s+/g, "_");
+  const normSubj = String(subject || "").toLowerCase().trim().replace(/\s+/g, "_");
+  return `${normClass}__${normSubj}__ch${chapterNo}__chapter_test`;
+}
+
+export function buildSubjectTestId(
+  classGrade: string = "",
+  subject: string = ""
+): string {
+  const normClass = String(classGrade || "").toLowerCase().trim().replace(/\s+/g, "_");
+  const normSubj = String(subject || "").toLowerCase().trim().replace(/\s+/g, "_");
+  return `${normClass}__${normSubj}__subject_test`;
+}
+
+export function buildAssessmentTestId(
+  classGrade: string = "",
+  subject: string = "",
+  chapterNo: number = 0,
+  topicName: string = "",
+  testType: AssessmentTestType = "TOPIC"
+): string {
+  const t = String(testType || "TOPIC").toUpperCase();
+  if (t === "SUBJECT") return buildSubjectTestId(classGrade, subject);
+  if (t === "CHAPTER" || t === "FULL_CHAPTER") return buildChapterTestId(classGrade, subject, chapterNo);
+  return buildTopicTestId(classGrade, subject, chapterNo, topicName);
 }
 
 /**
@@ -793,7 +825,7 @@ export function getQuestionsSync(
   subject?: string,
   chapterNo?: number,
   topicName?: string,
-  testType: "topic" | "full_chapter" = "topic",
+  testType: AssessmentTestType = "topic",
   options?: { publishedOnly?: boolean }
 ): ParsedAssessmentQuestion[] | null {
   let classGrade = classGradeOrTopicId;
@@ -805,7 +837,32 @@ export function getQuestionsSync(
     topicName = parts.slice(3).join("__");
   }
 
-  if (testType === "full_chapter") {
+  const normType = String(testType || "topic").toLowerCase();
+
+  // 1. Dedicated Subject Test
+  if (normType === "subject") {
+    const subjTest = getSubjectPracticeTestSync(classGrade, subject || "");
+    if (subjTest && Array.isArray(subjTest.questions) && subjTest.questions.length > 0) {
+      let list = subjTest.questions;
+      if (options?.publishedOnly) {
+        list = list.filter((q) => q.published !== false);
+      }
+      return list;
+    }
+    return null;
+  }
+
+  // 2. Chapter Test (Dedicated Chapter Test preferred, fallback to aggregated topic questions)
+  if (normType === "chapter" || normType === "full_chapter") {
+    const chTest = getChapterPracticeTestSync(classGrade, subject || "", chapterNo || 1);
+    if (chTest && Array.isArray(chTest.questions) && chTest.questions.length > 0) {
+      let list = chTest.questions;
+      if (options?.publishedOnly) {
+        list = list.filter((q) => q.published !== false);
+      }
+      return list;
+    }
+
     const questions = getFullChapterQuestionsSync(classGrade, subject || "", chapterNo || 1, options);
     if (questions && questions.length > 0) {
       let list = questions;
@@ -1067,6 +1124,124 @@ export function getTopicPracticeTestSync(
   return test;
 }
 
+export function getChapterPracticeTestSync(
+  classGrade: string,
+  subject: string,
+  chapterNo: number
+): TopicPracticeTest | null {
+  const testId = buildChapterTestId(classGrade, subject, chapterNo);
+  let test = memoryTestBank[testId] || null;
+
+  if (!test) {
+    const allBankTests = Object.values(memoryTestBank);
+    const normClass = String(classGrade || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const ch = Number(chapterNo) || 1;
+    test = allBankTests.find((t) => {
+      const tType = String(t.testType || t.test_type || "").toUpperCase();
+      if (tType !== "CHAPTER" && tType !== "FULL_CHAPTER" && !t.id?.endsWith("__chapter_test")) return false;
+      const tCh = Number(t.chapterNo) || 1;
+      if (tCh !== ch) return false;
+      if (!isSubjectCompatible(subject, t.subject)) return false;
+      const tClass = String(t.classGrade || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      return !normClass || !tClass || normClass === tClass || normClass.includes(tClass) || tClass.includes(normClass);
+    }) || null;
+  }
+
+  if (test && Array.isArray(test.questions)) {
+    preloadQuestionImages(test.questions);
+  }
+
+  return test;
+}
+
+export function getSubjectPracticeTestSync(
+  classGrade: string,
+  subject: string
+): TopicPracticeTest | null {
+  const testId = buildSubjectTestId(classGrade, subject);
+  let test = memoryTestBank[testId] || null;
+
+  if (!test) {
+    const allBankTests = Object.values(memoryTestBank);
+    const normClass = String(classGrade || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    test = allBankTests.find((t) => {
+      const tType = String(t.testType || t.test_type || "").toUpperCase();
+      if (tType !== "SUBJECT" && !t.id?.endsWith("__subject_test")) return false;
+      if (!isSubjectCompatible(subject, t.subject)) return false;
+      const tClass = String(t.classGrade || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      return !normClass || !tClass || normClass === tClass || normClass.includes(tClass) || tClass.includes(normClass);
+    }) || null;
+  }
+
+  if (test && Array.isArray(test.questions)) {
+    preloadQuestionImages(test.questions);
+  }
+
+  return test;
+}
+
+export function getAssessmentPracticeTestSync(
+  classGrade: string,
+  subject: string,
+  chapterNo: number,
+  topicName: string,
+  testType: AssessmentTestType = "TOPIC"
+): TopicPracticeTest | null {
+  const tType = String(testType || "TOPIC").toUpperCase();
+  if (tType === "SUBJECT") {
+    return getSubjectPracticeTestSync(classGrade, subject);
+  }
+  if (tType === "CHAPTER" || tType === "FULL_CHAPTER") {
+    return getChapterPracticeTestSync(classGrade, subject, chapterNo);
+  }
+  return getTopicPracticeTestSync(classGrade, subject, chapterNo, topicName);
+}
+
+export async function getChapterPracticeTest(
+  classGrade: string,
+  subject: string,
+  chapterNo: number,
+  options?: { publishedOnly?: boolean; forceFresh?: boolean }
+): Promise<TopicPracticeTest | null> {
+  if (!options?.forceFresh) {
+    const sync = getChapterPracticeTestSync(classGrade, subject, chapterNo);
+    if (sync) return sync;
+  }
+  await fetchAllPracticeTests();
+  return getChapterPracticeTestSync(classGrade, subject, chapterNo);
+}
+
+export async function getSubjectPracticeTest(
+  classGrade: string,
+  subject: string,
+  options?: { publishedOnly?: boolean; forceFresh?: boolean }
+): Promise<TopicPracticeTest | null> {
+  if (!options?.forceFresh) {
+    const sync = getSubjectPracticeTestSync(classGrade, subject);
+    if (sync) return sync;
+  }
+  await fetchAllPracticeTests();
+  return getSubjectPracticeTestSync(classGrade, subject);
+}
+
+export async function getAssessmentPracticeTest(
+  classGrade: string,
+  subject: string,
+  chapterNo: number,
+  topicName: string,
+  testType: AssessmentTestType = "TOPIC",
+  options?: { publishedOnly?: boolean; forceFresh?: boolean }
+): Promise<TopicPracticeTest | null> {
+  const tType = String(testType || "TOPIC").toUpperCase();
+  if (tType === "SUBJECT") {
+    return getSubjectPracticeTest(classGrade, subject, options);
+  }
+  if (tType === "CHAPTER" || tType === "FULL_CHAPTER") {
+    return getChapterPracticeTest(classGrade, subject, chapterNo, options);
+  }
+  return getTopicPracticeTest(classGrade, subject, chapterNo, topicName, options);
+}
+
 export async function getFullChapterQuestions(
   classGrade: string,
   subject: string,
@@ -1170,7 +1345,7 @@ export async function fetchQuestions(
   subject?: string,
   chapterNo?: number,
   topicName?: string,
-  testType: "topic" | "full_chapter" = "topic",
+  testType: AssessmentTestType = "topic",
   options?: { publishedOnly?: boolean }
 ): Promise<ParsedAssessmentQuestion[]> {
   // First check synchronous in-memory cache
@@ -1188,7 +1363,26 @@ export async function fetchQuestions(
     topicName = parts.slice(3).join("__");
   }
 
-  if (testType === "full_chapter") {
+  const normType = String(testType || "topic").toLowerCase();
+
+  if (normType === "subject") {
+    const subjTest = await getSubjectPracticeTest(classGrade, subject || "", options);
+    let list = subjTest?.questions || [];
+    if (options?.publishedOnly) {
+      list = list.filter((q) => q.published !== false);
+    }
+    return list;
+  }
+
+  if (normType === "chapter" || normType === "full_chapter") {
+    const chTest = await getChapterPracticeTest(classGrade, subject || "", chapterNo || 1, options);
+    if (chTest && Array.isArray(chTest.questions) && chTest.questions.length > 0) {
+      let list = chTest.questions;
+      if (options?.publishedOnly) {
+        list = list.filter((q) => q.published !== false);
+      }
+      return list;
+    }
     return await getFullChapterQuestions(classGrade, subject || "", chapterNo || 1, options);
   }
 
@@ -1273,26 +1467,25 @@ export function validatePracticeTestDocument(docData: TopicPracticeTest): { vali
   if (!docData.id || typeof docData.id !== "string" || !docData.id.trim()) {
     return { valid: false, error: "Missing required field: id" };
   }
-  if (!docData.noteId || typeof docData.noteId !== "string" || !docData.noteId.trim()) {
-    return { valid: false, error: "Missing required field: noteId" };
-  }
-  if (!docData.topicNoteId || typeof docData.topicNoteId !== "string" || !docData.topicNoteId.trim()) {
-    return { valid: false, error: "Missing required field: topicNoteId" };
-  }
   if (!docData.classGrade || typeof docData.classGrade !== "string" || !docData.classGrade.trim()) {
     return { valid: false, error: "Missing required field: classGrade" };
   }
   if (!docData.subject || typeof docData.subject !== "string" || !docData.subject.trim()) {
     return { valid: false, error: "Missing required field: subject" };
   }
-  if (docData.chapterNo === undefined || docData.chapterNo === null || isNaN(Number(docData.chapterNo))) {
-    return { valid: false, error: "Missing required field: chapterNo" };
+  const normType = String(docData.testType || docData.test_type || "TOPIC").toUpperCase();
+  if (normType !== "SUBJECT") {
+    if (docData.chapterNo === undefined || docData.chapterNo === null || isNaN(Number(docData.chapterNo))) {
+      return { valid: false, error: "Missing required field: chapterNo" };
+    }
+    if (!docData.chapterName || typeof docData.chapterName !== "string" || !docData.chapterName.trim()) {
+      return { valid: false, error: "Missing required field: chapterName" };
+    }
   }
-  if (!docData.chapterName || typeof docData.chapterName !== "string" || !docData.chapterName.trim()) {
-    return { valid: false, error: "Missing required field: chapterName" };
-  }
-  if (!docData.topicName || typeof docData.topicName !== "string" || !docData.topicName.trim()) {
-    return { valid: false, error: "Missing required field: topicName" };
+  if (normType === "TOPIC") {
+    if (!docData.topicName || typeof docData.topicName !== "string" || !docData.topicName.trim()) {
+      return { valid: false, error: "Missing required field: topicName" };
+    }
   }
   if (!Array.isArray(docData.questions) || docData.questions.length === 0) {
     return { valid: false, error: "Missing required field: questions (questions array is empty)" };
@@ -1388,6 +1581,13 @@ export async function saveTopicPracticeTest(
     rawText: string;
     noteId?: string;
     topicNoteId?: string;
+    testType?: AssessmentTestType;
+    title?: string;
+    totalMarks?: number;
+    passingMarks?: number;
+    durationMinutes?: number;
+    instructions?: string;
+    maxAttempts?: number;
     passages?: Record<string, ComprehensionPassage>;
   },
   questions: ParsedAssessmentQuestion[]
@@ -1401,40 +1601,61 @@ export async function saveTopicPracticeTest(
     };
   }
 
-  const topicTestId = buildTopicTestId(
+  const rawTestType = String(context.testType || "TOPIC").toUpperCase();
+  const testType: AssessmentTestType = (rawTestType === "SUBJECT" ? "SUBJECT" : rawTestType === "CHAPTER" || rawTestType === "FULL_CHAPTER" ? "CHAPTER" : "TOPIC");
+
+  const assessmentTestId = buildAssessmentTestId(
     context.classGrade,
     context.subject,
     context.chapterNo,
-    context.topicName
+    context.topicName,
+    testType
   );
 
-  const canonicalNoteId = String(context.noteId || context.topicNoteId || topicTestId).trim();
-  const canonicalTopicNoteId = String(context.topicNoteId || context.noteId || topicTestId).trim();
+  const fallbackTitle = testType === "SUBJECT"
+    ? `${context.subject} Subject Test`
+    : testType === "CHAPTER"
+      ? `${context.chapterName || `Chapter ${context.chapterNo}`} Chapter Test`
+      : context.topicName;
 
-  // Clear previous attempts for topic
-  await deleteTopicAttemptsFromPersistence(
-    context.classGrade,
-    context.subject,
-    context.chapterNo,
-    context.topicName
-  ).catch(() => {});
+  const canonicalNoteId = String(context.noteId || context.topicNoteId || assessmentTestId).trim();
+  const canonicalTopicNoteId = String(context.topicNoteId || context.noteId || assessmentTestId).trim();
+
+  // Clear previous attempts for topic if topic test
+  if (testType === "TOPIC") {
+    await deleteTopicAttemptsFromPersistence(
+      context.classGrade,
+      context.subject,
+      context.chapterNo,
+      context.topicName
+    ).catch(() => {});
+  }
 
   const formattedQuestions: ParsedAssessmentQuestion[] = questions.map((q, idx) => {
     return createPracticeTestQuestion(q, context, idx);
   });
 
   const topicTest: TopicPracticeTest = {
-    id: topicTestId,
-    testId: topicTestId,
+    id: assessmentTestId,
+    testId: assessmentTestId,
     noteId: canonicalNoteId,
     topicNoteId: canonicalTopicNoteId,
     hasTest: true,
     hasPracticeTest: true,
+    testType: testType,
+    test_type: testType,
+    title: context.title ? String(context.title).trim() : fallbackTitle,
+    totalMarks: context.totalMarks !== undefined && context.totalMarks !== null && !isNaN(Number(context.totalMarks)) ? Number(context.totalMarks) : formattedQuestions.length,
+    passingMarks: context.passingMarks !== undefined && context.passingMarks !== null && !isNaN(Number(context.passingMarks)) ? Number(context.passingMarks) : undefined,
+    durationMinutes: context.durationMinutes !== undefined && context.durationMinutes !== null && !isNaN(Number(context.durationMinutes)) ? Number(context.durationMinutes) : undefined,
+    duration_minutes: context.durationMinutes !== undefined && context.durationMinutes !== null && !isNaN(Number(context.durationMinutes)) ? Number(context.durationMinutes) : undefined,
+    instructions: context.instructions ? String(context.instructions).trim() : undefined,
+    maxAttempts: context.maxAttempts !== undefined && context.maxAttempts !== null && !isNaN(Number(context.maxAttempts)) ? Number(context.maxAttempts) : undefined,
     classGrade: String(context.classGrade || "").trim(),
     subject: String(context.subject || "").trim(),
-    chapterNo: Number(context.chapterNo) || 1,
-    chapterName: String(context.chapterName || `Chapter ${context.chapterNo || 1}`).trim(),
-    topicName: String(context.topicName || "").trim(),
+    chapterNo: Number(context.chapterNo) || 0,
+    chapterName: String(context.chapterName || (testType === "SUBJECT" ? "All Chapters" : `Chapter ${context.chapterNo || 1}`)).trim(),
+    topicName: String(context.topicName || fallbackTitle).trim(),
     rawText: String(context.rawText || "").trim(),
     questions: formattedQuestions,
     questionCount: formattedQuestions.length,
@@ -1476,8 +1697,8 @@ export async function saveTopicPracticeTest(
       throw new Error("Database connection is currently unavailable. Please check your network or Firebase configuration.");
     }
 
-    const testDocRef = doc(db, "topic_practice_tests", topicTestId);
-    const aliasDocRef = doc(db, "practice_tests", topicTestId);
+    const testDocRef = doc(db, "topic_practice_tests", assessmentTestId);
+    const aliasDocRef = doc(db, "practice_tests", assessmentTestId);
 
     // Primary write to topic_practice_tests and mirror write to practice_tests
     await setDoc(testDocRef, sanitizedTopicTest, { merge: true });
@@ -1486,12 +1707,12 @@ export async function saveTopicPracticeTest(
     // Step 6: Read back the document immediately to verify persistence
     const verifySnap = await getDoc(testDocRef);
     if (!verifySnap.exists()) {
-      throw new Error(`Firestore persistence verification failed: Document ${topicTestId} was not found after save.`);
+      throw new Error(`Firestore persistence verification failed: Document ${assessmentTestId} was not found after save.`);
     }
 
     const savedData = verifySnap.data() as TopicPracticeTest;
     if (!savedData.questions || !Array.isArray(savedData.questions) || savedData.questions.length === 0) {
-      throw new Error(`Firestore persistence verification failed: Questions array in ${topicTestId} is empty.`);
+      throw new Error(`Firestore persistence verification failed: Questions array in ${assessmentTestId} is empty.`);
     }
 
     if (savedData.questionCount !== savedData.questions.length) {
@@ -1499,38 +1720,32 @@ export async function saveTopicPracticeTest(
     }
 
     if (!savedData.hasTest && !savedData.hasPracticeTest) {
-      throw new Error(`Firestore persistence verification failed: hasTest/hasPracticeTest flag is false in ${topicTestId}.`);
+      throw new Error(`Firestore persistence verification failed: hasTest/hasPracticeTest flag is false in ${assessmentTestId}.`);
     }
 
-    if (!savedData.noteId) {
-      throw new Error(`Firestore persistence verification failed: noteId is missing in ${topicTestId}.`);
-    }
-
-    if (!savedData.topicNoteId) {
-      throw new Error(`Firestore persistence verification failed: topicNoteId is missing in ${topicTestId}.`);
-    }
-
-    console.log(`[PracticeTestService] Firestore write verified successfully for ${topicTestId}: ${savedData.questions.length} questions.`);
+    console.log(`[PracticeTestService] Firestore write verified successfully for ${assessmentTestId}: ${savedData.questions.length} questions.`);
 
     // Also mirror/link hasPracticeTest to class_notes & upsc_notes documents
-    try {
-      const collectionsToCheck = ["class_notes", "upsc_notes"];
-      for (const colName of collectionsToCheck) {
-        const notesCol = collection(db, colName);
-        const snap = await getDocs(notesCol);
-        for (const docSnap of snap.docs) {
-          const n = docSnap.data() as ClassNote;
-          const nClass = (n as any).className || n.classGrade || "";
-          const nSubj = (n as any).subjectName || n.subject || "";
-          const nCh = (n as any).chapterNumber ?? n.chapterNo ?? 1;
-          const nTopic = (n as any).topicTitle || (n as any).topicName || n.partLabel || "";
-          if (isExactTopicMatch(context.classGrade, context.subject, context.chapterNo, context.topicName, nClass, nSubj, nCh, nTopic)) {
-            await setDoc(docSnap.ref, { hasPracticeTest: true, hasTest: true, practiceTestId: topicTestId }, { merge: true }).catch(() => {});
+    if (testType === "TOPIC") {
+      try {
+        const collectionsToCheck = ["class_notes", "upsc_notes"];
+        for (const colName of collectionsToCheck) {
+          const notesCol = collection(db, colName);
+          const snap = await getDocs(notesCol);
+          for (const docSnap of snap.docs) {
+            const n = docSnap.data() as ClassNote;
+            const nClass = (n as any).className || n.classGrade || "";
+            const nSubj = (n as any).subjectName || n.subject || "";
+            const nCh = (n as any).chapterNumber ?? n.chapterNo ?? 1;
+            const nTopic = (n as any).topicTitle || (n as any).topicName || n.partLabel || "";
+            if (isExactTopicMatch(context.classGrade, context.subject, context.chapterNo, context.topicName, nClass, nSubj, nCh, nTopic)) {
+              await setDoc(docSnap.ref, { hasPracticeTest: true, hasTest: true, practiceTestId: assessmentTestId }, { merge: true }).catch(() => {});
+            }
           }
         }
+      } catch (linkErr) {
+        console.warn("[PracticeTestService] Note link update notice:", linkErr);
       }
-    } catch (linkErr) {
-      console.warn("[PracticeTestService] Note link update notice:", linkErr);
     }
   } catch (err: any) {
     console.error("[PracticeTestService] Direct Firestore write/verification failed:", err);
@@ -1544,13 +1759,30 @@ export async function saveTopicPracticeTest(
 
   // Sync to secondary R2 backup and send realtime broadcast
   await syncTestBankToStorage(getLocalTestBank()).catch(() => false);
-  await notifyPracticeTestRealtimeSync({ testId: topicTestId, action: "save_topic" });
+  await notifyPracticeTestRealtimeSync({ testId: assessmentTestId, action: "save_assessment_test" });
 
   return {
     success: true,
     count: formattedQuestions.length,
-    message: `Practice Test saved and verified successfully. ${formattedQuestions.length} questions persisted.`,
+    message: `Successfully saved test with ${formattedQuestions.length} questions.`
   };
+}
+
+export const saveAssessmentPracticeTest = saveTopicPracticeTest;
+
+export async function deleteChapterPracticeTest(
+  classGrade: string,
+  subject: string,
+  chapterNo: number
+): Promise<{ success: boolean; error?: string }> {
+  return deleteTopicPracticeTest(classGrade, subject, chapterNo, `__chapter_${chapterNo}_test__`);
+}
+
+export async function deleteSubjectPracticeTest(
+  classGrade: string,
+  subject: string
+): Promise<{ success: boolean; error?: string }> {
+  return deleteTopicPracticeTest(classGrade, subject, 0, `__subject_${subject}_test__`);
 }
 
 export const saveTopicPracticeTestDirect = saveTopicPracticeTest;

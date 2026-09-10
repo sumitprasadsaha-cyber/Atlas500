@@ -834,10 +834,7 @@ export async function getObjectFromR2(params: {
         const command = new GetObjectCommand(input);
         const response = await client.send(command);
 
-        console.log("[Trace 4: R2 Response]", {
-          operation: "GetObject",
-          bucket: bucketName,
-          key: keyToTry,
+        console.log("[Trace 4: Cloudflare R2 Response]", {
           status: response.$metadata?.httpStatusCode || 200,
           headers: {
             "content-type": response.ContentType,
@@ -846,6 +843,8 @@ export async function getObjectFromR2(params: {
             etag: response.ETag,
             "last-modified": response.LastModified?.toISOString(),
           },
+          bodySize: response.ContentLength || 0,
+          errorDetails: null,
         });
 
         console.log(`[Stage 5: Backend Streaming] S3 GetObject stream opened:`, {
@@ -880,6 +879,17 @@ export async function getObjectFromR2(params: {
           err?.code === "NotFound";
 
         if (!isNotFound) {
+          console.error("[Trace 4: Cloudflare R2 Response Error]", {
+            status: err?.$metadata?.httpStatusCode || (err?.name === "AccessDenied" ? 403 : 500),
+            headers: err?.$metadata || {},
+            bodySize: 0,
+            errorDetails: {
+              name: err?.name,
+              code: err?.code,
+              message: err?.message,
+              requestId: err?.$metadata?.requestId,
+            },
+          });
           console.warn(`[Stage 5: Backend Streaming] S3 GetObject notice for key="${keyToTry}":`, {
             name: err?.name,
             code: err?.code,

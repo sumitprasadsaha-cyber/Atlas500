@@ -18,7 +18,9 @@ import {
   ChevronsDown,
   ChevronsUp,
   Sparkles,
-  Shield
+  Shield,
+  Trophy,
+  Award
 } from "lucide-react";
 import { ClassNote } from "../../types";
 import TopicCard from "./TopicCard";
@@ -52,6 +54,10 @@ interface NotesMainPanelProps {
   onReplaceTopic: (note: ClassNote) => void;
   onOpenPracticeTest: (note: ClassNote) => void;
   checkIfTopicHasPracticeTest: (note: ClassNote) => boolean;
+  onOpenChapterTest?: (chapterNo: number, chapterName: string) => void;
+  onOpenSubjectTest?: (subject: string) => void;
+  checkIfChapterHasTest?: (chapterNo: number) => boolean;
+  checkIfSubjectHasTest?: (subject: string) => boolean;
 }
 
 export default function NotesMainPanel({
@@ -78,6 +84,10 @@ export default function NotesMainPanel({
   onReplaceTopic,
   onOpenPracticeTest,
   checkIfTopicHasPracticeTest,
+  onOpenChapterTest,
+  onOpenSubjectTest,
+  checkIfChapterHasTest,
+  checkIfSubjectHasTest,
 }: NotesMainPanelProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeChapterKebab, setActiveChapterKebab] = useState<number | null>(null);
@@ -238,6 +248,27 @@ export default function NotesMainPanel({
                   </button>
                 )}
 
+                {/* Subject Test Button */}
+                {onOpenSubjectTest && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenSubjectTest(selectedSubject)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all shrink-0 flex-1 sm:flex-initial justify-center cursor-pointer border ${
+                      checkIfSubjectHasTest?.(selectedSubject)
+                        ? "bg-purple-600 hover:bg-purple-700 text-white border-purple-600 shadow-purple-500/20"
+                        : "bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800"
+                    }`}
+                    title={`Create or manage Subject Test for ${selectedSubject}`}
+                    id={`main-panel-subject-test-btn-${selectedSubject.toLowerCase().replace(/\s+/g, "-")}`}
+                  >
+                    <Trophy className="w-3.5 h-3.5 text-amber-300" />
+                    <span>Subject Test</span>
+                    {checkIfSubjectHasTest?.(selectedSubject) && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    )}
+                  </button>
+                )}
+
                 {/* + Add Chapter/Module Button */}
                 <button
                   type="button"
@@ -381,11 +412,32 @@ export default function NotesMainPanel({
                       </div>
                     </div>
 
-                    {/* Right: Chapter Action Buttons (+ Upload Note, Rename, Delete) */}
+                    {/* Right: Chapter Action Buttons (+ Upload Note, Rename, Delete, Chapter Test) */}
                     <div 
                       className="flex items-center gap-1.5 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 dark:border-slate-800 justify-end w-full sm:w-auto flex-wrap"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      {/* Chapter Test Button */}
+                      {onOpenChapterTest && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenChapterTest(chNumber, chName)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold shadow-2xs flex items-center gap-1 transition-all cursor-pointer flex-1 sm:flex-initial justify-center border ${
+                            checkIfChapterHasTest?.(chNumber)
+                              ? "bg-amber-600 hover:bg-amber-700 text-white border-amber-600 shadow-amber-500/20"
+                              : "bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 dark:hover:bg-amber-900/60 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800"
+                          }`}
+                          title={`Create or manage Chapter Test for Chapter ${chNumber}`}
+                          id={`chapter-test-btn-ch-${chNumber}`}
+                        >
+                          <Trophy className="w-3 h-3 text-amber-500" />
+                          <span>Chapter Test</span>
+                          {checkIfChapterHasTest?.(chNumber) && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          )}
+                        </button>
+                      )}
+
                       {/* + Upload Note / Add Topic Button */}
                       <button
                         type="button"

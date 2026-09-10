@@ -5,31 +5,50 @@ import { testDiagnostics } from "../lib/testDiagnostics";
 interface TestTimerDisplayProps {
   isActive: boolean;
   initialSeconds?: number;
+  durationMinutes?: number;
   timerSecondsRef: React.MutableRefObject<number>;
   onPeriodicAutosave?: (elapsedSeconds: number) => void;
+  onTimeExpired?: () => void;
 }
 
 function formatTime(totalSecs: number): string {
-  const mins = Math.floor(totalSecs / 60);
-  const secs = totalSecs % 60;
+  const mins = Math.floor(Math.max(0, totalSecs) / 60);
+  const secs = Math.max(0, totalSecs) % 60;
   return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
 export const TestTimerDisplay: React.FC<TestTimerDisplayProps> = memo(({
   isActive,
   initialSeconds = 0,
+  durationMinutes,
   timerSecondsRef,
-  onPeriodicAutosave
+  onPeriodicAutosave,
+  onTimeExpired
 }) => {
-  const [displaySeconds, setDisplaySeconds] = useState(initialSeconds);
+  const isCountdown = typeof durationMinutes === "number" && durationMinutes > 0;
+  const totalDurationSecs = isCountdown ? durationMinutes * 60 : 0;
+
+  const getInitialDisplay = () => {
+    if (isCountdown) {
+      return Math.max(0, totalDurationSecs - initialSeconds);
+    }
+    return initialSeconds;
+  };
+
+  const [displaySeconds, setDisplaySeconds] = useState(getInitialDisplay);
   const startTimeRef = useRef<number>(Date.now() - initialSeconds * 1000);
   const autosaveIntervalRef = useRef<number>(0);
+  const hasExpiredRef = useRef<boolean>(false);
 
   useEffect(() => {
     startTimeRef.current = Date.now() - initialSeconds * 1000;
-    setDisplaySeconds(initialSeconds);
+    const initialDisp = isCountdown
+      ? Math.max(0, totalDurationSecs - initialSeconds)
+      : initialSeconds;
+    setDisplaySeconds(initialDisp);
     timerSecondsRef.current = initialSeconds;
-  }, [initialSeconds, timerSecondsRef]);
+    hasExpiredRef.current = false;
+  }, [initialSeconds, durationMinutes, isCountdown, totalDurationSecs, timerSecondsRef]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -40,8 +59,21 @@ export const TestTimerDisplay: React.FC<TestTimerDisplayProps> = memo(({
       // Wall-clock calculation guarantees zero drift even if the browser throttles
       const now = Date.now();
       const elapsed = Math.max(0, Math.floor((now - startTimeRef.current) / 1000));
-      setDisplaySeconds(elapsed);
       timerSecondsRef.current = elapsed;
+
+      if (isCountdown) {
+        const remaining = Math.max(0, totalDurationSecs - elapsed);
+        setDisplaySeconds(remaining);
+
+        if (remaining <= 0 && !hasExpiredRef.current) {
+          hasExpiredRef.current = true;
+          if (onTimeExpired) {
+            onTimeExpired();
+          }
+        }
+      } else {
+        setDisplaySeconds(elapsed);
+      }
 
       // Periodic autosave every 10 seconds
       autosaveIntervalRef.current += 1;
@@ -58,8 +90,19 @@ export const TestTimerDisplay: React.FC<TestTimerDisplayProps> = memo(({
       if (document.visibilityState === "visible") {
         const now = Date.now();
         const elapsed = Math.max(0, Math.floor((now - startTimeRef.current) / 1000));
-        setDisplaySeconds(elapsed);
         timerSecondsRef.current = elapsed;
+        if (isCountdown) {
+          const remaining = Math.max(0, totalDurationSecs - elapsed);
+          setDisplaySeconds(remaining);
+          if (remaining <= 0 && !hasExpiredRef.current) {
+            hasExpiredRef.current = true;
+            if (onTimeExpired) {
+              onTimeExpired();
+            }
+          }
+        } else {
+          setDisplaySeconds(elapsed);
+        }
       }
     };
 
@@ -70,17 +113,32 @@ export const TestTimerDisplay: React.FC<TestTimerDisplayProps> = memo(({
       clearInterval(timerId);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [isActive, timerSecondsRef, onPeriodicAutosave]);
+  }, [isActive, isCountdown, totalDurationSecs, timerSecondsRef, onPeriodicAutosave, onTimeExpired]);
 
   if (!isActive) return null;
+
+  const isUrgent = isCountdown && displaySeconds <= 60;
+  const isWarning = isCountdown && displaySeconds <= 300 && displaySeconds > 60;
+
+  const badgeClasses = isUrgent
+    ? "bg-rose-600 text-white border-rose-300 animate-pulse shadow-md shadow-rose-500/40"
+    : isWarning
+      ? "bg-amber-500 text-white border-amber-300 shadow-xs"
+      : "bg-blue-700/80 dark:bg-blue-800/80 border-white/25 text-white";
 
   return (
     <div
       id="test-timer-display"
-      className="h-[28px] sm:h-[32px] px-2.5 bg-blue-700/80 dark:bg-blue-800/80 border border-white/25 rounded-full flex items-center gap-1.5 text-xs font-mono font-bold text-white shadow-xs select-none"
+      className={`h-[28px] sm:h-[32px] px-2.5 border rounded-full flex items-center gap-1.5 text-xs font-mono font-bold shadow-xs select-none transition-colors duration-300 ${badgeClasses}`}
+      title={isCountdown ? `Time remaining: ${formatTime(displaySeconds)}` : "Time elapsed"}
     >
-      <Clock className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+      <Clock className={`w-3.5 h-3.5 shrink-0 ${isUrgent ? "text-white animate-pulse" : isWarning ? "text-amber-100" : "text-amber-300"}`} />
       <span>{formatTime(displaySeconds)}</span>
+      {isCountdown && (
+        <span className="text-[10px] font-sans font-normal opacity-90 hidden xs:inline">
+          remaining
+        </span>
+      )}
     </div>
   );
 });

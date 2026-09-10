@@ -1,4 +1,4 @@
-import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ComprehensionPassage } from "../types";
+import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ComprehensionPassage, AssessmentTestType } from "../types";
 
 export interface ParsedMetadata {
   chapter?: string;
@@ -30,6 +30,38 @@ export function buildTopicTestId(
   const normSubj = (subject || "").toLowerCase().replace(/\s+/g, "_");
   const normTopic = (topicName || "").toLowerCase().replace(/[^a-z0-9]/g, "_");
   return `${normClass}__${normSubj}__ch${chapterNo}__${normTopic}`;
+}
+
+export function buildChapterTestId(
+  classGrade: string = "",
+  subject: string = "",
+  chapterNo: number = 0
+): string {
+  const normClass = (classGrade || "").toLowerCase().replace(/\s+/g, "_");
+  const normSubj = (subject || "").toLowerCase().replace(/\s+/g, "_");
+  return `${normClass}__${normSubj}__ch${chapterNo}__chapter_test`;
+}
+
+export function buildSubjectTestId(
+  classGrade: string = "",
+  subject: string = ""
+): string {
+  const normClass = (classGrade || "").toLowerCase().replace(/\s+/g, "_");
+  const normSubj = (subject || "").toLowerCase().replace(/\s+/g, "_");
+  return `${normClass}__${normSubj}__subject_test`;
+}
+
+export function buildAssessmentTestId(
+  classGrade: string = "",
+  subject: string = "",
+  chapterNo: number = 0,
+  topicName: string = "",
+  testType: AssessmentTestType = "TOPIC"
+): string {
+  const t = String(testType || "TOPIC").toUpperCase();
+  if (t === "SUBJECT") return buildSubjectTestId(classGrade, subject);
+  if (t === "CHAPTER" || t === "FULL_CHAPTER") return buildChapterTestId(classGrade, subject, chapterNo);
+  return buildTopicTestId(classGrade, subject, chapterNo, topicName);
 }
 
 /**
@@ -920,13 +952,14 @@ export function getStudentTestAttempts(
   subject?: string,
   chapterNo?: number,
   topicName?: string,
-  testType?: "topic" | "full_chapter"
+  testType?: AssessmentTestType
 ): TestAttemptRecord[] {
   const all = getAllTestAttempts();
   const normIdent = (studentIdentifier || "").toLowerCase().trim();
   const normClass = (classGrade || "").toLowerCase().trim();
   const normSubj = (subject || "").toLowerCase().trim();
   const normTopic = (topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
+  const normType = String(testType || "").toLowerCase().trim();
 
   if (studentIdentifier && all.length === 0) {
     fetchStudentTestAttempts(studentIdentifier).catch(() => {});
@@ -938,7 +971,11 @@ export function getStudentTestAttempts(
       const matchName = (a.studentName || "").toLowerCase().trim() === normIdent;
       if (!matchId && !matchName) return false;
     }
-    if (testType && a.testType !== testType) return false;
+    if (normType) {
+      const aType = String(a.testType || "").toLowerCase().trim();
+      const isBothChapter = (normType === "chapter" || normType === "full_chapter") && (aType === "chapter" || aType === "full_chapter");
+      if (aType !== normType && !isBothChapter) return false;
+    }
     if (classGrade) {
       const aClass = (a.classGrade || "").toLowerCase().trim();
       if (aClass && normClass && aClass !== normClass && !aClass.includes(normClass) && !normClass.includes(aClass)) return false;
@@ -947,8 +984,8 @@ export function getStudentTestAttempts(
       const aSubj = (a.subject || "").toLowerCase().trim();
       if (aSubj && normSubj && aSubj !== normSubj && !aSubj.includes(normSubj) && !normSubj.includes(aSubj)) return false;
     }
-    if (chapterNo !== undefined && Number(a.chapterNo) !== Number(chapterNo)) return false;
-    if (topicName && testType === "topic") {
+    if (chapterNo !== undefined && normType !== "subject" && Number(a.chapterNo) !== Number(chapterNo)) return false;
+    if (topicName && (normType === "topic" || !normType)) {
       const aTopic = (a.topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
       return aTopic === normTopic || aTopic.includes(normTopic) || normTopic.includes(aTopic);
     }
@@ -962,7 +999,7 @@ export function getStudentNextAttemptNumber(
   subject: string,
   chapterNo: number,
   topicName: string,
-  testType: "topic" | "full_chapter"
+  testType: AssessmentTestType = "topic"
 ): number {
   const existing = getStudentTestAttempts(
     studentId,

@@ -317,6 +317,8 @@ export interface TuitionStats {
 // SMART TOPIC-WISE ASSESSMENT SYSTEM TYPES
 // ----------------------------------------------------
 
+export type AssessmentTestType = "TOPIC" | "CHAPTER" | "SUBJECT" | "topic" | "chapter" | "subject" | "full_chapter";
+
 export interface ComprehensionPassage {
   id: string;
   title?: string;
@@ -363,6 +365,18 @@ export interface TopicPracticeTest {
   rawText: string;
   questions: ParsedAssessmentQuestion[];
   passages?: Record<string, ComprehensionPassage>;
+
+  // Assessment System Enhancement (vNext) settings
+  testType?: AssessmentTestType;
+  test_type?: AssessmentTestType;
+  title?: string;
+  totalMarks?: number;
+  passingMarks?: number;
+  durationMinutes?: number;
+  duration_minutes?: number;
+  instructions?: string;
+  maxAttempts?: number;
+
   createdAt: string;
   updatedAt: string;
   uploadedBy?: string;
@@ -380,14 +394,16 @@ export interface TestAttemptRecord {
   subject: string;
   chapterNo: number;
   chapterName: string;
-  topicName: string; // Topic Name OR "Full Chapter Test"
-  testType: "topic" | "full_chapter";
+  topicName: string; // Topic Name OR "Full Chapter Test" OR "Chapter Test" OR "Subject Test"
+  testType: AssessmentTestType;
   attemptNumber: number; // 1, 2, 3...
   date: string; // Formatted date string
   timestamp: number;
   timeTakenSeconds: number; // In seconds
   score: number; // Marks obtained, e.g. 18
   totalMarks?: number; // Total marks, e.g. 20
+  passingMarks?: number;
+  isPassed?: boolean;
   totalQuestions: number; // e.g., 20
   percentage: number; // e.g., 90
   correctAnswersCount: number;

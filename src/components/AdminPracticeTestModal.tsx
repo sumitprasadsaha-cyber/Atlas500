@@ -20,10 +20,12 @@ import {
   Image as ImageIcon,
   Upload,
   ZoomIn,
-  BookOpen
+  BookOpen,
+  Sliders,
+  Clock
 } from "lucide-react";
 import ImageZoomModal from "./ImageZoomModal";
-import { TopicPracticeTest, TestAttemptRecord, ParsedAssessmentQuestion } from "../types";
+import { TopicPracticeTest, TestAttemptRecord, ParsedAssessmentQuestion, AssessmentTestType } from "../types";
 import {
   parseAssessmentText, 
   getAllTestAttempts,
@@ -33,15 +35,21 @@ import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import Toast from "./Toast";
 import {
   getTopicPracticeTest,
+  getAssessmentPracticeTest,
   saveTopicPracticeTest,
   deleteAssessmentQuestion,
   updateAssessmentQuestion,
   reorderAssessmentQuestions,
   deleteTopicPracticeTest,
+  deleteChapterPracticeTest,
+  deleteSubjectPracticeTest,
   deleteTopicPracticeTestDirect,
   deleteAllPracticeTestsFromDatabase,
   fetchAllPracticeTests,
-  buildTopicTestId
+  buildTopicTestId,
+  buildChapterTestId,
+  buildSubjectTestId,
+  buildAssessmentTestId
 } from "../lib/practiceTestService";
 import { uploadQuestionImageToStorage } from "../lib/storageService";
 import { createPracticeTestChangeHandler } from "../utils/practiceTestState";
@@ -52,11 +60,12 @@ interface AdminPracticeTestModalProps {
   onClose: () => void;
   classGrade: string;
   subject: string;
-  chapterNo: number;
-  chapterName: string;
-  topicName: string;
+  chapterNo?: number;
+  chapterName?: string;
+  topicName?: string;
   noteId?: string;
   topicNoteId?: string;
+  testType?: AssessmentTestType;
   onPracticeTestChanged?: () => void;
 }
 
@@ -145,10 +154,23 @@ export default function AdminPracticeTestModal({
   topicName,
   noteId,
   topicNoteId,
+  testType,
   onPracticeTestChanged
 }: AdminPracticeTestModalProps) {
+  const effectiveTestType: AssessmentTestType = testType || "TOPIC";
+  const effectiveChapterNo = chapterNo || 0;
+  const effectiveChapterName = chapterName || "";
+  const effectiveTopicName = topicName || (effectiveTestType === "SUBJECT" ? `${subject} Subject Test` : `${effectiveChapterName} Chapter Test`);
+
   const [activeTab, setActiveTab] = useState<"editor" | "preview" | "attempts">("editor");
   const [rawText, setRawText] = useState("");
+  const [testTitle, setTestTitle] = useState("");
+  const [durationMinutes, setDurationMinutes] = useState<number | "">("");
+  const [totalMarks, setTotalMarks] = useState<number | "">("");
+  const [passingMarks, setPassingMarks] = useState<number | "">("");
+  const [instructions, setInstructions] = useState("");
+  const [maxAttempts, setMaxAttempts] = useState<number | "">("");
+
   const [validationErrorMsg, setValidationErrorMsg] = useState<string[]>([]);
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [savedTest, setSavedTest] = useState<TopicPracticeTest | null>(null);
@@ -158,6 +180,12 @@ export default function AdminPracticeTestModal({
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [isDeleteAllConfirmOpen, setIsDeleteAllConfirmOpen] = useState(false);
   const [deleteToast, setDeleteToast] = useState<string | null>(null);
+
+  const defaultTitle = useMemo(() => {
+    if (effectiveTestType === "SUBJECT") return `${subject} Subject Test`;
+    if (effectiveTestType === "CHAPTER") return `Chapter ${effectiveChapterNo}: ${effectiveChapterName || "Chapter"} Test`;
+    return effectiveTopicName || "Topic Test";
+  }, [effectiveTestType, subject, effectiveChapterNo, effectiveChapterName, effectiveTopicName]);
 
   // Single Question Edit Modal state
   const [editingQuestion, setEditingQuestion] = useState<ParsedAssessmentQuestion | null>(null);
@@ -185,14 +213,33 @@ export default function AdminPracticeTestModal({
 
     const loadData = async () => {
       try {
-        const testFromDb = await getTopicPracticeTest(classGrade, subject, chapterNo, topicName, { forceFresh: true });
+        const testFromDb = await getAssessmentPracticeTest(
+          classGrade,
+          subject,
+          effectiveChapterNo,
+          effectiveTopicName,
+          effectiveTestType,
+          { forceFresh: true }
+        );
         if (isMounted && testFromDb) {
           setSavedTest(testFromDb);
           setRawText(testFromDb.rawText || "");
+          setTestTitle(testFromDb.title || "");
+          setDurationMinutes(testFromDb.durationMinutes ?? testFromDb.duration_minutes ?? "");
+          setTotalMarks(testFromDb.totalMarks ?? "");
+          setPassingMarks(testFromDb.passingMarks ?? "");
+          setInstructions(testFromDb.instructions ?? "");
+          setMaxAttempts(testFromDb.maxAttempts ?? "");
           setValidationSuccess(`Practice Test loaded: ${testFromDb.questions.length} questions available.`);
         } else if (isMounted) {
           setSavedTest(null);
           setRawText("");
+          setTestTitle("");
+          setDurationMinutes("");
+          setTotalMarks("");
+          setPassingMarks("");
+          setInstructions("");
+          setMaxAttempts("");
           setValidationSuccess(null);
         }
       } catch (err: any) {
@@ -209,15 +256,25 @@ export default function AdminPracticeTestModal({
         const cached = getCachedAttemptsFromMemory();
         const normClass = (classGrade || "").toLowerCase().trim();
         const normSubj = (subject || "").toLowerCase().trim();
-        const normTopic = (topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
+        const normTopic = (effectiveTopicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
+        const expectedTestId = buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType);
 
         const matches = cached.filter((a) => {
           if (!a) return false;
+          if (a.testId && a.testId === expectedTestId) return true;
           const aClass = (a.classGrade || "").toLowerCase().trim();
           const aSubj = (a.subject || "").toLowerCase().trim();
+          if (aClass !== normClass || aSubj !== normSubj) return false;
+
+          if (effectiveTestType === "SUBJECT") {
+            return a.testType === "subject";
+          }
+          if (effectiveTestType === "CHAPTER") {
+            return (a.testType === "chapter" || a.testType === "full_chapter") && Number(a.chapterNo) === Number(effectiveChapterNo);
+          }
           const aTopic = (a.topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
-          const isChMatch = Number(a.chapterNo) === Number(chapterNo);
-          return aClass === normClass && aSubj === normSubj && isChMatch && aTopic === normTopic;
+          const isChMatch = Number(a.chapterNo) === Number(effectiveChapterNo);
+          return isChMatch && aTopic === normTopic;
         });
 
         if (matches.length > 0 && isMounted) {
@@ -243,31 +300,36 @@ export default function AdminPracticeTestModal({
       isMounted = false;
       unsubscribeAttempts();
     };
-  }, [isOpen, classGrade, subject, chapterNo, topicName]);
+  }, [isOpen, classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType]);
 
   const selectedTopicAttempts = useMemo(() => {
     const normClass = (classGrade || "").toLowerCase().trim();
     const normSubj = (subject || "").toLowerCase().trim();
-    const normTopic = (topicName || "").toLowerCase().trim();
-    const expectedTestId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
+    const normTopic = (effectiveTopicName || "").toLowerCase().trim();
+    const expectedTestId = buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType);
 
     return attemptsList.filter((a) => {
-      if (a.testType && a.testType !== "topic") return false;
-
-      const isTestIdMatch = Boolean(a.testId && a.testId === expectedTestId);
+      if (!a) return false;
+      if (a.testId && a.testId === expectedTestId) return true;
 
       const aClass = (a.classGrade || "").toLowerCase().trim();
       const aSubj = (a.subject || "").toLowerCase().trim();
-      const aTopic = (a.topicName || "").toLowerCase().trim();
+      if (aClass !== normClass || aSubj !== normSubj) return false;
 
-      const isClassMatch = aClass === normClass;
-      const isSubjMatch = aSubj === normSubj;
-      const isChapterMatch = Number(a.chapterNo) === Number(chapterNo);
+      if (effectiveTestType === "SUBJECT") {
+        return a.testType === "subject";
+      }
+      if (effectiveTestType === "CHAPTER") {
+        return (a.testType === "chapter" || a.testType === "full_chapter") && Number(a.chapterNo) === Number(effectiveChapterNo);
+      }
+
+      const aTopic = (a.topicName || "").toLowerCase().trim();
+      const isChapterMatch = Number(a.chapterNo) === Number(effectiveChapterNo);
       const isTopicMatch = aTopic === normTopic;
 
-      return isTestIdMatch || (isClassMatch && isSubjMatch && isChapterMatch && isTopicMatch);
+      return (a.testType === "topic" || !a.testType) && isChapterMatch && isTopicMatch;
     });
-  }, [attemptsList, classGrade, subject, chapterNo, topicName]);
+  }, [attemptsList, classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType]);
 
   const uniqueStudentAttempts = useMemo(() => {
     const groups: Record<string, TestAttemptRecord[]> = {};
@@ -371,9 +433,9 @@ export default function AdminPracticeTestModal({
     const parseRes = parseAssessmentText(rawText, {
       classGrade,
       subject,
-      chapterNo,
-      chapterName,
-      topicName
+      chapterNo: effectiveChapterNo,
+      chapterName: effectiveChapterName,
+      topicName: effectiveTopicName
     });
 
     if (!parseRes.success || parseRes.questions.length === 0) {
@@ -391,12 +453,19 @@ export default function AdminPracticeTestModal({
         {
           classGrade,
           subject,
-          chapterNo,
-          chapterName,
-          topicName,
+          chapterNo: effectiveChapterNo,
+          chapterName: effectiveChapterName,
+          topicName: effectiveTopicName,
           rawText,
           noteId,
           topicNoteId,
+          testType: effectiveTestType,
+          title: testTitle.trim() || defaultTitle,
+          durationMinutes: durationMinutes !== "" ? Number(durationMinutes) : undefined,
+          totalMarks: totalMarks !== "" ? Number(totalMarks) : undefined,
+          passingMarks: passingMarks !== "" ? Number(passingMarks) : undefined,
+          instructions: instructions.trim() || undefined,
+          maxAttempts: maxAttempts !== "" ? Number(maxAttempts) : undefined,
           passages: parseRes.passages
         },
         parseRes.questions
@@ -404,14 +473,28 @@ export default function AdminPracticeTestModal({
 
       if (res.success) {
         // Fetch fresh questions for this Practice Test (Part C - Refresh)
-        const fetched = await getTopicPracticeTest(classGrade, subject, chapterNo, topicName, { forceFresh: true });
-        const freshTest = fetched || {
-          id: buildTopicTestId(classGrade, subject, chapterNo, topicName),
+        const fetched = await getAssessmentPracticeTest(
           classGrade,
           subject,
-          chapterNo,
-          chapterName,
-          topicName,
+          effectiveChapterNo,
+          effectiveTopicName,
+          effectiveTestType,
+          { forceFresh: true }
+        );
+        const freshTest = fetched || {
+          id: buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType),
+          classGrade,
+          subject,
+          chapterNo: effectiveChapterNo,
+          chapterName: effectiveChapterName,
+          topicName: effectiveTopicName,
+          testType: effectiveTestType,
+          title: testTitle.trim() || defaultTitle,
+          durationMinutes: durationMinutes !== "" ? Number(durationMinutes) : undefined,
+          totalMarks: totalMarks !== "" ? Number(totalMarks) : undefined,
+          passingMarks: passingMarks !== "" ? Number(passingMarks) : undefined,
+          instructions: instructions.trim() || undefined,
+          maxAttempts: maxAttempts !== "" ? Number(maxAttempts) : undefined,
           rawText,
           questions: parseRes.questions,
           passages: parseRes.passages,
@@ -431,7 +514,7 @@ export default function AdminPracticeTestModal({
         if (compCount > 0) breakdownParts.push(`${compCount} Comprehension`);
 
         setValidationSuccess(
-          `Practice Test saved successfully. Total ${freshTest.questions.length} Questions (${breakdownParts.join(", ")}).`
+          `Assessment saved successfully. Total ${freshTest.questions.length} Questions (${breakdownParts.join(", ")}).`
         );
 
         notifyPracticeTestChanged();
@@ -462,11 +545,19 @@ export default function AdminPracticeTestModal({
     setDeleteToast(null);
     setIsSaving(true);
 
-    const testInfo = { classGrade, subject, chapterNo, topicName };
+    const testInfo = { classGrade, subject, chapterNo: effectiveChapterNo, topicName: effectiveTopicName, testType: effectiveTestType };
     console.log(`[AdminPracticeTestModal] Requesting deletion of practice test:`, testInfo);
 
     try {
-      const result = await deleteTopicPracticeTest(classGrade, subject, chapterNo, topicName);
+      let result;
+      if (effectiveTestType === "SUBJECT") {
+        result = await deleteSubjectPracticeTest(classGrade, subject);
+      } else if (effectiveTestType === "CHAPTER") {
+        result = await deleteChapterPracticeTest(classGrade, subject, effectiveChapterNo);
+      } else {
+        result = await deleteTopicPracticeTest(classGrade, subject, effectiveChapterNo, effectiveTopicName);
+      }
+
       if (!result.success) {
         const errMsg = result.message || "Unable to delete practice test.";
         console.error(`[AdminPracticeTestModal] Deletion failed for test:`, testInfo, errMsg);
@@ -479,6 +570,12 @@ export default function AdminPracticeTestModal({
       console.log(`[AdminPracticeTestModal] Practice test deleted successfully:`, testInfo);
       setSavedTest(null);
       setRawText("");
+      setTestTitle("");
+      setDurationMinutes("");
+      setTotalMarks("");
+      setPassingMarks("");
+      setInstructions("");
+      setMaxAttempts("");
       setValidationSuccess("Practice Test deleted successfully.");
       setValidationErrorMsg([]);
       setActiveTab("editor");
@@ -732,10 +829,14 @@ export default function AdminPracticeTestModal({
                 Smart Assessment Engine
               </p>
               <h2 className="text-sm sm:text-base font-black leading-snug break-words">
-                Practice Test: {topicName}
+                {effectiveTestType === "SUBJECT"
+                  ? `Subject Test: ${subject}`
+                  : effectiveTestType === "CHAPTER"
+                    ? `Chapter ${effectiveChapterNo} Test: ${effectiveChapterName || "Chapter Test"}`
+                    : `Practice Test: ${effectiveTopicName || "Topic Test"}`}
               </h2>
               <p className="text-xs text-blue-100/90 break-words mt-0.5">
-                [{classGrade}] {subject} • Ch {chapterNo}: {chapterName}
+                [{classGrade}] {subject} {effectiveTestType !== "SUBJECT" ? `• Ch ${effectiveChapterNo}: ${effectiveChapterName}` : ""}
               </p>
             </div>
           </div>
@@ -824,6 +925,125 @@ export default function AdminPracticeTestModal({
                   <Copy className="w-3.5 h-3.5" />
                   Paste Sample Format
                 </button>
+              </div>
+
+              {/* Test Settings Configuration Section */}
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 space-y-3.5">
+                <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700/80 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Sliders className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                      Assessment Settings & Timer
+                    </h3>
+                  </div>
+                  <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-md border ${
+                    effectiveTestType === "SUBJECT"
+                      ? "bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800"
+                      : effectiveTestType === "CHAPTER"
+                        ? "bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800"
+                        : "bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800"
+                  }`}>
+                    {effectiveTestType === "SUBJECT" ? "Subject Test" : effectiveTestType === "CHAPTER" ? "Chapter Test" : "Topic Test"}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {/* Test Title */}
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                      <span>Test Title</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Auto-filled if empty</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={testTitle}
+                      onChange={(e) => setTestTitle(e.target.value)}
+                      placeholder={defaultTitle}
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder:text-slate-400"
+                    />
+                  </div>
+
+                  {/* Duration in Minutes */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Duration (minutes)</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="1"
+                        max="360"
+                        value={durationMinutes}
+                        onChange={(e) => setDurationMinutes(e.target.value ? Math.max(1, parseInt(e.target.value, 10)) : "")}
+                        placeholder="e.g. 45"
+                        className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 focus:outline-none pr-14 placeholder:text-slate-400"
+                      />
+                      <span className="absolute right-2.5 top-1.5 text-[10px] font-bold text-slate-400 pointer-events-none">
+                        Mins
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Total Marks */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                      Total Marks
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={totalMarks}
+                      onChange={(e) => setTotalMarks(e.target.value ? Math.max(1, parseInt(e.target.value, 10)) : "")}
+                      placeholder="Auto (1 mark/question)"
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder:text-slate-400"
+                    />
+                  </div>
+
+                  {/* Passing Marks */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                      Passing Marks <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={passingMarks}
+                      onChange={(e) => setPassingMarks(e.target.value ? Math.max(0, parseInt(e.target.value, 10)) : "")}
+                      placeholder="e.g. 40"
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder:text-slate-400"
+                    />
+                  </div>
+
+                  {/* Maximum Attempts */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                      Max Attempts <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={maxAttempts}
+                      onChange={(e) => setMaxAttempts(e.target.value ? Math.max(1, parseInt(e.target.value, 10)) : "")}
+                      placeholder="Unlimited if empty"
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder:text-slate-400"
+                    />
+                  </div>
+                </div>
+
+                {/* Instructions */}
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                    Test Instructions <span className="text-slate-400 font-normal">(Shown to student before starting test)</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={instructions}
+                    onChange={(e) => setInstructions(e.target.value)}
+                    placeholder="e.g. All questions are mandatory. Each question carries equal marks. Timer starts as soon as you click Start."
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder:text-slate-400 resize-none"
+                  />
+                </div>
               </div>
 
               {/* Validation Success Message */}
