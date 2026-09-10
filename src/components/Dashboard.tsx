@@ -31,6 +31,7 @@ import {
   getPendingFeeMonths,
   getPendingStudentsList
 } from "../utils/feeBillingHelper";
+import { isEligibleForDailyAttendance, filterDailyAttendanceStudents } from "../utils/attendanceHelper";
 import { getInstitutionName, subscribeToAnnouncements, saveAnnouncementDoc, deleteAnnouncementDoc } from "../lib/firestoreService";
 import { progressService } from "../lib/progressService";
 
@@ -219,6 +220,7 @@ export default function Dashboard({
     let attendancePresentCount = 0;
     let attendanceAbsentCount = 0;
     let attendanceNotMarkedCount = 0;
+    let attendanceTotalStudents = 0;
 
     let totalCollectedAllMonths = 0;
 
@@ -230,14 +232,17 @@ export default function Dashboard({
         remainingDue += pendingMonths.length * (student.monthlyFee || 0);
       }
 
-      // 2. Attendance calculations for today's dynamic date key
-      const attVal = student.attendance?.[todayIsoKey];
-      if (attVal === true) {
-        attendancePresentCount++;
-      } else if (attVal === false) {
-        attendanceAbsentCount++;
-      } else {
-        attendanceNotMarkedCount++;
+      // 2. Daily Attendance calculations for today (v7.9.4: only include eligible students; exclude ended students)
+      if (isEligibleForDailyAttendance(student)) {
+        attendanceTotalStudents++;
+        const attVal = student.attendance?.[todayIsoKey];
+        if (attVal === true) {
+          attendancePresentCount++;
+        } else if (attVal === false) {
+          attendanceAbsentCount++;
+        } else {
+          attendanceNotMarkedCount++;
+        }
       }
 
       // 3. Sum up all payments actually made by each student for each month
@@ -264,7 +269,8 @@ export default function Dashboard({
       collectionPercentage,
       attendancePresentCount,
       attendanceAbsentCount,
-      attendanceNotMarkedCount
+      attendanceNotMarkedCount,
+      attendanceTotalStudents
     };
   }, [students, todayIsoKey]);
 
@@ -339,7 +345,7 @@ export default function Dashboard({
       attendance: {
         id: "attendance",
         title: "Today's Attendance",
-        value: `${stats.attendancePresentCount} / ${stats.totalEnrolled}`,
+        value: `${stats.attendancePresentCount} / ${stats.attendanceTotalStudents}`,
         subtext: "Click to Record",
         icon: <Calendar className="w-5 h-5" />,
         theme: "emerald" as const,
@@ -352,7 +358,7 @@ export default function Dashboard({
   }, [stats]);
 
 
-  // Group students class-wise for collapsible accordion
+  // Group all students class-wise for roster/total students modal
   const groupedStudentsByClass = useMemo(() => {
     const map: Record<string, Student[]> = {};
     const query = popupSearch.trim().toLowerCase();
@@ -386,6 +392,46 @@ export default function Dashboard({
       students: map[className],
     }));
   }, [students, popupSearch]);
+
+  // Filter students for Daily Attendance workflow (v7.9.4: excludes ended students, preserves active and paused)
+  const dailyAttendanceStudents = useMemo(() => {
+    return filterDailyAttendanceStudents(students);
+  }, [students]);
+
+  // Group daily attendance students class-wise for Today's Attendance checklist
+  const groupedAttendanceStudentsByClass = useMemo(() => {
+    const map: Record<string, Student[]> = {};
+    const query = popupSearch.trim().toLowerCase();
+
+    dailyAttendanceStudents.forEach((s) => {
+      const className = normalizeClassName(s.classGrade);
+      const matchesSearch =
+        !query ||
+        s.name.toLowerCase().includes(query) ||
+        className.toLowerCase().includes(query) ||
+        s.phone?.includes(query) ||
+        (s.enrolledSubjects && s.enrolledSubjects.some((sub) => sub.toLowerCase().includes(query)));
+
+      if (matchesSearch) {
+        if (!map[className]) {
+          map[className] = [];
+        }
+        map[className].push(s);
+      }
+    });
+
+    const sortedClasses = Object.keys(map).sort((a, b) => {
+      const numA = parseInt(a.replace(/\D/g, "")) || 999;
+      const numB = parseInt(b.replace(/\D/g, "")) || 999;
+      if (numA !== numB) return numA - numB;
+      return a.localeCompare(b);
+    });
+
+    return sortedClasses.map((className) => ({
+      className,
+      students: map[className],
+    }));
+  }, [dailyAttendanceStudents, popupSearch]);
 
   const pendingStudentsList = useMemo(() => {
     return students.filter(s => {
@@ -631,15 +677,15 @@ export default function Dashboard({
                       </div>
                       <div className="bg-blue-50 dark:bg-blue-950/40 border border-blue-200/50 dark:border-blue-900/30 p-2 rounded-xl flex flex-col">
                         <span className="text-[10px] font-black uppercase text-blue-600 dark:text-blue-400">Total</span>
-                        <span className="text-base font-black text-blue-700 dark:text-blue-300">{stats.totalEnrolled}</span>
+                        <span className="text-base font-black text-blue-700 dark:text-blue-300">{stats.attendanceTotalStudents}</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Class-wise Collapsible Accordion Sections */}
                   <div className="flex flex-col gap-2.5">
-                    {groupedStudentsByClass.length > 0 ? (
-                      groupedStudentsByClass.map(({ className, students: classStudents }, classIdx) => {
+                    {groupedAttendanceStudentsByClass.length > 0 ? (
+                      groupedAttendanceStudentsByClass.map(({ className, students: classStudents }, classIdx) => {
                         const isExpanded = popupSearch.trim() !== "" || (expandedClasses[className] ?? (classIdx === 0));
 
                         return (

@@ -2733,6 +2733,15 @@ export async function updateStudentServiceStatus(
     console.warn("[StudentServiceStatus] Error updating Firestore service status:", err);
   }
 
+  // 3. Broadcast reactive event across window subscribers
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("academy:student-service-status-updated", {
+        detail: { studentId, status: newStatus }
+      })
+    );
+  }
+
   if (process.env.NODE_ENV !== "production") {
     console.log("[StudentServiceStatus] update success:", true, "refreshed status:", newStatus);
   }

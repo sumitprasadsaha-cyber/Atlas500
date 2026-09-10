@@ -573,6 +573,26 @@ export default function App() {
       if (unsub) unsub();
     };
   }, []);
+
+  // Subscribe to central service status updates for immediate reactive refresh
+  useEffect(() => {
+    const handleServiceStatusUpdated = (e: Event) => {
+      const customEvent = e as CustomEvent<{ studentId: string; status: "active" | "paused" | "ended" }>;
+      if (customEvent.detail && customEvent.detail.studentId) {
+        setStudents((prev) =>
+          prev.map((s) =>
+            s.id === customEvent.detail.studentId
+              ? { ...s, serviceStatus: customEvent.detail.status, service_status: customEvent.detail.status }
+              : s
+          )
+        );
+      }
+    };
+    window.addEventListener("academy:student-service-status-updated", handleServiceStatusUpdated);
+    return () => {
+      window.removeEventListener("academy:student-service-status-updated", handleServiceStatusUpdated);
+    };
+  }, []);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(() => {
     // If a student session was preserved, preset selected student ID
     const cachedSession = getCachedAuthSession();
