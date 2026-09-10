@@ -2193,21 +2193,28 @@ export function StudentMyTab({
     return upscHierarchy[0];
   }, [isUPSC, upscHierarchy, selectedSubject]);
 
-  const schoolHierarchy = useMemo(() => {
+  const completeSchoolHierarchy = useMemo(() => {
     if (isUPSC) return null;
-    return buildStudentSchoolHierarchy(localStudent, allClassNotes);
+    return buildCompleteStudentSchoolHierarchy(localStudent, allClassNotes);
   }, [isUPSC, localStudent, allClassNotes, curriculumVersion, testBankVersion]);
 
+  const schoolHierarchy = useMemo(() => {
+    return completeSchoolHierarchy ? completeSchoolHierarchy.myClass : null;
+  }, [completeSchoolHierarchy]);
+
   const schoolSubjects = useMemo(() => {
-    return schoolHierarchy ? schoolHierarchy.subjects : [];
-  }, [schoolHierarchy]);
+    if (!completeSchoolHierarchy) return [];
+    const mySubjs = completeSchoolHierarchy.myClass.subjects || [];
+    const accSubjs = (completeSchoolHierarchy.accessibleClasses || []).flatMap((grp) => grp.subjects);
+    return [...mySubjs, ...accSubjs];
+  }, [completeSchoolHierarchy]);
 
   const activeSchoolSubject = useMemo(() => {
-    if (isUPSC || !schoolHierarchy || schoolHierarchy.subjects.length === 0) return null;
-    if (!selectedSubject) return schoolHierarchy.subjects[0];
-    const found = schoolHierarchy.subjects.find((s) => s.subject.toLowerCase() === selectedSubject.toLowerCase());
-    return found || schoolHierarchy.subjects[0];
-  }, [isUPSC, schoolHierarchy, selectedSubject]);
+    if (isUPSC || schoolSubjects.length === 0) return null;
+    if (!selectedSubject) return schoolSubjects[0];
+    const found = schoolSubjects.find((s) => s.subject.toLowerCase() === selectedSubject.toLowerCase());
+    return found || schoolSubjects[0];
+  }, [isUPSC, schoolSubjects, selectedSubject]);
 
   const handleToggleTopicCompletion = async (note: ClassNote | ChapterNote, subject: string, isCompleted: boolean) => {
     const subjClean = (subject || note.subject || "").trim();
@@ -2353,7 +2360,14 @@ export function StudentMyTab({
                         <IconComponent className={`h-3.5 w-3.5 ${isActive ? palette.text : "text-slate-400"}`} />
                       </div>
                       <div className="min-w-0 truncate">
-                        <span className="truncate block font-bold text-slate-800 dark:text-slate-200">{sub.subject}</span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="truncate block font-bold text-slate-800 dark:text-slate-200">{sub.subject}</span>
+                          {sub.isAccessible && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-200 shrink-0 border border-amber-200/60 dark:border-amber-800/40">
+                              {sub.ownerClass}
+                            </span>
+                          )}
+                        </div>
                         <span className="text-[10px] text-slate-400 font-medium block">
                           {sub.totalModules} Chapters • {sub.totalTopics} Topics
                         </span>
@@ -2427,7 +2441,14 @@ export function StudentMyTab({
               <div className="border-b border-slate-100 dark:border-slate-800 pb-3 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0" id="study-right-header">
                 <div className="min-w-0 flex-1 pr-2">
                   <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">Selected Subject</p>
-                  <h3 className="text-lg font-black text-slate-800 dark:text-slate-100 break-words whitespace-normal leading-snug">{activeSchoolSubject.subject}</h3>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-lg font-black text-slate-800 dark:text-slate-100 break-words whitespace-normal leading-snug">{activeSchoolSubject.subject}</h3>
+                    {activeSchoolSubject.isAccessible && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 flex items-center gap-1">
+                        Accessible from {activeSchoolSubject.ownerClass} (Read-Only)
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
@@ -2460,7 +2481,7 @@ export function StudentMyTab({
               {/* School Collapsible 4-tier Tree */}
               <div className="flex-1 overflow-y-auto pr-1" id="study-tree-scroll-container">
                 <StudentSchoolTree
-                  className={localStudent.classGrade}
+                  className={activeSchoolSubject.ownerClass || localStudent.classGrade}
                   subjects={[activeSchoolSubject]}
                   student={localStudent}
                   onPreviewNote={handlePreviewPdf as any}
@@ -2731,17 +2752,22 @@ export default function StudentDashboard({
     return buildStudentUPSCHierarchy(student, allClassNotes);
   }, [isUPSC, student, allClassNotes, curriculumVersion, testBankVersion]);
 
-  const schoolHierarchy = useMemo(() => {
+  const completeHomeSchoolHierarchy = useMemo(() => {
     if (isUPSC) return null;
-    return buildStudentSchoolHierarchy(student, allClassNotes);
+    return buildCompleteStudentSchoolHierarchy(student, allClassNotes);
   }, [isUPSC, student, allClassNotes, curriculumVersion, testBankVersion]);
 
   const subjectProgress = useMemo(() => {
-    if (isUPSC || !schoolHierarchy) return [];
-    return schoolHierarchy.subjects
+    if (isUPSC || !completeHomeSchoolHierarchy) return [];
+    const mySubjs = completeHomeSchoolHierarchy.myClass.subjects || [];
+    const accSubjs = (completeHomeSchoolHierarchy.accessibleClasses || []).flatMap((grp) => grp.subjects);
+    const allSubjects = [...mySubjs, ...accSubjs];
+    return allSubjects
       .map((sub) => ({
         name: sub.subject,
         subject: sub.subject,
+        ownerClass: sub.ownerClass,
+        isAccessible: sub.isAccessible,
         totalModules: sub.totalModules,
         totalTopics: sub.totalTopics,
         completedTopics: sub.completedTopics,
@@ -2750,7 +2776,7 @@ export default function StudentDashboard({
         modules: sub.modules,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [isUPSC, schoolHierarchy]);
+  }, [isUPSC, completeHomeSchoolHierarchy]);
 
   const recentAttendance = useMemo(() => {
     const dates = ["2026-07-14", "2026-07-13", "2026-07-12", "2026-07-11", "2026-07-10", "2026-07-09", "2026-07-08"];

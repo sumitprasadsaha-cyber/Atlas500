@@ -49,11 +49,11 @@ import ManageClassAccessModal from "./ManageClassAccessModal";
 import NotesMainPanel from "./NotesMainPanel";
 import Toast from "../Toast";
 import {
-  getAccessibleSubjectsForClass,
   getCanonicalOwnerClass,
   isSubjectOwner,
   verifyCurriculumEditPermission,
-  migrateExistingSharedSubjects
+  migrateExistingSharedSubjects,
+  normalizeClassId
 } from "../../lib/curriculumAccessService";
 import {
   getSchoolHierarchy,
@@ -410,20 +410,42 @@ export default function AdminNotesDashboard({
 
   const schoolSubjectsForSelectedClass = useMemo(() => {
     if (!selectedSchoolClass) return [];
-    const accessible = getAccessibleSubjectsForClass(selectedSchoolClass, schoolHierarchy, schoolNotes);
+    const normSelected = normalizeClassId(selectedSchoolClass);
+    const set = new Set<string>();
+
+    // 1. From schoolHierarchy.subjects for this class
+    const hierarchySubjects = schoolHierarchy?.subjects?.[selectedSchoolClass] || [];
+    hierarchySubjects.forEach((s: string) => {
+      if (s && s.trim()) set.add(s.trim());
+    });
+
+    // 2. From customSchoolSubjects for this class
+    const matchingKey = Object.keys(customSchoolSubjects || {}).find(
+      (k) => normalizeClassId(k) === normSelected
+    );
+    if (matchingKey && customSchoolSubjects[matchingKey]) {
+      customSchoolSubjects[matchingKey].forEach((s: string) => {
+        if (s && s.trim()) set.add(s.trim());
+      });
+    }
+
+    // 3. From schoolNotes native to this class
+    schoolNotes.forEach((n) => {
+      const c = (n as any).className || n.classGrade || (n as any).class || "";
+      if (normalizeClassId(c) === normSelected && n.subject && n.subject.trim()) {
+        set.add(n.subject.trim());
+      }
+    });
+
     const removedForClass = new Set(removedSchoolSubjects[selectedSchoolClass] || []);
-    return accessible.filter((s) => !removedForClass.has(s)).sort();
-  }, [selectedSchoolClass, schoolHierarchy, schoolNotes, removedSchoolSubjects]);
+    return Array.from(set)
+      .filter((s) => !removedForClass.has(s))
+      .filter((s) => isSubjectOwner(s, selectedSchoolClass))
+      .sort();
+  }, [selectedSchoolClass, schoolHierarchy, customSchoolSubjects, schoolNotes, removedSchoolSubjects]);
 
-  const isCurriculumReadOnly = useMemo(() => {
-    if (activeTab !== "school" || !selectedSchoolSubject || !selectedSchoolClass) return false;
-    return !isSubjectOwner(selectedSchoolSubject, selectedSchoolClass);
-  }, [activeTab, selectedSchoolSubject, selectedSchoolClass]);
-
-  const curriculumOwnerClass = useMemo(() => {
-    if (activeTab !== "school" || !selectedSchoolSubject || !selectedSchoolClass) return selectedSchoolClass;
-    return getCanonicalOwnerClass(selectedSchoolSubject, selectedSchoolClass);
-  }, [activeTab, selectedSchoolSubject, selectedSchoolClass]);
+  const isCurriculumReadOnly = false;
+  const curriculumOwnerClass = selectedSchoolClass;
 
   useEffect(() => {
     if (schoolSubjectsForSelectedClass.length > 0) {
@@ -438,21 +460,22 @@ export default function AdminNotesDashboard({
   const schoolChaptersForSelected = useMemo(() => {
     if (!selectedSchoolClass || !selectedSchoolSubject) return [];
     const map = new Map<number, string>();
-    const canonicalOwner = getCanonicalOwnerClass(selectedSchoolSubject, selectedSchoolClass);
+    const normSelected = normalizeClassId(selectedSchoolClass);
 
-    // 1. Check custom chapters under canonicalOwner first, then selectedSchoolClass
-    const customList = (customSchoolChapters[canonicalOwner]?.[selectedSchoolSubject] || []).length > 0
-      ? (customSchoolChapters[canonicalOwner]?.[selectedSchoolSubject] || [])
-      : (customSchoolChapters[selectedSchoolClass]?.[selectedSchoolSubject] || []);
+    // 1. Check custom chapters under selectedSchoolClass
+    const matchingKey = Object.keys(customSchoolChapters || {}).find(
+      (k) => normalizeClassId(k) === normSelected
+    );
+    const customList = (matchingKey && customSchoolChapters[matchingKey]?.[selectedSchoolSubject]) || [];
 
     customList.forEach((ch) => {
       map.set(ch.number, ch.name || `Chapter ${ch.number}`);
     });
 
-    // 2. Check schoolNotes under selectedSchoolClass OR canonicalOwner
+    // 2. Check schoolNotes directly under selectedSchoolClass
     schoolNotes.forEach((n) => {
       const c = ((n as any).className || n.classGrade || (n as any).class || "").trim().toLowerCase();
-      const isMatch = c === selectedSchoolClass.trim().toLowerCase() || c === canonicalOwner.trim().toLowerCase();
+      const isMatch = normalizeClassId(c) === normSelected;
       const s = ((n as any).subjectName || n.subject || "").trim().toLowerCase();
       if (isMatch && s === selectedSchoolSubject.trim().toLowerCase()) {
         const rawChNo = (n as any).chapterNumber ?? n.chapterNo ?? 1;
@@ -594,8 +617,7 @@ export default function AdminNotesDashboard({
 
       if (activeTab === "school") {
         const c = ((n as any).className || n.classGrade || (n as any).class || "").trim().toLowerCase();
-        const canonicalOwner = getCanonicalOwnerClass(selectedSchoolSubject, selectedSchoolClass).trim().toLowerCase();
-        const isMatch = c === selectedSchoolClass.trim().toLowerCase() || c === canonicalOwner;
+        const isMatch = normalizeClassId(c) === normalizeClassId(selectedSchoolClass);
         if (!isMatch) return;
         const rawCh = (n as any).chapterNumber ?? n.chapterNo ?? 1;
         const chNum = typeof rawCh === "number" ? rawCh : parseInt(String(rawCh).replace(/\D/g, ""), 10) || 1;
@@ -1824,10 +1846,6 @@ export default function AdminNotesDashboard({
           onSelectChapter={handleSelectChapter}
           onSelectTopic={handleSelectTopic}
           onAddChapter={() => {
-            if (isCurriculumReadOnly) {
-              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can add chapters to this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
-              return;
-            }
             const list = activeTab === "school" ? schoolChaptersForSelected : upscModulesForSelected;
             const nextNum = list.length > 0 ? Math.max(...list.map((c) => c.number)) + 1 : 1;
             setCreateNodeContext({
@@ -1840,10 +1858,6 @@ export default function AdminNotesDashboard({
             });
           }}
           onAddTopic={(chNum, chName) => {
-            if (isCurriculumReadOnly) {
-              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can upload notes to this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
-              return;
-            }
             if (activeTab === "school") {
               setSelectedSchoolChapterNo(chNum);
               setSelectedSchoolChapterName(chName);
@@ -1855,10 +1869,6 @@ export default function AdminNotesDashboard({
           }}
           onRenameChapter={handleOpenRenameChapter}
           onDeleteChapter={(chNum, chName) => {
-            if (isCurriculumReadOnly) {
-              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can delete chapters from this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
-              return;
-            }
             setDeletingChapter({
               type: activeTab,
               className: activeTab === "school" ? selectedSchoolClass : undefined,
@@ -1869,25 +1879,13 @@ export default function AdminNotesDashboard({
             });
           }}
           onRenameTopic={(note) => {
-            if (isCurriculumReadOnly) {
-              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can rename notes in this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
-              return;
-            }
             handleOpenRename(note);
           }}
           onDeleteTopic={(note) => {
-            if (isCurriculumReadOnly) {
-              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can delete notes from this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
-              return;
-            }
             setDeletingNote(note);
           }}
           onPreviewTopic={(note) => setPreviewNote(note)}
           onReplaceTopic={(note) => {
-            if (isCurriculumReadOnly) {
-              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can replace notes in this curriculum. ${selectedSchoolClass} has read-only access.`, "error");
-              return;
-            }
             handleOpenReplace(note);
           }}
           onOpenPracticeTest={handleOpenPracticeTest}

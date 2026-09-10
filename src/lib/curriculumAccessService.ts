@@ -434,24 +434,21 @@ export async function saveSubjectAccessRule(
 
   persistSubjectAccessRules(existingRules);
 
-  // Update curriculum hierarchy subjects map so allowed classes reference the subject
+  // Update curriculum hierarchy subjects map: only the canonical owner class retains this subject
   const hierarchy = getSchoolHierarchy();
   let hierarchyChanged = false;
   const updatedSubjects = { ...(hierarchy.subjects || {}) };
 
-  cleanAllowedClasses.forEach((cls) => {
-    const list = updatedSubjects[cls] || [];
-    if (!list.includes(cleanSubject)) {
-      updatedSubjects[cls] = [...list, cleanSubject];
-      hierarchyChanged = true;
-    }
-  });
+  // 1. Ensure canonical owner class has the subject
+  const ownerList = updatedSubjects[cleanOwner] || [];
+  if (!ownerList.includes(cleanSubject)) {
+    updatedSubjects[cleanOwner] = [...ownerList, cleanSubject];
+    hierarchyChanged = true;
+  }
 
-  // If a class was removed from allowedClasses, remove subject reference from that class
+  // 2. Ensure consumer classes DO NOT have the subject in their native hierarchy
   Object.keys(updatedSubjects).forEach((cls) => {
-    const isOwner = normalizeClassId(cls) === normOwner;
-    const isAllowed = cleanAllowedClasses.some((c) => normalizeClassId(c) === normalizeClassId(cls));
-    if (!isOwner && !isAllowed) {
+    if (normalizeClassId(cls) !== normOwner) {
       const list = updatedSubjects[cls] || [];
       if (list.includes(cleanSubject)) {
         updatedSubjects[cls] = list.filter((s) => s !== cleanSubject);
