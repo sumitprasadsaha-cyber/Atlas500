@@ -608,6 +608,13 @@ export default function App() {
       return null;
     }
   });
+  const [activeSubjectOwnerClass, setActiveSubjectOwnerClass] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem("portal_active_owner_class") || null;
+    } catch {
+      return null;
+    }
+  });
 
   useEffect(() => {
     try {
@@ -618,6 +625,16 @@ export default function App() {
       }
     } catch {}
   }, [activeSubject]);
+
+  useEffect(() => {
+    try {
+      if (activeSubjectOwnerClass) {
+        sessionStorage.setItem("portal_active_owner_class", activeSubjectOwnerClass);
+      } else {
+        sessionStorage.removeItem("portal_active_owner_class");
+      }
+    } catch {}
+  }, [activeSubjectOwnerClass]);
   const [studentFilter, setStudentFilter] = useState<"All" | "Pending">("All");
 
   // --- Display Theme State ---
@@ -1702,6 +1719,7 @@ export default function App() {
               student={activeStudent}
               onSelectSubject={(subject, ownerClass) => {
                 setActiveSubject(subject);
+                setActiveSubjectOwnerClass(ownerClass || null);
                 if (ownerClass) {
                   try {
                     sessionStorage.setItem(`student_selected_owner_class_${activeStudent.id}`, ownerClass);
@@ -1728,7 +1746,11 @@ export default function App() {
             <StudentMyTab
               student={activeStudent}
               initialSubject={activeSubject}
-              onSelectSubject={(subject) => setActiveSubject(subject)}
+              initialOwnerClass={activeSubjectOwnerClass}
+              onSelectSubject={(subject, ownerClass) => {
+                setActiveSubject(subject);
+                setActiveSubjectOwnerClass(ownerClass || null);
+              }}
               onUpdateChapterRemark={(subject, noteId, remark) => handleUpdateChapterRemark(activeStudent.id, subject, noteId, remark)}
               onDeleteNote={(subject, noteId) => handleDeleteNote(activeStudent.id, subject, noteId)}
               onUpdateStudent={handleUpdateStudent}

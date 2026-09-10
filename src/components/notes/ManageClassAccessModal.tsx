@@ -100,7 +100,7 @@ export const ManageClassAccessModal: React.FC<ManageClassAccessModalProps> = ({
 
       const updated = await saveSubjectAccessRule(subjectName, ownerClass, finalAllowed);
 
-      setSuccessMessage("Class access updated successfully.");
+      setSuccessMessage("Curriculum access updated successfully.");
       onAccessSaved?.(updated);
 
       setTimeout(() => {
@@ -109,7 +109,7 @@ export const ManageClassAccessModal: React.FC<ManageClassAccessModalProps> = ({
       }, 500);
     } catch (err: any) {
       setIsSaving(false);
-      setErrorMessage(err?.message || "Failed to update class access permissions.");
+      setErrorMessage(err?.message || "Failed to update curriculum access permissions.");
     }
   };
 
@@ -129,7 +129,7 @@ export const ManageClassAccessModal: React.FC<ManageClassAccessModalProps> = ({
               <Shield className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-slate-900">Manage Class Access</h2>
+              <h2 className="text-base font-semibold text-slate-900">Manage Curriculum Access</h2>
               <p className="text-xs text-slate-500">Configure permission-based curriculum access</p>
             </div>
           </div>

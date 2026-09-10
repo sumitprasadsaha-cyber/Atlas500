@@ -65,6 +65,7 @@ import {
   Trash2,
   ChevronDown,
   Sparkles,
+  Folder,
 } from "lucide-react";
 import StudentAIAssistantModal from "./StudentAIAssistantModal";
 import { jsPDF } from "jspdf";
@@ -1367,7 +1368,7 @@ interface SubjectProgressCardProps {
 
 function SubjectProgressCard({ subject, index, onSelectSubject, student, badgeLabel }: SubjectProgressCardProps) {
   const subjectName = subject.subject || subject.name || "Subject";
-  const displayClass = subject.ownerClass || badgeLabel || student.classGrade || "School";
+  const displayClass = badgeLabel || (subject.isAccessible && subject.ownerClass ? `Shared: ${subject.ownerClass}` : student.classGrade || "School");
   const totalModules = subject.totalModules ?? 0;
   const totalTopics = subject.totalTopics ?? 0;
   const completedTopics = subject.completedTopics ?? 0;
@@ -1398,9 +1399,16 @@ function SubjectProgressCard({ subject, index, onSelectSubject, student, badgeLa
               <IconComponent className="h-4.5 w-4.5" />
             </div>
             <div className="min-w-0 text-left">
-              <span className="inline-block text-[9px] font-black uppercase tracking-[0.2em] text-white/80 bg-white/15 px-2 py-0.5 rounded-full mb-0.5 backdrop-blur-xs">
-                {displayClass}
-              </span>
+              <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                <span className="inline-block text-[9px] font-black uppercase tracking-[0.2em] text-white/80 bg-white/15 px-2 py-0.5 rounded-full backdrop-blur-xs">
+                  {displayClass}
+                </span>
+                {subject.isAccessible && (
+                  <span className="inline-block text-[8px] font-black uppercase tracking-wider text-amber-200 bg-amber-950/60 border border-amber-300/40 px-1.5 py-0.2 rounded-md backdrop-blur-xs">
+                    Read Only
+                  </span>
+                )}
+              </div>
               <h4 className="truncate text-sm sm:text-base font-black text-white drop-shadow-xs">{subjectName}</h4>
               <p className="text-xs font-bold text-white/90 mt-0.5">{progressPercent}% Complete</p>
             </div>
@@ -1677,6 +1685,7 @@ export function getSubjectIcon(subject: string, index?: number) {
 export function StudentMyTab({ 
   student, 
   initialSubject, 
+  initialOwnerClass,
   onSelectSubject, 
   onUpdateChapterRemark,
   onDeleteNote,
@@ -1685,7 +1694,8 @@ export function StudentMyTab({
 }: { 
   student: Student; 
   initialSubject?: string | null;
-  onSelectSubject?: (subject: string) => void;
+  initialOwnerClass?: string | null;
+  onSelectSubject?: (subject: string, ownerClass?: string) => void;
   onUpdateChapterRemark: (subject: string, noteId: string, remark: string) => void; 
   onDeleteNote?: (subject: string, noteId: string) => void;
   onUpdateStudent?: (student: Student) => void;
@@ -1917,10 +1927,46 @@ export function StudentMyTab({
     }
   }, [initialSubject, sortedSubjects]);
 
-  const handleSelectSubject = (subject: string) => {
+  const [selectedOwnerClass, setSelectedOwnerClass] = useState<string | null>(() => {
+    if (initialOwnerClass) return initialOwnerClass;
+    try {
+      return sessionStorage.getItem(`student_selected_owner_class_${student.id}`) || null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [expandedSharedClasses, setExpandedSharedClasses] = useState<Record<string, boolean>>({});
+
+  const toggleSharedClass = (className: string) => {
+    setExpandedSharedClasses((prev) => ({
+      ...prev,
+      [className]: prev[className] === undefined ? false : !prev[className],
+    }));
+  };
+
+  const isSharedClassOpen = (className: string) => {
+    return expandedSharedClasses[className] !== false; // open by default
+  };
+
+  React.useEffect(() => {
+    if (initialOwnerClass !== undefined) {
+      setSelectedOwnerClass(initialOwnerClass);
+    }
+  }, [initialOwnerClass]);
+
+  const handleSelectSubject = (subject: string, ownerClass?: string) => {
     setSelectedSubject(subject);
+    setSelectedOwnerClass(ownerClass || null);
+    try {
+      if (ownerClass) {
+        sessionStorage.setItem(`student_selected_owner_class_${localStudent.id}`, ownerClass);
+      } else {
+        sessionStorage.removeItem(`student_selected_owner_class_${localStudent.id}`);
+      }
+    } catch {}
     if (onSelectSubject) {
-      onSelectSubject(subject);
+      onSelectSubject(subject, ownerClass);
     }
   };
 
@@ -2155,17 +2201,23 @@ export function StudentMyTab({
   const [curriculumVersion, setCurriculumVersion] = useState(0);
 
   React.useEffect(() => {
-    const unsub = subscribeToCurriculumHierarchy(() => {
+    const unsubCurriculum = subscribeToCurriculumHierarchy(() => {
+      setCurriculumVersion((v) => v + 1);
+    });
+    const unsubAccess = subscribeToSubjectAccess(() => {
       setCurriculumVersion((v) => v + 1);
     });
     const handleCurriculumEvent = () => {
       setCurriculumVersion((v) => v + 1);
     };
     window.addEventListener("curriculum-hierarchy-updated", handleCurriculumEvent);
+    window.addEventListener("subject-access-updated", handleCurriculumEvent);
     window.addEventListener("notes-progress-updated", handleCurriculumEvent);
     return () => {
-      if (unsub) unsub();
+      if (unsubCurriculum) unsubCurriculum();
+      if (unsubAccess) unsubAccess();
       window.removeEventListener("curriculum-hierarchy-updated", handleCurriculumEvent);
+      window.removeEventListener("subject-access-updated", handleCurriculumEvent);
       window.removeEventListener("notes-progress-updated", handleCurriculumEvent);
     };
   }, []);
@@ -2198,23 +2250,45 @@ export function StudentMyTab({
     return buildCompleteStudentSchoolHierarchy(localStudent, allClassNotes);
   }, [isUPSC, localStudent, allClassNotes, curriculumVersion, testBankVersion]);
 
-  const schoolHierarchy = useMemo(() => {
-    return completeSchoolHierarchy ? completeSchoolHierarchy.myClass : null;
+  const mySubjects = useMemo(() => {
+    return completeSchoolHierarchy ? completeSchoolHierarchy.myClass.subjects || [] : [];
   }, [completeSchoolHierarchy]);
 
-  const schoolSubjects = useMemo(() => {
-    if (!completeSchoolHierarchy) return [];
-    const mySubjs = completeSchoolHierarchy.myClass.subjects || [];
-    const accSubjs = (completeSchoolHierarchy.accessibleClasses || []).flatMap((grp) => grp.subjects);
-    return [...mySubjs, ...accSubjs];
+  const accessibleClassGroups = useMemo(() => {
+    return completeSchoolHierarchy ? completeSchoolHierarchy.accessibleClasses || [] : [];
   }, [completeSchoolHierarchy]);
+
+  const allSchoolSubjects = useMemo(() => {
+    const accSubjs = accessibleClassGroups.flatMap((grp) => grp.subjects);
+    return [...mySubjects, ...accSubjs];
+  }, [mySubjects, accessibleClassGroups]);
 
   const activeSchoolSubject = useMemo(() => {
-    if (isUPSC || schoolSubjects.length === 0) return null;
-    if (!selectedSubject) return schoolSubjects[0];
-    const found = schoolSubjects.find((s) => s.subject.toLowerCase() === selectedSubject.toLowerCase());
-    return found || schoolSubjects[0];
-  }, [isUPSC, schoolSubjects, selectedSubject]);
+    if (isUPSC || allSchoolSubjects.length === 0) return null;
+    if (!selectedSubject) return mySubjects[0] || allSchoolSubjects[0];
+
+    // Priority 1: Match subject name AND ownerClass if ownerClass was specified
+    if (selectedOwnerClass) {
+      const match = allSchoolSubjects.find(
+        (s) =>
+          s.subject.toLowerCase() === selectedSubject.toLowerCase() &&
+          normalizeClassId(s.ownerClass || localStudent.classGrade) === normalizeClassId(selectedOwnerClass)
+      );
+      if (match) return match;
+    }
+
+    // Priority 2: Match in enrolled / my subjects first
+    const myMatch = mySubjects.find(
+      (s) => s.subject.toLowerCase() === selectedSubject.toLowerCase()
+    );
+    if (myMatch) return myMatch;
+
+    // Priority 3: Match in all available subjects
+    const found = allSchoolSubjects.find(
+      (s) => s.subject.toLowerCase() === selectedSubject.toLowerCase()
+    );
+    return found || mySubjects[0] || allSchoolSubjects[0];
+  }, [isUPSC, allSchoolSubjects, mySubjects, selectedSubject, selectedOwnerClass, localStudent.classGrade]);
 
   const handleToggleTopicCompletion = async (note: ClassNote | ChapterNote, subject: string, isCompleted: boolean) => {
     const subjClean = (subject || note.subject || "").trim();
@@ -2268,7 +2342,7 @@ export function StudentMyTab({
             <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 dark:text-indigo-400">My Study Space</p>
           </div>
           <div className="rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-bold text-slate-500 dark:bg-slate-950 dark:text-slate-400">
-            {isUPSC ? `${enrolledPapers.length} Enrolled Papers` : `${schoolSubjects.length} Enrolled Subjects`}
+            {isUPSC ? `${enrolledPapers.length} Enrolled Papers` : `${mySubjects.length} Enrolled Subjects`}
           </div>
         </div>
       </div>
@@ -2334,60 +2408,161 @@ export function StudentMyTab({
                   );
                 })
               )
-            ) : schoolSubjects.length === 0 ? (
-              <div className="text-center py-8 px-3">
-                <BookOpen className="w-8 h-8 text-slate-300 dark:text-slate-700 mx-auto mb-2 stroke-[1.2]" />
-                <p className="text-xs font-bold text-slate-500 dark:text-slate-400">No Enrolled Subjects</p>
-                <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">No subjects assigned yet.</p>
-              </div>
             ) : (
-              schoolSubjects.map((sub, idx) => {
-                const isActive = activeSchoolSubject?.subject.toLowerCase() === sub.subject.toLowerCase();
-                const palette = getSubjectColor(sub.subject);
-                const IconComponent = getSubjectIcon(sub.subject, idx);
-                return (
-                  <button
-                    key={`${sub.subject}_${idx}`}
-                    onClick={() => handleSelectSubject(sub.subject)}
-                    className={`group rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-                      isActive 
-                        ? `${palette.bg} border-blue-500 text-blue-700 dark:text-blue-400 shadow-sm` 
-                        : "border-slate-100 dark:border-slate-800/60 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-950 hover:border-slate-200"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 truncate min-w-0 flex-1">
-                      <div className={`p-1.5 rounded-lg shrink-0 ${isActive ? palette.badge : "bg-slate-50 dark:bg-slate-950 group-hover:bg-slate-100"}`}>
-                        <IconComponent className={`h-3.5 w-3.5 ${isActive ? palette.text : "text-slate-400"}`} />
-                      </div>
-                      <div className="min-w-0 truncate">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="truncate block font-bold text-slate-800 dark:text-slate-200">{sub.subject}</span>
-                          {sub.isAccessible && (
-                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-200 shrink-0 border border-amber-200/60 dark:border-amber-800/40">
-                              {sub.ownerClass}
+              <>
+                {/* 1. MY SUBJECTS SECTION */}
+                <div className="flex flex-col gap-1.5" id="study-my-subjects-section">
+                  <div className="flex items-center justify-between px-1 py-0.5">
+                    <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 dark:text-indigo-400">
+                      My Subjects
+                    </p>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500">
+                      {mySubjects.length}
+                    </span>
+                  </div>
+
+                  {mySubjects.length === 0 ? (
+                    <div className="text-center py-6 px-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800">
+                      <BookOpen className="w-6 h-6 text-slate-300 dark:text-slate-700 mx-auto mb-1.5 stroke-[1.2]" />
+                      <p className="text-xs font-bold text-slate-500 dark:text-slate-400">No Enrolled Subjects</p>
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">No subjects assigned yet.</p>
+                    </div>
+                  ) : (
+                    mySubjects.map((sub, idx) => {
+                      const isSelected = activeSchoolSubject?.subject.toLowerCase() === sub.subject.toLowerCase() && !activeSchoolSubject?.isAccessible;
+                      const palette = getSubjectColor(sub.subject);
+                      const IconComponent = getSubjectIcon(sub.subject, idx);
+                      return (
+                        <button
+                          key={`my_${sub.subject}_${idx}`}
+                          type="button"
+                          onClick={() => handleSelectSubject(sub.subject, localStudent.classGrade)}
+                          className={`group rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+                            isSelected 
+                              ? `${palette.bg} border-blue-500 text-blue-700 dark:text-blue-400 shadow-sm` 
+                              : "border-slate-100 dark:border-slate-800/60 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-950 hover:border-slate-200"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 truncate min-w-0 flex-1">
+                            <div className={`p-1.5 rounded-lg shrink-0 ${isSelected ? palette.badge : "bg-slate-50 dark:bg-slate-950 group-hover:bg-slate-100"}`}>
+                              <IconComponent className={`h-3.5 w-3.5 ${isSelected ? palette.text : "text-slate-400"}`} />
+                            </div>
+                            <div className="min-w-0 truncate">
+                              <span className="truncate block font-bold text-slate-800 dark:text-slate-200">{sub.subject}</span>
+                              <span className="text-[10px] text-slate-400 font-medium block">
+                                {sub.totalModules} Chapters • {sub.totalTopics} Topics
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-md ${
+                              sub.progressPercent === 100
+                                ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300"
+                                : sub.progressPercent > 0
+                                ? "bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300"
+                                : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                            }`}>
+                              {sub.progressPercent}%
                             </span>
-                          )}
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-medium block">
-                          {sub.totalModules} Chapters • {sub.totalTopics} Topics
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                      <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-md ${
-                        sub.progressPercent === 100
-                          ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300"
-                          : sub.progressPercent > 0
-                          ? "bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300"
-                          : "bg-slate-100 dark:bg-slate-800 text-slate-500"
-                      }`}>
-                        {sub.progressPercent}%
+                            <ChevronRight className={`h-4 w-4 shrink-0 transition-transform ${isSelected ? "text-blue-500 translate-x-0.5" : "text-slate-350 opacity-0 group-hover:opacity-100"}`} />
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* 2. SHARED CURRICULUM SECTION */}
+                {accessibleClassGroups.length > 0 && (
+                  <div className="flex flex-col gap-2 pt-3 mt-1 border-t border-slate-200/70 dark:border-slate-800" id="study-shared-curriculum-section">
+                    <div className="flex items-center justify-between px-1 py-0.5">
+                      <p className="text-[10px] font-black uppercase tracking-[0.25em] text-amber-600 dark:text-amber-400">
+                        Shared Curriculum
+                      </p>
+                      <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50">
+                        Read Only
                       </span>
-                      <ChevronRight className={`h-4 w-4 shrink-0 transition-transform ${isActive ? "text-blue-500 translate-x-0.5" : "text-slate-350 opacity-0 group-hover:opacity-100"}`} />
                     </div>
-                  </button>
-                );
-              })
+
+                    <div className="flex flex-col gap-2">
+                      {accessibleClassGroups.map((group) => {
+                        const isOpen = isSharedClassOpen(group.ownerClass);
+                        return (
+                          <div 
+                            key={`shared-class-${group.ownerClass}`} 
+                            className="rounded-xl border border-amber-200/70 dark:border-amber-900/40 bg-amber-50/30 dark:bg-amber-950/10 overflow-hidden"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => toggleSharedClass(group.ownerClass)}
+                              className="w-full px-3 py-2 flex items-center justify-between bg-amber-50/80 dark:bg-amber-950/30 hover:bg-amber-100/60 dark:hover:bg-amber-900/40 transition-colors text-left cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Folder className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                                <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
+                                  {group.ownerClass}
+                                </span>
+                                <span className="text-[10px] text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/60 px-1.5 py-0.2 rounded-md font-medium shrink-0">
+                                  {group.subjects.length} {group.subjects.length === 1 ? "Subject" : "Subjects"}
+                                </span>
+                              </div>
+                              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                            </button>
+
+                            {isOpen && (
+                              <div className="p-1.5 flex flex-col gap-1.5 bg-white/70 dark:bg-slate-900/60">
+                                {group.subjects.map((sub, sIdx) => {
+                                  const isSelected = activeSchoolSubject?.isAccessible && 
+                                    activeSchoolSubject?.subject.toLowerCase() === sub.subject.toLowerCase() &&
+                                    normalizeClassId(activeSchoolSubject.ownerClass) === normalizeClassId(group.ownerClass);
+                                  const palette = getSubjectColor(sub.subject);
+                                  const IconComponent = getSubjectIcon(sub.subject, sIdx);
+
+                                  return (
+                                    <button
+                                      key={`shared_${group.ownerClass}_${sub.subject}_${sIdx}`}
+                                      type="button"
+                                      onClick={() => handleSelectSubject(sub.subject, group.ownerClass)}
+                                      className={`group rounded-lg border px-2.5 py-2 text-left text-xs font-bold transition-all flex items-center justify-between cursor-pointer ml-1 ${
+                                        isSelected 
+                                          ? `${palette.bg} border-amber-500 text-amber-900 dark:text-amber-200 shadow-sm` 
+                                          : "border-slate-100 dark:border-slate-800/60 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-950 hover:border-slate-200"
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2 truncate min-w-0 flex-1">
+                                        <div className={`p-1 rounded-md shrink-0 ${isSelected ? palette.badge : "bg-slate-50 dark:bg-slate-950"}`}>
+                                          <IconComponent className={`h-3 w-3 ${isSelected ? palette.text : "text-slate-400"}`} />
+                                        </div>
+                                        <div className="min-w-0 truncate">
+                                          <span className="truncate block font-bold text-slate-800 dark:text-slate-200 text-[11px]">{sub.subject}</span>
+                                          <span className="text-[9px] text-slate-400 font-medium block">
+                                            {sub.totalModules} Chapters • {sub.totalTopics} Topics
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-1 shrink-0 ml-1.5">
+                                        <span className={`text-[9px] font-black px-1.5 py-0.2 rounded ${
+                                          sub.progressPercent === 100
+                                            ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300"
+                                            : sub.progressPercent > 0
+                                            ? "bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-200"
+                                            : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                                        }`}>
+                                          {sub.progressPercent}%
+                                        </span>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -2441,14 +2616,23 @@ export function StudentMyTab({
               <div className="border-b border-slate-100 dark:border-slate-800 pb-3 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0" id="study-right-header">
                 <div className="min-w-0 flex-1 pr-2">
                   <p className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">Selected Subject</p>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-lg font-black text-slate-800 dark:text-slate-100 break-words whitespace-normal leading-snug">{activeSchoolSubject.subject}</h3>
-                    {activeSchoolSubject.isAccessible && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 flex items-center gap-1">
-                        Accessible from {activeSchoolSubject.ownerClass} (Read-Only)
+                  <h3 className="text-lg sm:text-xl font-black text-slate-800 dark:text-slate-100 break-words whitespace-normal leading-tight">
+                    {activeSchoolSubject.subject}
+                  </h3>
+                  {activeSchoolSubject.isAccessible ? (
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                        Shared from {activeSchoolSubject.ownerClass}
                       </span>
-                    )}
-                  </div>
+                      <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
+                        Read Only
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="text-xs font-medium text-slate-400 dark:text-slate-500 mt-0.5">
+                      {localStudent.classGrade}
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
@@ -2495,7 +2679,7 @@ export function StudentMyTab({
             </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-sm text-slate-500 dark:text-slate-400">
-              {schoolSubjects.length === 0 ? "No enrolled subjects assigned yet." : "Choose a subject to view modules and topic notes."}
+              {allSchoolSubjects.length === 0 ? "No enrolled or shared subjects available yet." : "Choose a subject to view modules and topic notes."}
             </div>
           )}
         </div>
@@ -2729,14 +2913,20 @@ export default function StudentDashboard({
     const unsubCurriculum = subscribeToCurriculumHierarchy(() => {
       setCurriculumVersion((v) => v + 1);
     });
+    const unsubAccess = subscribeToSubjectAccess(() => {
+      setCurriculumVersion((v) => v + 1);
+    });
     const handleCurriculumUpdate = () => {
       setCurriculumVersion((v) => v + 1);
     };
     window.addEventListener("curriculum-hierarchy-updated", handleCurriculumUpdate);
+    window.addEventListener("subject-access-updated", handleCurriculumUpdate);
     window.addEventListener("notes-progress-updated", handleCurriculumUpdate);
     return () => {
       if (unsubCurriculum) unsubCurriculum();
+      if (unsubAccess) unsubAccess();
       window.removeEventListener("curriculum-hierarchy-updated", handleCurriculumUpdate);
+      window.removeEventListener("subject-access-updated", handleCurriculumUpdate);
       window.removeEventListener("notes-progress-updated", handleCurriculumUpdate);
     };
   }, []);
@@ -2757,17 +2947,15 @@ export default function StudentDashboard({
     return buildCompleteStudentSchoolHierarchy(student, allClassNotes);
   }, [isUPSC, student, allClassNotes, curriculumVersion, testBankVersion]);
 
-  const subjectProgress = useMemo(() => {
+  const mySubjectProgress = useMemo(() => {
     if (isUPSC || !completeHomeSchoolHierarchy) return [];
     const mySubjs = completeHomeSchoolHierarchy.myClass.subjects || [];
-    const accSubjs = (completeHomeSchoolHierarchy.accessibleClasses || []).flatMap((grp) => grp.subjects);
-    const allSubjects = [...mySubjs, ...accSubjs];
-    return allSubjects
+    return mySubjs
       .map((sub) => ({
         name: sub.subject,
         subject: sub.subject,
-        ownerClass: sub.ownerClass,
-        isAccessible: sub.isAccessible,
+        ownerClass: sub.ownerClass || student.classGrade,
+        isAccessible: false,
         totalModules: sub.totalModules,
         totalTopics: sub.totalTopics,
         completedTopics: sub.completedTopics,
@@ -2776,6 +2964,30 @@ export default function StudentDashboard({
         modules: sub.modules,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }, [isUPSC, completeHomeSchoolHierarchy, student.classGrade]);
+
+  const sharedCurriculumGroups = useMemo(() => {
+    if (isUPSC || !completeHomeSchoolHierarchy) return [];
+    const groups = completeHomeSchoolHierarchy.accessibleClasses || [];
+    return groups
+      .map((grp) => ({
+        ownerClass: grp.ownerClass,
+        subjects: grp.subjects
+          .map((sub) => ({
+            name: sub.subject,
+            subject: sub.subject,
+            ownerClass: grp.ownerClass,
+            isAccessible: true,
+            totalModules: sub.totalModules,
+            totalTopics: sub.totalTopics,
+            completedTopics: sub.completedTopics,
+            progressPercent: sub.progressPercent,
+            rate: sub.progressPercent,
+            modules: sub.modules,
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .filter((grp) => grp.subjects.length > 0);
   }, [isUPSC, completeHomeSchoolHierarchy]);
 
   const recentAttendance = useMemo(() => {
@@ -3001,22 +3213,84 @@ export default function StudentDashboard({
               />
             ))
           )
-        ) : subjectProgress.length === 0 ? (
-          <div className="col-span-full py-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 p-6 shadow-xs">
-            <BookOpen className="w-10 h-10 text-slate-300 dark:text-slate-700 mx-auto mb-2 stroke-[1.2]" />
-            <p className="text-sm font-bold text-slate-700 dark:text-slate-300">No Enrolled Subjects</p>
-            <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">You do not have any enrolled subjects assigned yet.</p>
-          </div>
         ) : (
-          subjectProgress.map((sub, index) => (
-            <SubjectProgressCard
-              key={`${sub.name}_${index}`}
-              subject={sub}
-              index={index}
-              onSelectSubject={onSelectSubject}
-              student={student}
-            />
-          ))
+          <div className="col-span-full space-y-6" id="dashboard-school-curriculum-container">
+            {/* Section 1: My Subjects */}
+            <div className="space-y-3" id="dashboard-my-subjects-section">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <p className="text-[11px] font-black uppercase tracking-[0.25em] text-slate-500 dark:text-slate-400">
+                    My Subjects
+                  </p>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                    {mySubjectProgress.length}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
+                {mySubjectProgress.length === 0 ? (
+                  <div className="col-span-full py-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 p-6 shadow-xs">
+                    <BookOpen className="w-10 h-10 text-slate-300 dark:text-slate-700 mx-auto mb-2 stroke-[1.2]" />
+                    <p className="text-sm font-bold text-slate-700 dark:text-slate-300">No Enrolled Subjects</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">You do not have any enrolled subjects assigned yet.</p>
+                  </div>
+                ) : (
+                  mySubjectProgress.map((sub, index) => (
+                    <SubjectProgressCard
+                      key={`my_subj_${sub.name}_${index}`}
+                      subject={sub}
+                      index={index}
+                      onSelectSubject={(subj) => onSelectSubject(subj, student.classGrade)}
+                      student={student}
+                    />
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Section 2: Shared Curriculum (Only rendered if accessible classes exist) */}
+            {sharedCurriculumGroups.length > 0 && (
+              <div className="space-y-4 pt-4 border-t border-slate-200/60 dark:border-slate-800" id="dashboard-shared-curriculum-section">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[11px] font-black uppercase tracking-[0.25em] text-amber-600 dark:text-amber-400">
+                      Shared Curriculum
+                    </p>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
+                      Read Only
+                    </span>
+                  </div>
+                </div>
+
+                {sharedCurriculumGroups.map((group) => (
+                  <div key={`shared_group_${group.ownerClass}`} className="space-y-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                        {group.ownerClass}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-medium">
+                        ({group.subjects.length} {group.subjects.length === 1 ? "Subject" : "Subjects"})
+                      </span>
+                    </div>
+
+                    <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
+                      {group.subjects.map((sub, index) => (
+                        <SubjectProgressCard
+                          key={`shared_${group.ownerClass}_${sub.name}_${index}`}
+                          subject={sub}
+                          index={index}
+                          onSelectSubject={(subj) => onSelectSubject(subj, group.ownerClass)}
+                          student={student}
+                          badgeLabel={`Shared from ${group.ownerClass}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
 

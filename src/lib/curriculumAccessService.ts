@@ -22,6 +22,7 @@ export interface SubjectClassAccess {
   name: string; // subject display name, e.g. "Science"
   ownerClassId: string; // canonical owner class, e.g. "Class 6" or "class6"
   allowedClasses: string[]; // list of allowed classes, e.g. ["Class 6", "Class 7", "Class 8"]
+  enabled?: boolean; // whether curriculum access is active (defaults to true)
   createdAt?: string;
   updatedAt?: string;
 }
@@ -216,6 +217,10 @@ export function isClassAllowedForSubject(
   targetClass: string
 ): boolean {
   if (!access || !targetClass) return false;
+
+  // Non-owner classes require subject_access.enabled == true (or enabled !== false)
+  if (access.enabled === false) return false;
+
   const normTarget = normalizeClassId(targetClass);
   const normOwner = normalizeClassId(access.ownerClassId);
 
@@ -422,6 +427,7 @@ export async function saveSubjectAccessRule(
     name: cleanSubject,
     ownerClassId: cleanOwner,
     allowedClasses: cleanAllowedClasses,
+    enabled: true,
     createdAt: now,
     updatedAt: now,
   };

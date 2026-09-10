@@ -1513,7 +1513,7 @@ export default function AdminNotesDashboard({
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
 
-                              {/* Manage Class Access Button (v7.9.5 permission-based) */}
+                              {/* Manage Curriculum Access Button */}
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -1528,7 +1528,7 @@ export default function AdminNotesDashboard({
                                     ? "hover:bg-blue-700 text-blue-100 hover:text-indigo-200" 
                                     : "text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-200 dark:hover:bg-slate-700"
                                 }`}
-                                title={`Manage Class Access for ${subj}`}
+                                title={`Manage Curriculum Access for ${subj}`}
                                 id={`manage-access-subj-${subj.replace(/\s+/g, "-")}`}
                               >
                                 <Shield className="w-3.5 h-3.5" />
