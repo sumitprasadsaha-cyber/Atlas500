@@ -765,7 +765,11 @@ export function generateHierarchicalNotePaths(params: {
     };
   } else {
     const classSlug = slugifyClass(rawClass);
-    const className = rawClass.startsWith("Class ") ? rawClass : `Class ${rawClass.replace(/\D/g, "") || "10"}`;
+    const cleanClass = rawClass.trim();
+    const numMatch = cleanClass.match(/\d+/);
+    const className = numMatch
+      ? (cleanClass.startsWith("Class ") ? cleanClass : `Class ${numMatch[0]}`)
+      : cleanClass;
     const chNo = params.chapterNo || 1;
     const chName = params.chapterName || `Chapter ${chNo}`;
     const chapterSlug = slugifyChapter(chNo, chName);

@@ -416,8 +416,9 @@ export function getR2S3Client(forceFresh: boolean = false): S3Client {
       responseChecksumValidation: "WHEN_REQUIRED",
       maxAttempts: 3,
       requestHandler: new NodeHttpHandler({
-        connectionTimeout: 10000,
-        requestTimeout: 45000,
+        connectionTimeout: 15000,
+        requestTimeout: 120000,
+        throwOnRequestTimeout: true,
         httpsAgent: new https.Agent({
           keepAlive: true,
           maxSockets: 50,

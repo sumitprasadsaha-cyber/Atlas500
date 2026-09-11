@@ -531,13 +531,16 @@ export async function addSubjectPipeline(params: AddSubjectParams): Promise<{
     }
 
     const current = getSchoolHierarchy();
-    const curClasses = current.classes.some((c) => c.toLowerCase().trim() === cleanClass.toLowerCase())
-      ? current.classes
-      : [...current.classes, cleanClass];
+    // Classes must ONLY be created via explicit admin action. Do not auto-create classes in addSubjectPipeline.
+    const matchedClass = current.classes.find(
+      (c) => c.toLowerCase().trim() === cleanClass.toLowerCase() || isClassGradeMatching(c, cleanClass)
+    );
+    const targetClass = matchedClass || cleanClass;
+    const curClasses = [...current.classes];
 
     const matchingClassKey = Object.keys(current.subjects || {}).find(
-      (c) => c.toLowerCase().trim() === cleanClass.toLowerCase()
-    ) || cleanClass;
+      (c) => c.toLowerCase().trim() === targetClass.toLowerCase()
+    ) || targetClass;
 
     const curSubjs = current.subjects[matchingClassKey] || [];
     const updatedSubjs = Array.from(new Set([...curSubjs, cleanName]));
@@ -552,12 +555,12 @@ export async function addSubjectPipeline(params: AddSubjectParams): Promise<{
       subjects: {
         ...current.subjects,
         [matchingClassKey]: updatedSubjs,
-        ...(matchingClassKey !== cleanClass ? { [cleanClass]: updatedSubjs } : {})
+        ...(matchingClassKey !== targetClass ? { [targetClass]: updatedSubjs } : {})
       },
       removedSubjects: {
         ...(current.removedSubjects || {}),
         [matchingClassKey]: updatedRemoved,
-        ...(matchingClassKey !== cleanClass ? { [cleanClass]: updatedRemoved } : {})
+        ...(matchingClassKey !== targetClass ? { [targetClass]: updatedRemoved } : {})
       },
       updatedAt: new Date().toISOString(),
       version: 2

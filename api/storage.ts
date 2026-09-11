@@ -872,14 +872,34 @@ export default async function handler(req: any, res: any) {
             searchPrefixes.push("upsc/", "GS1/", "GS2/", "GS3/", "GS4/");
           }
         } else if (category === "school" || (classGrade && !gsPaper)) {
-          const classFolder = classGrade ? `Class_${String(classGrade).replace(/\D/g, "").padStart(2, "0")}` : "";
-          if (classFolder && subject) {
-            searchPrefixes.push(`class_notes/${classFolder}/${subject.replace(/\s+/g, "_")}/`);
-            searchPrefixes.push(`class_notes/${classFolder}/${subject}/`);
-            searchPrefixes.push(`${classFolder}/${subject.replace(/\s+/g, "_")}/`);
-          } else if (classFolder) {
-            searchPrefixes.push(`class_notes/${classFolder}/`);
-            searchPrefixes.push(`${classFolder}/`);
+          const rawClass = String(classGrade || "").trim();
+          const candidateFolders: string[] = [];
+          if (rawClass) {
+            const numMatch = rawClass.match(/\d+/);
+            if (numMatch) {
+              const num = parseInt(numMatch[0], 10);
+              candidateFolders.push(`Class_${num}`);
+              candidateFolders.push(`Class_${String(num).padStart(2, "0")}`);
+            } else {
+              const sanitized = rawClass.replace(/[^a-zA-Z0-9_-]/g, "_");
+              candidateFolders.push(sanitized);
+              if (!sanitized.toLowerCase().startsWith("class_")) {
+                candidateFolders.push(`Class_${sanitized}`);
+              }
+            }
+          }
+
+          if (candidateFolders.length > 0 && subject) {
+            candidateFolders.forEach((folder) => {
+              searchPrefixes.push(`class_notes/${folder}/${subject.replace(/\s+/g, "_")}/`);
+              searchPrefixes.push(`class_notes/${folder}/${subject}/`);
+              searchPrefixes.push(`${folder}/${subject.replace(/\s+/g, "_")}/`);
+            });
+          } else if (candidateFolders.length > 0) {
+            candidateFolders.forEach((folder) => {
+              searchPrefixes.push(`class_notes/${folder}/`);
+              searchPrefixes.push(`${folder}/`);
+            });
           } else {
             searchPrefixes.push("class_notes/");
           }
@@ -1011,8 +1031,20 @@ export default async function handler(req: any, res: any) {
                     gsPaper: detectedGsPaper || (isUpscDetected ? "GS Paper 1" : undefined),
                     generalStudiesPaper: detectedGsPaper || (isUpscDetected ? "GS Paper 1" : undefined),
                     paper: detectedGsPaper || (isUpscDetected ? "GS Paper 1" : undefined),
-                    classGrade: isUpscDetected ? "UPSC" : (/^Class_\d+$/i.test(foundClassSegment) ? foundClassSegment.replace(/^Class_/i, "Class ") : (foundClassSegment === "Class_Foundation" ? "Class Foundation" : (foundClassSegment || "Class 10"))),
-                    className: isUpscDetected ? "UPSC" : (/^Class_\d+$/i.test(foundClassSegment) ? foundClassSegment.replace(/^Class_/i, "Class ") : (foundClassSegment === "Class_Foundation" ? "Class Foundation" : (foundClassSegment || "Class 10"))),
+                    classGrade: isUpscDetected
+                      ? "UPSC"
+                      : (/^Class_\d+$/i.test(foundClassSegment)
+                        ? `Class ${parseInt(foundClassSegment.replace(/\D/g, ""), 10)}`
+                        : (foundClassSegment.toLowerCase() === "foundation" || foundClassSegment.toLowerCase() === "class_foundation"
+                          ? "Foundation"
+                          : (foundClassSegment ? foundClassSegment.replace(/_/g, " ").trim() : "Class 10"))),
+                    className: isUpscDetected
+                      ? "UPSC"
+                      : (/^Class_\d+$/i.test(foundClassSegment)
+                        ? `Class ${parseInt(foundClassSegment.replace(/\D/g, ""), 10)}`
+                        : (foundClassSegment.toLowerCase() === "foundation" || foundClassSegment.toLowerCase() === "class_foundation"
+                          ? "Foundation"
+                          : (foundClassSegment ? foundClassSegment.replace(/_/g, " ").trim() : "Class 10"))),
                     classFolder: foundClassSegment,
                     subject: foundSubjectSegment.replace(/_/g, " ") || "General",
                     subjectName: foundSubjectSegment.replace(/_/g, " ") || "General",

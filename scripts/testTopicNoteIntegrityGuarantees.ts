@@ -264,19 +264,19 @@ async function test6_UniversalNoteOpenerDirectKeyResolution() {
 }
 
 async function test7_VersionConsistencyAcrossCodebase() {
-  console.log("\n[Test 7] Release 7.9.4 Version Consistency Audit");
+  console.log("\n[Test 7] Release 7.9.10 Version Consistency Audit");
 
   const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "package.json"), "utf-8"));
-  assert(pkg.version === "7.9.4", `package.json version is 7.9.4 (found "${pkg.version}")`);
+  assert(pkg.version === "7.9.10", `package.json version is 7.9.10 (found "${pkg.version}")`);
 
   const manifest = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "public/manifest.json"), "utf-8"));
-  assert(manifest.version === "7.9.4", `manifest.json version is 7.9.4 (found "${manifest.version}")`);
+  assert(manifest.version === "7.9.10", `manifest.json version is 7.9.10 (found "${manifest.version}")`);
 
   const versionConstantContent = fs.readFileSync(path.resolve(process.cwd(), "src/constants/version.ts"), "utf-8");
-  assert(versionConstantContent.includes('"7.9.4"'), `src/constants/version.ts exports version 7.9.4`);
+  assert(versionConstantContent.includes('"7.9.10"'), `src/constants/version.ts exports version 7.9.10`);
 
   const versionApiContent = fs.readFileSync(path.resolve(process.cwd(), "api/_lib/version.ts"), "utf-8");
-  assert(versionApiContent.includes('baseVersion = "7.9.4"'), `api/_lib/version.ts defaults to baseVersion 7.9.4`);
+  assert(versionApiContent.includes('baseVersion = "7.9.10"'), `api/_lib/version.ts defaults to baseVersion 7.9.10`);
 }
 
 async function runAllTests() {

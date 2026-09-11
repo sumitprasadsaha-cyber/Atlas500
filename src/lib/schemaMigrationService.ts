@@ -4,7 +4,7 @@
  * are 100% preserved during updates, deployments, and reboots.
  */
 
-import { doc, getDoc, setDoc, getDocs, collection } from "firebase/firestore";
+import { doc, getDoc, setDoc, getDocs, collection, updateDoc } from "firebase/firestore";
 import { getFirebaseDb } from "./firebase";
 import { 
   getSchoolHierarchy, 
@@ -16,7 +16,7 @@ import {
 import { getLocalClassNotes, saveLocalClassNotes, saveClassNoteDoc } from "./firestoreService";
 import { repairStorageIntegrity } from "./storageIntegrityService";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 const STORAGE_KEY_SCHEMA_VERSION = "tuition_database_schema_version";
 
 export interface DatabaseSchemaInfo {
@@ -42,6 +42,28 @@ export async function reconcileDuplicateClassesAndNotes(): Promise<{
   try {
     const school = getSchoolHierarchy();
     let schoolModified = false;
+    const db = await getFirebaseDb();
+
+    // Pull current remote school_hierarchy to ensure we have any newly saved classes/subjects
+    if (db) {
+      try {
+        const snap = await getDoc(doc(db, "curriculum_hierarchy", "school_hierarchy"));
+        if (snap.exists()) {
+          const remoteSchool = snap.data() as any;
+          if (Array.isArray(remoteSchool.classes)) {
+            const mergedClasses = Array.from(new Set([...school.classes, ...remoteSchool.classes]));
+            school.classes = mergedClasses;
+            school.subjects = { ...school.subjects, ...(remoteSchool.subjects || {}) };
+            school.chapters = { ...school.chapters, ...(remoteSchool.chapters || {}) };
+            if (remoteSchool.removedSubjects) {
+              school.removedSubjects = { ...school.removedSubjects, ...remoteSchool.removedSubjects };
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[Reconcile] Notice reading remote school hierarchy:", err);
+      }
+    }
 
     // 1. Reconcile "Class Class" ghost class
     const classClassIdx = school.classes.findIndex(
@@ -100,27 +122,62 @@ export async function reconcileDuplicateClassesAndNotes(): Promise<{
 
     if (schoolModified) {
       await saveSchoolHierarchy(school);
+      if (db) {
+        try {
+          const docRef = doc(db, "curriculum_hierarchy", "school_hierarchy");
+          await setDoc(docRef, school, { merge: true });
+        } catch (err) {
+          console.warn("[Reconcile] Failed updating remote school hierarchy doc:", err);
+        }
+      }
     }
 
-    // 3. Reconcile notes
-    const notes = getLocalClassNotes();
-    let notesModified = false;
-
+    // 3. Reconcile notes in Firestore and locally
     const targetFoundationClass = school.classes.find((c) => c && c.toLowerCase().trim() === "foundation") || (hasFoundation ? "Foundation" : "");
 
     if (targetFoundationClass) {
-      const db = await getFirebaseDb();
+      // Reconcile Firestore collection
+      if (db) {
+        try {
+          const notesSnap = await getDocs(collection(db, "class_notes"));
+          for (const noteDoc of notesSnap.docs) {
+            const d = noteDoc.data();
+            const cls = ((d as any).className || d.classGrade || (d as any).class || "").trim();
+            const storageKey = (d.storagePath || d.storageKey || d.r2Key || "").trim();
+
+            const isClassFoundation = cls.toLowerCase() === "class foundation";
+            const hasFoundationPath = /class_notes\/foundation\//i.test(storageKey) || /^foundation\//i.test(storageKey);
+
+            if (isClassFoundation || (hasFoundationPath && cls.toLowerCase() !== "foundation")) {
+              reconciledNotesCount++;
+              console.log(`[Reconcile] Updating Firestore note "${noteDoc.id}" to class "${targetFoundationClass}"`);
+              await updateDoc(doc(db, "class_notes", noteDoc.id), {
+                className: targetFoundationClass,
+                classGrade: targetFoundationClass,
+                classFolder: targetFoundationClass,
+                classId: targetFoundationClass.toLowerCase(),
+                class: targetFoundationClass,
+              });
+            }
+          }
+        } catch (firestoreErr) {
+          console.warn("[Reconcile] Notice scanning Firestore notes:", firestoreErr);
+        }
+      }
+
+      // Reconcile local notes cache
+      const notes = getLocalClassNotes();
+      let notesModified = false;
       const updatedNotes = notes.map((n) => {
         const cls = ((n as any).className || n.classGrade || (n as any).class || "").trim();
         const storageKey = (n.storagePath || n.storageKey || n.r2Key || "").trim();
 
         const isClassFoundation = cls.toLowerCase() === "class foundation";
-        const hasFoundationPath = /class_notes\/foundation\//i.test(storageKey);
+        const hasFoundationPath = /class_notes\/foundation\//i.test(storageKey) || /^foundation\//i.test(storageKey);
 
         if (isClassFoundation || (hasFoundationPath && cls.toLowerCase() !== "foundation")) {
-          reconciledNotesCount++;
           notesModified = true;
-          console.log(`[Reconcile] Re-mapping note "${n.id}" (${n.topicName || n.topicTitle}) to class "${targetFoundationClass}"`);
+          console.log(`[Reconcile] Re-mapping local note "${n.id}" (${n.topicName || n.topicTitle}) to class "${targetFoundationClass}"`);
           const updatedNote = {
             ...n,
             className: targetFoundationClass,
@@ -129,11 +186,6 @@ export async function reconcileDuplicateClassesAndNotes(): Promise<{
             classId: targetFoundationClass.toLowerCase(),
             class: targetFoundationClass,
           };
-          if (db && updatedNote.id) {
-            saveClassNoteDoc(updatedNote, db).catch((err) => {
-              console.warn(`[Reconcile] Note Firestore sync notice (${updatedNote.id}):`, err);
-            });
-          }
           return updatedNote;
         }
         return n;
@@ -256,6 +308,13 @@ export async function runDatabaseMigrationsIfNeeded(): Promise<void> {
       }
 
       console.log("[SchemaMigration] Migration completed successfully.");
+    } else {
+      // Ensure reconciliation runs to catch any recent duplicates
+      try {
+        await reconcileDuplicateClassesAndNotes();
+      } catch (recErr) {
+        console.warn("[SchemaMigration] Reconcile duplicate classes notice:", recErr);
+      }
     }
   } catch (err) {
     console.error("[SchemaMigration] Error during migration check:", err);

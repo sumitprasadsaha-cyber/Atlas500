@@ -1,0 +1,350 @@
+{
+  "timestamp": "2026-09-11T09:41:01.207Z",
+  "curriculum_hierarchy": {
+    "school_hierarchy": {
+      "updatedAt": "2026-09-11T09:36:26.226Z",
+      "subjects": {
+        "Foundation": [
+          "English"
+        ]
+      },
+      "removedSubjects": {
+        "Foundation": [
+          "English Grammar Legacy"
+        ]
+      },
+      "chapters": {
+        "Foundation": {
+          "English": [
+            {
+              "number": 1,
+              "name": "English Grammer"
+            }
+          ]
+        }
+      },
+      "version": 2,
+      "classes": [
+        "Foundation"
+      ]
+    },
+    "subject_access": {
+      "updatedAt": "2026-09-11T07:47:51.680Z",
+      "rules": {
+        "english": {
+          "id": "school_foundation_english",
+          "allowedClasses": [
+            "Foundation",
+            "Class Foundation"
+          ],
+          "enabled": true,
+          "updatedAt": "2026-09-11T07:47:51.680Z",
+          "ownerClassId": "Foundation",
+          "createdAt": "2026-09-11T07:47:51.680Z",
+          "name": "English"
+        },
+        "science": {
+          "ownerClassId": "Class 6",
+          "createdAt": "2026-09-10T11:05:27.652Z",
+          "name": "Science",
+          "allowedClasses": [
+            "Class 6",
+            "Class 7"
+          ],
+          "id": "school_class6_science",
+          "updatedAt": "2026-09-10T11:05:27.652Z",
+          "enabled": true
+        },
+        "entrance__class7": {
+          "id": "school_class7_entrance",
+          "enabled": true,
+          "updatedAt": "2026-09-11T07:31:04.869Z",
+          "allowedClasses": [
+            "Class 7",
+            "UPSC"
+          ],
+          "createdAt": "2026-09-11T07:31:04.869Z",
+          "ownerClassId": "Class 7",
+          "name": "Entrance"
+        },
+        "history__class10": {
+          "id": "school_class10_history",
+          "allowedClasses": [
+            "Class 10",
+            "UPSC"
+          ],
+          "createdAt": "2026-09-10T09:20:39.628Z",
+          "updatedAt": "2026-09-10T09:20:39.628Z",
+          "ownerClassId": "Class 10",
+          "name": "History"
+        },
+        "science__class6": {
+          "createdAt": "2026-09-10T11:05:27.652Z",
+          "ownerClassId": "Class 6",
+          "allowedClasses": [
+            "Class 6",
+            "Class 7"
+          ],
+          "enabled": true,
+          "id": "school_class6_science",
+          "name": "Science",
+          "updatedAt": "2026-09-10T11:05:27.652Z"
+        },
+        "entrance": {
+          "id": "school_class7_entrance",
+          "name": "Entrance",
+          "updatedAt": "2026-09-11T07:31:04.869Z",
+          "enabled": true,
+          "allowedClasses": [
+            "Class 7",
+            "UPSC"
+          ],
+          "createdAt": "2026-09-11T07:31:04.869Z",
+          "ownerClassId": "Class 7"
+        },
+        "history": {
+          "allowedClasses": [
+            "Class 10",
+            "UPSC"
+          ],
+          "ownerClassId": "Class 10",
+          "createdAt": "2026-09-10T09:20:39.628Z",
+          "updatedAt": "2026-09-10T09:20:39.628Z",
+          "id": "school_class10_history",
+          "name": "History"
+        },
+        "english__foundation": {
+          "createdAt": "2026-09-11T07:47:51.680Z",
+          "updatedAt": "2026-09-11T07:47:51.680Z",
+          "ownerClassId": "Foundation",
+          "enabled": true,
+          "allowedClasses": [
+            "Foundation",
+            "Class Foundation"
+          ],
+          "id": "school_foundation_english",
+          "name": "English"
+        }
+      }
+    },
+    "upsc_hierarchy": {
+      "subjects": {
+        "General Studies Paper IV": [
+          "Ethics & Integrity"
+        ],
+        "General Studies Paper I": [
+          "History",
+          "NIOS Indian Culture and Heritage",
+          "Entrance"
+        ]
+      },
+      "modules": {
+        "General Studies Paper I": {
+          "Entrance": [
+            {
+              "number": 1,
+              "name": "English"
+            }
+          ],
+          "NIOS Indian Culture and Heritage": [
+            {
+              "number": 1,
+              "name": "Module 01"
+            }
+          ],
+          "History": [
+            {
+              "name": "Nationalism in India",
+              "number": 2
+            }
+          ]
+        }
+      },
+      "removedSubjects": {
+        "General Studies Paper IV": []
+      },
+      "version": 2,
+      "updatedAt": "2026-09-11T09:34:52.868Z",
+      "papers": [
+        "General Studies Paper IV",
+        "General Studies Paper I"
+      ]
+    }
+  },
+  "subjects": [
+    {
+      "id": "school_class10_history",
+      "name": "History",
+      "category": "school",
+      "ownerClassId": "Class 10",
+      "subjectName": "History",
+      "updatedAt": "2026-09-10T09:20:39.628Z",
+      "allowedClasses": [
+        "Class 10",
+        "UPSC"
+      ]
+    },
+    {
+      "id": "school_class6_science",
+      "allowedClasses": [
+        "Class 6",
+        "Class 7"
+      ],
+      "name": "Science",
+      "subjectName": "Science",
+      "updatedAt": "2026-09-10T11:05:27.652Z",
+      "ownerClassId": "Class 6",
+      "category": "school"
+    },
+    {
+      "id": "school_class7_entrance",
+      "category": "school",
+      "updatedAt": "2026-09-11T07:31:04.869Z",
+      "ownerClassId": "Class 7",
+      "name": "Entrance",
+      "subjectName": "Entrance",
+      "allowedClasses": [
+        "Class 7",
+        "UPSC"
+      ]
+    },
+    {
+      "id": "school_class_10_economics",
+      "category": "school",
+      "createdAt": "2026-09-06T12:07:18.256Z",
+      "name": "Economics",
+      "updatedAt": "2026-09-06T12:07:18.256Z",
+      "className": "Class 10",
+      "subjectName": "Economics"
+    },
+    {
+      "id": "school_class_10_history",
+      "category": "school",
+      "createdAt": "2026-08-31T05:41:56.274Z",
+      "name": "History",
+      "subjectName": "History",
+      "updatedAt": "2026-08-31T05:41:56.274Z",
+      "className": "Class 10"
+    },
+    {
+      "id": "school_class_10_nios_economics",
+      "name": "NIOS Economics",
+      "subjectName": "NIOS Economics",
+      "className": "Class 10",
+      "updatedAt": "2026-09-04T06:22:06.493Z",
+      "category": "school",
+      "createdAt": "2026-09-04T06:22:06.493Z"
+    },
+    {
+      "id": "school_class_10_nios_indian_culture_and_heritage",
+      "createdAt": "2026-09-02T05:07:24.607Z",
+      "subjectName": "NIOS Indian Culture and Heritage",
+      "category": "school",
+      "name": "NIOS Indian Culture and Heritage",
+      "updatedAt": "2026-09-02T05:07:24.607Z",
+      "className": "Class 10"
+    },
+    {
+      "id": "school_class_10_nios_indian_heritage_and_culture",
+      "category": "school",
+      "createdAt": "2026-09-02T04:56:33.748Z",
+      "className": "Class 10 NIOS",
+      "updatedAt": "2026-09-02T04:56:33.748Z",
+      "name": "Indian Heritage and Culture",
+      "subjectName": "Indian Heritage and Culture"
+    },
+    {
+      "id": "school_class_6_science",
+      "name": "Science",
+      "category": "school",
+      "createdAt": "2026-09-10T07:48:22.760Z",
+      "updatedAt": "2026-09-10T07:48:22.760Z",
+      "className": "Class 6",
+      "subjectName": "Science"
+    },
+    {
+      "id": "school_class_7_english__grammer_",
+      "name": "English (Grammer)",
+      "subjectName": "English (Grammer)",
+      "className": "Class 7",
+      "updatedAt": "2026-09-09T08:27:00.063Z",
+      "createdAt": "2026-09-09T08:27:00.063Z",
+      "category": "school"
+    },
+    {
+      "id": "school_class_7_entrance",
+      "name": "Entrance",
+      "createdAt": "2026-09-09T08:28:41.052Z",
+      "subjectName": "Entrance",
+      "category": "school",
+      "className": "Class 7",
+      "updatedAt": "2026-09-09T08:28:41.052Z"
+    },
+    {
+      "id": "school_class_7_science",
+      "category": "school",
+      "className": "Class 7",
+      "updatedAt": "2026-09-07T07:04:21.701Z",
+      "subjectName": "Science",
+      "createdAt": "2026-09-07T07:04:21.701Z",
+      "name": "Science"
+    },
+    {
+      "id": "school_class_7_social_science_part___2",
+      "subjectName": "Social Science Part - 2",
+      "updatedAt": "2026-08-31T05:55:08.656Z",
+      "className": "Class 7",
+      "name": "Social Science Part - 2",
+      "createdAt": "2026-08-31T05:55:08.656Z",
+      "category": "school"
+    },
+    {
+      "id": "school_class_8_science",
+      "subjectName": "Science",
+      "className": "Class 8",
+      "updatedAt": "2026-09-06T13:22:33.140Z",
+      "createdAt": "2026-09-06T13:22:33.140Z",
+      "category": "school",
+      "name": "Science"
+    },
+    {
+      "id": "school_foundation_english",
+      "createdAt": "2026-09-11T08:05:02.078Z",
+      "subjectName": "English",
+      "name": "English",
+      "category": "school",
+      "updatedAt": "2026-09-11T08:05:02.078Z",
+      "className": "Foundation"
+    },
+    {
+      "id": "school_foundation_english_grammer",
+      "subjectName": "English Grammer",
+      "category": "school",
+      "createdAt": "2026-09-11T08:03:01.624Z",
+      "className": "Foundation",
+      "updatedAt": "2026-09-11T08:03:01.624Z",
+      "name": "English Grammer"
+    },
+    {
+      "id": "school_foundation_mathematics",
+      "name": "Mathematics",
+      "updatedAt": "2026-09-11T07:20:37.408Z",
+      "className": "Foundation",
+      "category": "school",
+      "createdAt": "2026-09-11T07:20:37.408Z",
+      "subjectName": "Mathematics"
+    },
+    {
+      "id": "upsc_general_studies_paper_iv_ethics___integrity",
+      "createdAt": "2026-08-31T05:19:46.032Z",
+      "gsPaper": "General Studies Paper IV",
+      "updatedAt": "2026-08-31T05:19:46.032Z",
+      "subjectName": "Ethics & Integrity",
+      "name": "Ethics & Integrity",
+      "category": "upsc"
+    }
+  ],
+  "practice_tests_count": 193,
+  "class_notes_count": 156,
+  "students_count": 18
+}
