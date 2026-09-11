@@ -274,45 +274,51 @@ export function buildSingleSchoolSubject(
   >();
 
   // 1. Populate chapters from schoolHierarchy.chapters
-  let adminChapters: ChapterInfo[] = [];
+  const adminChaptersMap = new Map<number, string>();
 
   Object.entries(schoolHierarchy.chapters || {}).forEach(([clsKey, chMap]) => {
-    if (
+    const isClassMatch =
       clsKey.toLowerCase().trim() === matchingClassKey.toLowerCase().trim() ||
-      normalizeClassGrade(clsKey).toLowerCase() === normTargetClass
-    ) {
+      normalizeClassGrade(clsKey).toLowerCase() === normTargetClass ||
+      normalizeClassId(clsKey) === normalizeClassId(targetClass) ||
+      isClassGradeMatching(clsKey, targetClass);
+
+    if (isClassMatch) {
       Object.entries(chMap || {}).forEach(([subjKey, chList]) => {
         if (isSubjectMatching(subjKey, subjectName)) {
-          adminChapters = chList || [];
+          (chList || []).forEach((ch) => {
+            adminChaptersMap.set(ch.number, ch.name);
+          });
         }
       });
     }
   });
 
   // If no chapters found directly under matchingClassKey, check canonical owner if any
-  if (adminChapters.length === 0) {
+  if (adminChaptersMap.size === 0) {
     const canonicalOwner = getCanonicalOwnerClass(subjectName, targetClass);
     if (canonicalOwner && schoolHierarchy.chapters?.[canonicalOwner]) {
-      const ownerSubjMatch = Object.keys(schoolHierarchy.chapters[canonicalOwner]).find((sub) =>
-        isSubjectMatching(sub, subjectName)
-      );
-      if (ownerSubjMatch) {
-        adminChapters = schoolHierarchy.chapters[canonicalOwner][ownerSubjMatch] || [];
-      }
+      Object.entries(schoolHierarchy.chapters[canonicalOwner] || {}).forEach(([sub, chList]) => {
+        if (isSubjectMatching(sub, subjectName)) {
+          (chList || []).forEach((ch) => {
+            adminChaptersMap.set(ch.number, ch.name);
+          });
+        }
+      });
     }
   }
 
   // Pre-seed modules from admin chapters
-  adminChapters.forEach((ch) => {
-    const mKey = `mod_${ch.number}`;
+  adminChaptersMap.forEach((chName, chNumber) => {
+    const mKey = `mod_${chNumber}`;
     if (!moduleMap.has(mKey)) {
       moduleMap.set(mKey, {
-        moduleNo: ch.number,
-        moduleName: ch.name,
+        moduleNo: chNumber,
+        moduleName: chName,
         moduleTitle:
-          ch.name.toLowerCase().startsWith("chapter") || ch.name.toLowerCase().startsWith("module")
-            ? ch.name
-            : `Chapter ${ch.number}: ${ch.name}`,
+          chName.toLowerCase().startsWith("chapter") || chName.toLowerCase().startsWith("module")
+            ? chName
+            : `Chapter ${chNumber}: ${chName}`,
         topics: [],
       });
     }

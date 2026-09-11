@@ -914,23 +914,50 @@ export default async function handler(req: any, res: any) {
               let isUpscDetected = false;
               let detectedGsPaper = "";
 
-              for (const part of parts) {
-                if (/^Topic[_.\s-]/i.test(part)) {
-                  foundTopicSegment = part;
-                } else if (/^(?:Chapter|Ch|Module|Mod)[_.\s-]/i.test(part)) {
-                  foundChapterSegment = part;
-                } else if (/^Class[_.\s-]/i.test(part)) {
-                  foundClassSegment = part;
-                } else if (/^(?:GS[1-4]|General_Studies_Paper_[1-4]|Essay|CSAT)/i.test(part)) {
+              if (parts[0]?.toLowerCase() === "class_notes") {
+                if (parts[1]?.toLowerCase() === "upsc") {
                   isUpscDetected = true;
                   foundClassSegment = "UPSC";
-                  const m = part.match(/GS([1-4])/i) || part.match(/Paper_([1-4])/i);
-                  detectedGsPaper = m ? `GS Paper ${m[1]}` : (part.toLowerCase().includes("essay") ? "Essay" : part.toLowerCase().includes("csat") ? "CSAT" : "GS Paper 1");
-                } else if (part.toLowerCase() === "upsc") {
-                  isUpscDetected = true;
-                  foundClassSegment = "UPSC";
-                } else if (part !== "class_notes" && !foundSubjectSegment && !/\.[a-z0-9]+$/i.test(part)) {
-                  foundSubjectSegment = part;
+                  const m = parts[2]?.match(/GS([1-4])/i) || parts[2]?.match(/Paper_([1-4])/i);
+                  detectedGsPaper = m ? `GS Paper ${m[1]}` : (parts[2]?.toLowerCase().includes("essay") ? "Essay" : parts[2]?.toLowerCase().includes("csat") ? "CSAT" : "GS Paper 1");
+                  foundSubjectSegment = parts[3] || "";
+                  foundChapterSegment = parts[4] || "";
+                  foundTopicSegment = parts[5] || "";
+                } else {
+                  foundClassSegment = parts[1] || "";
+                  foundSubjectSegment = parts[2] || "";
+                  foundChapterSegment = parts[3] || "";
+                  foundTopicSegment = parts[4] || "";
+                }
+              } else if (parts[0]?.toLowerCase() === "upsc") {
+                isUpscDetected = true;
+                foundClassSegment = "UPSC";
+                const m = parts[1]?.match(/GS([1-4])/i) || parts[1]?.match(/Paper_([1-4])/i);
+                detectedGsPaper = m ? `GS Paper ${m[1]}` : (parts[1]?.toLowerCase().includes("essay") ? "Essay" : parts[1]?.toLowerCase().includes("csat") ? "CSAT" : "GS Paper 1");
+                foundSubjectSegment = parts[2] || "";
+                foundChapterSegment = parts[3] || "";
+                foundTopicSegment = parts[4] || "";
+              }
+
+              if (!foundTopicSegment || !foundChapterSegment || !foundClassSegment) {
+                for (const part of parts) {
+                  if (/^Topic[_.\s-]/i.test(part)) {
+                    foundTopicSegment = part;
+                  } else if (/^(?:Chapter|Ch|Module|Mod)[_.\s-]/i.test(part)) {
+                    foundChapterSegment = part;
+                  } else if (/^Class[_.\s-]/i.test(part)) {
+                    if (!foundClassSegment) foundClassSegment = part;
+                  } else if (/^(?:GS[1-4]|General_Studies_Paper_[1-4]|Essay|CSAT)/i.test(part)) {
+                    isUpscDetected = true;
+                    foundClassSegment = "UPSC";
+                    const m = part.match(/GS([1-4])/i) || part.match(/Paper_([1-4])/i);
+                    detectedGsPaper = m ? `GS Paper ${m[1]}` : (part.toLowerCase().includes("essay") ? "Essay" : part.toLowerCase().includes("csat") ? "CSAT" : "GS Paper 1");
+                  } else if (part.toLowerCase() === "upsc") {
+                    isUpscDetected = true;
+                    foundClassSegment = "UPSC";
+                  } else if (part !== "class_notes" && !foundSubjectSegment && !/\.[a-z0-9]+$/i.test(part)) {
+                    foundSubjectSegment = part;
+                  }
                 }
               }
 
@@ -984,8 +1011,9 @@ export default async function handler(req: any, res: any) {
                     gsPaper: detectedGsPaper || (isUpscDetected ? "GS Paper 1" : undefined),
                     generalStudiesPaper: detectedGsPaper || (isUpscDetected ? "GS Paper 1" : undefined),
                     paper: detectedGsPaper || (isUpscDetected ? "GS Paper 1" : undefined),
-                    classGrade: isUpscDetected ? "UPSC" : (foundClassSegment.replace(/_/g, " ") || "Class 10"),
-                    className: isUpscDetected ? "UPSC" : (foundClassSegment.replace(/_/g, " ") || "Class 10"),
+                    classGrade: isUpscDetected ? "UPSC" : (/^Class_\d+$/i.test(foundClassSegment) ? foundClassSegment.replace(/^Class_/i, "Class ") : (foundClassSegment === "Class_Foundation" ? "Class Foundation" : (foundClassSegment || "Class 10"))),
+                    className: isUpscDetected ? "UPSC" : (/^Class_\d+$/i.test(foundClassSegment) ? foundClassSegment.replace(/^Class_/i, "Class ") : (foundClassSegment === "Class_Foundation" ? "Class Foundation" : (foundClassSegment || "Class 10"))),
+                    classFolder: foundClassSegment,
                     subject: foundSubjectSegment.replace(/_/g, " ") || "General",
                     subjectName: foundSubjectSegment.replace(/_/g, " ") || "General",
                     storagePath: cleanKey,

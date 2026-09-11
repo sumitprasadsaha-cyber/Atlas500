@@ -302,9 +302,12 @@ export function formatClassFolder(input?: string): { className: string; classFol
     }
   }
 
+  if (!raw) {
+    return { className: "Class 10", classFolder: "Class_10", isUPSC: false };
+  }
+
   const sanitized = sanitizeFolderName(raw);
-  const display = raw.startsWith("Class ") ? raw : `Class ${raw}`;
-  return { className: display, classFolder: sanitized.startsWith("Class_") ? sanitized : `Class_${sanitized}`, isUPSC: false };
+  return { className: raw, classFolder: sanitized, isUPSC: false };
 }
 
 /**

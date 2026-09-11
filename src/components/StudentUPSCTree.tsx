@@ -296,7 +296,7 @@ export default function StudentUPSCTree({
                       <div className="p-1.5 space-y-1 bg-white dark:bg-slate-900">
                         {mod.topics.length === 0 ? (
                           <div className="py-2.5 px-3 text-center text-xs text-slate-400 italic">
-                            No topics uploaded in this module yet.
+                            No topic notes available in this module yet.
                           </div>
                         ) : (
                           mod.topics.map((topic) => {

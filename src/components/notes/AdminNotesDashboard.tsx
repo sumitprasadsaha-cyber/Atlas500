@@ -65,6 +65,7 @@ import {
   migrateExistingSharedSubjects,
   normalizeClassId
 } from "../../lib/curriculumAccessService";
+import { isClassGradeMatching, isSubjectMatching } from "../../utils/classNoteHelper";
 import {
   getSchoolHierarchy,
   getUpscHierarchy,
@@ -418,11 +419,7 @@ export default function AdminNotesDashboard({
   const schoolClasses = useMemo(() => {
     const set = new Set<string>();
     customSchoolClasses.forEach((c) => {
-      if (c && c.trim()) set.add(c.trim());
-    });
-    schoolNotes.forEach((n) => {
-      const c = (n as any).className || n.classGrade || (n as any).class;
-      if (c && c.trim()) set.add(c.trim());
+      if (c && c.trim() && c.toLowerCase() !== "class class") set.add(c.trim());
     });
     return Array.from(set).sort((a, b) => {
       const numA = parseInt(a.replace(/\D/g, ""), 10);
@@ -430,7 +427,7 @@ export default function AdminNotesDashboard({
       if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
       return a.localeCompare(b);
     });
-  }, [customSchoolClasses, schoolNotes]);
+  }, [customSchoolClasses]);
 
   useEffect(() => {
     if (schoolClasses.length > 0) {
@@ -495,23 +492,46 @@ export default function AdminNotesDashboard({
     if (!selectedSchoolClass || !selectedSchoolSubject) return [];
     const map = new Map<number, string>();
     const normSelected = normalizeClassId(selectedSchoolClass);
+    const normSubj = selectedSchoolSubject.trim().toLowerCase();
 
-    // 1. Check custom chapters under selectedSchoolClass
-    const matchingKey = Object.keys(customSchoolChapters || {}).find(
-      (k) => normalizeClassId(k) === normSelected
-    );
-    const customList = (matchingKey && customSchoolChapters[matchingKey]?.[selectedSchoolSubject]) || [];
+    // 1. Check custom chapters across all matching aliases of selectedSchoolClass
+    Object.entries(customSchoolChapters || {}).forEach(([clsKey, subjMap]) => {
+      const isClassMatch =
+        normalizeClassId(clsKey) === normSelected ||
+        clsKey.toLowerCase().trim() === selectedSchoolClass.toLowerCase().trim() ||
+        isClassGradeMatching(clsKey, selectedSchoolClass);
 
-    customList.forEach((ch) => {
-      map.set(ch.number, ch.name || `Chapter ${ch.number}`);
+      if (isClassMatch) {
+        Object.entries(subjMap || {}).forEach(([sKey, chList]) => {
+          if (sKey.toLowerCase().trim() === normSubj || isSubjectMatching(sKey, selectedSchoolSubject)) {
+            (chList || []).forEach((ch) => {
+              map.set(ch.number, ch.name || `Chapter ${ch.number}`);
+            });
+          }
+        });
+      }
     });
 
-    // 2. Check schoolNotes directly under selectedSchoolClass
+    // 2. Also check canonical owner class if any (shared curriculum)
+    const canonicalOwner = getCanonicalOwnerClass(selectedSchoolSubject, selectedSchoolClass);
+    if (canonicalOwner && customSchoolChapters?.[canonicalOwner]) {
+      Object.entries(customSchoolChapters[canonicalOwner] || {}).forEach(([sKey, chList]) => {
+        if (sKey.toLowerCase().trim() === normSubj || isSubjectMatching(sKey, selectedSchoolSubject)) {
+          (chList || []).forEach((ch) => {
+            if (!map.has(ch.number)) {
+              map.set(ch.number, ch.name || `Chapter ${ch.number}`);
+            }
+          });
+        }
+      });
+    }
+
+    // 3. Check schoolNotes directly under selectedSchoolClass
     schoolNotes.forEach((n) => {
       const c = ((n as any).className || n.classGrade || (n as any).class || "").trim().toLowerCase();
-      const isMatch = normalizeClassId(c) === normSelected;
+      const isMatch = normalizeClassId(c) === normSelected || isClassGradeMatching(c, selectedSchoolClass);
       const s = ((n as any).subjectName || n.subject || "").trim().toLowerCase();
-      if (isMatch && s === selectedSchoolSubject.trim().toLowerCase()) {
+      if (isMatch && (s === normSubj || isSubjectMatching(s, selectedSchoolSubject))) {
         const rawChNo = (n as any).chapterNumber ?? n.chapterNo ?? 1;
         const chNo = typeof rawChNo === "number" ? rawChNo : parseInt(String(rawChNo).replace(/\D/g, ""), 10) || 1;
         const chName = (n as any).chapterTitle || (n as any).chapterName || `Chapter ${chNo}`;
@@ -598,16 +618,27 @@ export default function AdminNotesDashboard({
   const upscModulesForSelected = useMemo(() => {
     if (!selectedUpscPaper || !selectedUpscSubject) return [];
     const map = new Map<number, string>();
+    const normPaper = selectedUpscPaper.trim().toLowerCase();
+    const normSubj = selectedUpscSubject.trim().toLowerCase();
 
-    const customList = customUpscModules[selectedUpscPaper]?.[selectedUpscSubject] || [];
-    customList.forEach((m) => {
-      map.set(m.number, m.name || `Module ${m.number}`);
+    // 1. Check custom modules under matching paper key
+    Object.entries(customUpscModules || {}).forEach(([pKey, subjMap]) => {
+      if (pKey.toLowerCase().trim() === normPaper) {
+        Object.entries(subjMap || {}).forEach(([sKey, modList]) => {
+          if (sKey.toLowerCase().trim() === normSubj || isSubjectMatching(sKey, selectedUpscSubject)) {
+            (modList || []).forEach((m) => {
+              map.set(m.number, m.name || `Module ${m.number}`);
+            });
+          }
+        });
+      }
     });
 
+    // 2. Check upscNotes
     upscNotes.forEach((n) => {
-      const p = (n as any).gsPaper || (n as any).generalStudiesPaper || (n as any).paper || "";
-      const subj = (n as any).subjectName || n.subject || "";
-      if (p.toLowerCase() === selectedUpscPaper.toLowerCase() && subj.toLowerCase() === selectedUpscSubject.toLowerCase()) {
+      const p = ((n as any).gsPaper || (n as any).generalStudiesPaper || (n as any).paper || "").trim().toLowerCase();
+      const subj = ((n as any).subjectName || n.subject || "").trim().toLowerCase();
+      if (p === normPaper && (subj === normSubj || isSubjectMatching(subj, selectedUpscSubject))) {
         const rawModNo = (n as any).moduleNumber ?? (n as any).moduleNo ?? (n as any).chapterNumber ?? n.chapterNo ?? 1;
         const modNo = typeof rawModNo === "number" ? rawModNo : parseInt(String(rawModNo).replace(/\D/g, ""), 10) || 1;
         const modName = (n as any).moduleTitle || (n as any).moduleName || (n as any).chapterTitle || (n as any).chapterName || `Module ${modNo}`;
@@ -1163,20 +1194,41 @@ export default function AdminNotesDashboard({
     try {
       if (type === "school" && className) {
         updateSchoolHierarchy((prev) => {
-          const curSubjectChapters = prev.chapters[className]?.[subject] || [];
-          const updated = curSubjectChapters.filter((c) => c.number !== oldNumber);
-          updated.push({ number: validNewNum, name: newName.trim() });
-          updated.sort((a, b) => a.number - b.number);
+          const normClass = normalizeClassId(className);
+          const normSubj = subject.trim().toLowerCase();
+          const nextChapters = { ...prev.chapters };
+
+          let foundAny = false;
+          Object.keys(nextChapters).forEach((clsKey) => {
+            if (
+              normalizeClassId(clsKey) === normClass ||
+              clsKey.toLowerCase().trim() === className.toLowerCase().trim() ||
+              isClassGradeMatching(clsKey, className)
+            ) {
+              foundAny = true;
+              const subjMap = { ...(nextChapters[clsKey] || {}) };
+              Object.keys(subjMap).forEach((sKey) => {
+                if (sKey.toLowerCase().trim() === normSubj || isSubjectMatching(sKey, subject)) {
+                  const cur = (subjMap[sKey] || []).filter((c) => c.number !== oldNumber);
+                  cur.push({ number: validNewNum, name: newName.trim() });
+                  cur.sort((a, b) => a.number - b.number);
+                  subjMap[sKey] = cur;
+                }
+              });
+              nextChapters[clsKey] = subjMap;
+            }
+          });
+
+          if (!foundAny) {
+            nextChapters[className] = {
+              ...(nextChapters[className] || {}),
+              [subject]: [{ number: validNewNum, name: newName.trim() }]
+            };
+          }
 
           return {
             ...prev,
-            chapters: {
-              ...prev.chapters,
-              [className]: {
-                ...(prev.chapters[className] || {}),
-                [subject]: updated
-              }
-            }
+            chapters: nextChapters
           };
         });
 
@@ -1186,20 +1238,37 @@ export default function AdminNotesDashboard({
         }
       } else if (type === "upsc" && gsPaper) {
         updateUpscHierarchy((prev) => {
-          const curSubjectModules = prev.modules[gsPaper]?.[subject] || [];
-          const updated = curSubjectModules.filter((m) => m.number !== oldNumber);
-          updated.push({ number: validNewNum, name: newName.trim() });
-          updated.sort((a, b) => a.number - b.number);
+          const normPaper = gsPaper.trim().toLowerCase();
+          const normSubj = subject.trim().toLowerCase();
+          const nextModules = { ...prev.modules };
+
+          let foundAny = false;
+          Object.keys(nextModules).forEach((pKey) => {
+            if (pKey.toLowerCase().trim() === normPaper) {
+              foundAny = true;
+              const subjMap = { ...(nextModules[pKey] || {}) };
+              Object.keys(subjMap).forEach((sKey) => {
+                if (sKey.toLowerCase().trim() === normSubj || isSubjectMatching(sKey, subject)) {
+                  const cur = (subjMap[sKey] || []).filter((m) => m.number !== oldNumber);
+                  cur.push({ number: validNewNum, name: newName.trim() });
+                  cur.sort((a, b) => a.number - b.number);
+                  subjMap[sKey] = cur;
+                }
+              });
+              nextModules[pKey] = subjMap;
+            }
+          });
+
+          if (!foundAny) {
+            nextModules[gsPaper] = {
+              ...(nextModules[gsPaper] || {}),
+              [subject]: [{ number: validNewNum, name: newName.trim() }]
+            };
+          }
 
           return {
             ...prev,
-            modules: {
-              ...prev.modules,
-              [gsPaper]: {
-                ...(prev.modules[gsPaper] || {}),
-                [subject]: updated
-              }
-            }
+            modules: nextModules
           };
         });
 
@@ -1242,17 +1311,29 @@ export default function AdminNotesDashboard({
 
       if (type === "school" && className) {
         updateSchoolHierarchy((prev) => {
-          const curSubjectChapters = prev.chapters[className]?.[subject] || [];
-          const updated = curSubjectChapters.filter((c) => c.number !== chapterNumber);
+          const normClass = normalizeClassId(className);
+          const normSubj = subject.trim().toLowerCase();
+          const nextChapters = { ...prev.chapters };
+
+          Object.keys(nextChapters).forEach((clsKey) => {
+            if (
+              normalizeClassId(clsKey) === normClass ||
+              clsKey.toLowerCase().trim() === className.toLowerCase().trim() ||
+              isClassGradeMatching(clsKey, className)
+            ) {
+              const subjMap = { ...(nextChapters[clsKey] || {}) };
+              Object.keys(subjMap).forEach((sKey) => {
+                if (sKey.toLowerCase().trim() === normSubj || isSubjectMatching(sKey, subject)) {
+                  subjMap[sKey] = (subjMap[sKey] || []).filter((c) => c.number !== chapterNumber);
+                }
+              });
+              nextChapters[clsKey] = subjMap;
+            }
+          });
+
           return {
             ...prev,
-            chapters: {
-              ...prev.chapters,
-              [className]: {
-                ...(prev.chapters[className] || {}),
-                [subject]: updated
-              }
-            }
+            chapters: nextChapters
           };
         });
 
@@ -1266,17 +1347,25 @@ export default function AdminNotesDashboard({
         }
       } else if (type === "upsc" && gsPaper) {
         updateUpscHierarchy((prev) => {
-          const curSubjectModules = prev.modules[gsPaper]?.[subject] || [];
-          const updated = curSubjectModules.filter((m) => m.number !== chapterNumber);
+          const normPaper = gsPaper.trim().toLowerCase();
+          const normSubj = subject.trim().toLowerCase();
+          const nextModules = { ...prev.modules };
+
+          Object.keys(nextModules).forEach((pKey) => {
+            if (pKey.toLowerCase().trim() === normPaper) {
+              const subjMap = { ...(nextModules[pKey] || {}) };
+              Object.keys(subjMap).forEach((sKey) => {
+                if (sKey.toLowerCase().trim() === normSubj || isSubjectMatching(sKey, subject)) {
+                  subjMap[sKey] = (subjMap[sKey] || []).filter((m) => m.number !== chapterNumber);
+                }
+              });
+              nextModules[pKey] = subjMap;
+            }
+          });
+
           return {
             ...prev,
-            modules: {
-              ...prev.modules,
-              [gsPaper]: {
-                ...(prev.modules[gsPaper] || {}),
-                [subject]: updated
-              }
-            }
+            modules: nextModules
           };
         });
 
@@ -1908,6 +1997,10 @@ export default function AdminNotesDashboard({
           onSelectChapter={handleSelectChapter}
           onSelectTopic={handleSelectTopic}
           onAddChapter={() => {
+            if (activeTab === "school" && isCurriculumReadOnly) {
+              showToast(`Authorization Error: Only the owner class (${curriculumOwnerClass}) can add chapters to this shared subject.`, "error");
+              return;
+            }
             const list = activeTab === "school" ? schoolChaptersForSelected : upscModulesForSelected;
             const nextNum = list.length > 0 ? Math.max(...list.map((c) => c.number)) + 1 : 1;
             setCreateNodeContext({
@@ -2041,7 +2134,12 @@ export default function AdminNotesDashboard({
                   console.warn("[AdminNotes] R2 UPSC subject node creation warning:", err);
                 });
               }
-            } else if (result.nodeType === "add_chapter" && result.className && result.subject && result.number) {
+            } else if (result.nodeType === "add_chapter" && result.className && result.subject && (result.number !== undefined)) {
+              if (!isSubjectOwner(result.subject, result.className)) {
+                const owner = getCanonicalOwnerClass(result.subject, result.className);
+                showToast(`Authorization Error: Only the owner class (${owner}) can add chapters. ${result.className} has read-only access.`, "error");
+                return;
+              }
               await addChapterPipeline({
                 category: "school",
                 className: result.className,
@@ -2052,7 +2150,9 @@ export default function AdminNotesDashboard({
               setSchoolHierarchy(getSchoolHierarchy());
               setSelectedSchoolChapterNo(result.number);
               setSelectedSchoolChapterName(result.name);
-              showToast(`Chapter ${result.number}: ${result.name} created.`, "success");
+              setExpandedChapters((prev) => ({ ...prev, [result.number!]: true }));
+              showToast("Chapter added successfully.", "success");
+              if (onRefresh) onRefresh();
               createChapterNode({
                 className: result.className,
                 subject: result.subject!,
@@ -2062,7 +2162,7 @@ export default function AdminNotesDashboard({
               }).catch((err) => {
                 console.warn("[AdminNotes] R2 chapter node creation warning:", err);
               });
-            } else if (result.nodeType === "add_module" && result.gsPaper && result.subject && result.number) {
+            } else if (result.nodeType === "add_module" && result.gsPaper && result.subject && (result.number !== undefined)) {
               await addChapterPipeline({
                 category: "upsc",
                 gsPaper: result.gsPaper,
@@ -2073,7 +2173,9 @@ export default function AdminNotesDashboard({
               setUpscHierarchy(getUpscHierarchy());
               setSelectedUpscModuleNo(result.number);
               setSelectedUpscModuleName(result.name);
-              showToast(`Module ${result.number}: ${result.name} created.`, "success");
+              setExpandedChapters((prev) => ({ ...prev, [result.number!]: true }));
+              showToast("Module added successfully.", "success");
+              if (onRefresh) onRefresh();
               createChapterNode({
                 gsPaper: result.gsPaper,
                 subject: result.subject!,

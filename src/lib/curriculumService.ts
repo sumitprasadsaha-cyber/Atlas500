@@ -11,6 +11,8 @@ import { doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
 import { getFirebaseDb } from "./firebase";
 import { ClassNote } from "../types";
 import { safeLocalStorageSetItem, safeLocalStorageGetItem } from "./safeStorage";
+import { normalizeClassId, getCanonicalOwnerClass } from "./curriculumAccessService";
+import { isClassGradeMatching, isSubjectMatching } from "../utils/classNoteHelper";
 
 export interface ChapterInfo {
   number: number;
@@ -175,7 +177,9 @@ export function mergeSchoolHierarchies(
   base: SchoolHierarchyData,
   incoming: Partial<SchoolHierarchyData>
 ): SchoolHierarchyData {
-  const mergedClasses = Array.from(new Set([...(base.classes || []), ...(incoming.classes || [])]));
+  let mergedClasses = Array.from(new Set([...(base.classes || []), ...(incoming.classes || [])]))
+    .map((c) => (c || "").trim())
+    .filter((c) => c && c.toLowerCase() !== "class class");
 
   const mergedSubjects: Record<string, string[]> = { ...(base.subjects || {}) };
   if (incoming.subjects) {
@@ -207,6 +211,35 @@ export function mergeSchoolHierarchies(
       const existing = mergedRemoved[cls] || [];
       mergedRemoved[cls] = Array.from(new Set([...existing, ...(removedList || [])]));
     }
+  }
+
+  // Deduplicate Foundation vs Class Foundation if both are present
+  const hasFoundation = mergedClasses.some((c) => c.toLowerCase() === "foundation");
+  const classFoundationIdx = mergedClasses.findIndex((c) => c.toLowerCase() === "class foundation");
+  if (hasFoundation && classFoundationIdx !== -1) {
+    const cfName = mergedClasses[classFoundationIdx];
+    const fKey = mergedClasses.find((c) => c.toLowerCase() === "foundation") || "Foundation";
+    // Merge subjects
+    if (mergedSubjects[cfName]) {
+      mergedSubjects[fKey] = Array.from(new Set([...(mergedSubjects[fKey] || []), ...(mergedSubjects[cfName] || [])]));
+      delete mergedSubjects[cfName];
+    }
+    // Merge chapters
+    if (mergedChapters[cfName]) {
+      if (!mergedChapters[fKey]) mergedChapters[fKey] = {};
+      for (const [sKey, chList] of Object.entries(mergedChapters[cfName])) {
+        const exList = mergedChapters[fKey][sKey] || [];
+        const chMap = new Map<number, string>();
+        exList.forEach((c) => chMap.set(c.number, c.name));
+        (chList || []).forEach((c) => chMap.set(c.number, c.name));
+        mergedChapters[fKey][sKey] = Array.from(chMap.entries())
+          .map(([number, name]) => ({ number, name }))
+          .sort((a, b) => a.number - b.number);
+      }
+      delete mergedChapters[cfName];
+    }
+    delete mergedRemoved[cfName];
+    mergedClasses.splice(classFoundationIdx, 1);
   }
 
   return {
@@ -324,21 +357,22 @@ export function extractHierarchyFromNotes(
       const chNo = typeof rawChNo === "number" ? rawChNo : parseInt(String(rawChNo).replace(/\D/g, ""), 10) || 1;
       const chName = (note as any).chapterTitle || (note as any).chapterName || `Chapter ${chNo}`;
 
-      if (cls && !newSchool.classes.includes(cls)) {
-        newSchool.classes.push(cls);
-        added = true;
-      }
-      if (cls && subject) {
-        if (!newSchool.subjects[cls]) newSchool.subjects[cls] = [];
-        if (!newSchool.subjects[cls].includes(subject)) {
-          newSchool.subjects[cls].push(subject);
+      // CRITICAL: Classes must be created ONLY through an explicit admin action.
+      // Do NOT create or add classes based on notes, files, or metadata!
+      const matchedClass = newSchool.classes.find(
+        (c) => c.toLowerCase().trim() === (cls || "").toLowerCase().trim()
+      );
+      if (matchedClass && subject) {
+        if (!newSchool.subjects[matchedClass]) newSchool.subjects[matchedClass] = [];
+        if (!newSchool.subjects[matchedClass].includes(subject)) {
+          newSchool.subjects[matchedClass].push(subject);
           added = true;
         }
-        if (!newSchool.chapters[cls]) newSchool.chapters[cls] = {};
-        if (!newSchool.chapters[cls][subject]) newSchool.chapters[cls][subject] = [];
-        if (!newSchool.chapters[cls][subject].some((c) => c.number === chNo)) {
-          newSchool.chapters[cls][subject].push({ number: chNo, name: chName });
-          newSchool.chapters[cls][subject].sort((a, b) => a.number - b.number);
+        if (!newSchool.chapters[matchedClass]) newSchool.chapters[matchedClass] = {};
+        if (!newSchool.chapters[matchedClass][subject]) newSchool.chapters[matchedClass][subject] = [];
+        if (!newSchool.chapters[matchedClass][subject].some((c) => c.number === chNo)) {
+          newSchool.chapters[matchedClass][subject].push({ number: chNo, name: chName });
+          newSchool.chapters[matchedClass][subject].sort((a, b) => a.number - b.number);
           added = true;
         }
       }
@@ -602,6 +636,9 @@ export async function addClassPipeline(params: AddClassParams): Promise<{
     return { success: true, name: cleanName };
   } else {
     const current = getSchoolHierarchy();
+    if (cleanName.toLowerCase() === "class class") {
+      throw new Error("Invalid class name.");
+    }
     const curClasses = current.classes.some((c) => c.toLowerCase().trim() === cleanName.toLowerCase())
       ? current.classes
       : [...current.classes, cleanName];
@@ -655,31 +692,67 @@ export async function addChapterPipeline(params: AddChapterParams): Promise<{
   if (category === "upsc") {
     const cleanPaper = (gsPaper || "General Studies Paper I").trim();
     const current = getUpscHierarchy();
-    const matchingPaperKey = Object.keys(current.modules || {}).find(
-      (p) => p.toLowerCase().trim() === cleanPaper.toLowerCase()
-    ) || cleanPaper;
+    const normCleanPaper = cleanPaper.toLowerCase();
+    const normCleanSubj = cleanSubject.toLowerCase();
 
-    const matchingSubjKey = Object.keys(current.modules[matchingPaperKey] || {}).find(
-      (s) => s.toLowerCase().trim() === cleanSubject.toLowerCase()
-    ) || cleanSubject;
+    let canonicalPaperKey = cleanPaper;
+    const foundInPapers = current.papers.find((p) => p.toLowerCase().trim() === normCleanPaper);
+    if (foundInPapers) canonicalPaperKey = foundInPapers;
 
-    const curModules = current.modules[matchingPaperKey]?.[matchingSubjKey] || [];
-    const filtered = curModules.filter((m) => m.number !== num);
-    filtered.push({ number: num, name: cleanName || `Module ${num}` });
-    filtered.sort((a, b) => a.number - b.number);
+    let canonicalSubjKey = cleanSubject;
+    const curModulesMap = new Map<number, string>();
+
+    Object.entries(current.modules || {}).forEach(([pKey, subjMap]) => {
+      if (pKey.toLowerCase().trim() === normCleanPaper) {
+        if (!foundInPapers && pKey) canonicalPaperKey = pKey;
+        Object.entries(subjMap || {}).forEach(([sKey, modList]) => {
+          if (sKey.toLowerCase().trim() === normCleanSubj || isSubjectMatching(sKey, cleanSubject)) {
+            canonicalSubjKey = sKey;
+            (modList || []).forEach((m) => curModulesMap.set(m.number, m.name));
+          }
+        });
+      }
+    });
+
+    curModulesMap.set(num, cleanName || `Module ${num}`);
+
+    const updatedModuleList: ChapterInfo[] = Array.from(curModulesMap.entries())
+      .map(([chapterNumber, chapterName]) => ({ number: chapterNumber, name: chapterName }))
+      .sort((a, b) => a.number - b.number);
+
+    const updatedPapers = Array.from(new Set([
+      ...current.papers,
+      cleanPaper,
+      canonicalPaperKey
+    ]));
+
+    const updatedSubjects = { ...current.subjects };
+    [cleanPaper, canonicalPaperKey].forEach((pKey) => {
+      const curList = updatedSubjects[pKey] || [];
+      const hasSubj = curList.some((s) => s.toLowerCase().trim() === normCleanSubj);
+      if (!hasSubj) {
+        updatedSubjects[pKey] = [...curList, canonicalSubjKey];
+      }
+    });
+
+    const updatedModules = { ...current.modules };
+    [cleanPaper, canonicalPaperKey].forEach((pKey) => {
+      updatedModules[pKey] = {
+        ...(updatedModules[pKey] || {}),
+        [canonicalSubjKey]: updatedModuleList,
+        ...(canonicalSubjKey !== cleanSubject ? { [cleanSubject]: updatedModuleList } : {})
+      };
+    });
 
     const updatedData: UpscHierarchyData = {
       ...current,
-      modules: {
-        ...current.modules,
-        [matchingPaperKey]: {
-          ...(current.modules[matchingPaperKey] || {}),
-          [matchingSubjKey]: filtered
-        }
-      },
+      papers: updatedPapers,
+      subjects: updatedSubjects,
+      modules: updatedModules,
       updatedAt: new Date().toISOString(),
       version: 2
     };
+
     inMemoryUpscHierarchy = updatedData;
     safeLocalStorageSetItem(STORAGE_KEY_UPSC_HIERARCHY, JSON.stringify(updatedData));
     notifyHierarchyListeners();
@@ -695,31 +768,89 @@ export async function addChapterPipeline(params: AddChapterParams): Promise<{
   } else {
     const cleanClass = (className || "Class 10").trim();
     const current = getSchoolHierarchy();
-    const matchingClassKey = Object.keys(current.chapters || {}).find(
-      (c) => c.toLowerCase().trim() === cleanClass.toLowerCase()
-    ) || cleanClass;
+    const normCleanClass = normalizeClassId(cleanClass);
+    const normCleanSubj = cleanSubject.toLowerCase();
 
-    const matchingSubjKey = Object.keys(current.chapters[matchingClassKey] || {}).find(
-      (s) => s.toLowerCase().trim() === cleanSubject.toLowerCase()
-    ) || cleanSubject;
+    // 1. Gather existing chapters from all aliases of this class and matching subjects
+    const curChaptersMap = new Map<number, string>();
+    let canonicalClassKey = cleanClass;
 
-    const curChapters = current.chapters[matchingClassKey]?.[matchingSubjKey] || [];
-    const filtered = curChapters.filter((c) => c.number !== num);
-    filtered.push({ number: num, name: cleanName || `Chapter ${num}` });
-    filtered.sort((a, b) => a.number - b.number);
+    const foundInClasses = current.classes.find(
+      (c) => normalizeClassId(c) === normCleanClass || c.toLowerCase().trim() === cleanClass.toLowerCase()
+    );
+    if (foundInClasses) {
+      canonicalClassKey = foundInClasses;
+    }
+
+    let canonicalSubjKey = cleanSubject;
+
+    // Scan all chapters keys to collect existing chapters across any aliases
+    Object.entries(current.chapters || {}).forEach(([clsKey, subjMap]) => {
+      const isClassMatch =
+        normalizeClassId(clsKey) === normCleanClass ||
+        clsKey.toLowerCase().trim() === cleanClass.toLowerCase() ||
+        isClassGradeMatching(clsKey, cleanClass);
+
+      if (isClassMatch) {
+        if (!foundInClasses && clsKey) {
+          canonicalClassKey = clsKey;
+        }
+        Object.entries(subjMap || {}).forEach(([sKey, chList]) => {
+          if (sKey.toLowerCase().trim() === normCleanSubj || isSubjectMatching(sKey, cleanSubject)) {
+            canonicalSubjKey = sKey;
+            (chList || []).forEach((c) => curChaptersMap.set(c.number, c.name));
+          }
+        });
+      }
+    });
+
+    // Put new chapter
+    curChaptersMap.set(num, cleanName || `Chapter ${num}`);
+
+    const updatedChapterList: ChapterInfo[] = Array.from(curChaptersMap.entries())
+      .map(([chapterNumber, chapterName]) => ({ number: chapterNumber, name: chapterName }))
+      .sort((a, b) => a.number - b.number);
+
+    // Canonical owner propagation (shared curriculum support)
+    const canonicalOwner = getCanonicalOwnerClass(cleanSubject, cleanClass);
+    const classesToUpdate = Array.from(new Set([
+      cleanClass,
+      canonicalClassKey,
+      ...(canonicalOwner ? [canonicalOwner] : [])
+    ]));
+
+    // Strictly preserve existing classes list - adding a chapter NEVER creates classes
+    const updatedClasses = [...current.classes];
+
+    // Ensure subjects contains the subject
+    const updatedSubjects = { ...current.subjects };
+    classesToUpdate.forEach((cKey) => {
+      const curList = updatedSubjects[cKey] || [];
+      const hasSubj = curList.some((s) => s.toLowerCase().trim() === normCleanSubj);
+      if (!hasSubj) {
+        updatedSubjects[cKey] = [...curList, canonicalSubjKey];
+      }
+    });
+
+    // Write updated chapters to all relevant class keys
+    const updatedChapters = { ...current.chapters };
+    classesToUpdate.forEach((cKey) => {
+      updatedChapters[cKey] = {
+        ...(updatedChapters[cKey] || {}),
+        [canonicalSubjKey]: updatedChapterList,
+        ...(canonicalSubjKey !== cleanSubject ? { [cleanSubject]: updatedChapterList } : {})
+      };
+    });
 
     const updatedData: SchoolHierarchyData = {
       ...current,
-      chapters: {
-        ...current.chapters,
-        [matchingClassKey]: {
-          ...(current.chapters[matchingClassKey] || {}),
-          [matchingSubjKey]: filtered
-        }
-      },
+      classes: updatedClasses,
+      subjects: updatedSubjects,
+      chapters: updatedChapters,
       updatedAt: new Date().toISOString(),
       version: 2
     };
+
     inMemorySchoolHierarchy = updatedData;
     safeLocalStorageSetItem(STORAGE_KEY_SCHOOL_HIERARCHY, JSON.stringify(updatedData));
     notifyHierarchyListeners();

@@ -270,15 +270,17 @@ export default function NotesMainPanel({
                 )}
 
                 {/* + Add Chapter/Module Button */}
-                <button
-                  type="button"
-                  onClick={onAddChapter}
-                  className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all shrink-0 flex-1 sm:flex-initial justify-center cursor-pointer"
-                  id="main-panel-add-chapter-btn"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>+ Add {itemLabel}</span>
-                </button>
+                {!isReadOnly && (
+                  <button
+                    type="button"
+                    onClick={onAddChapter}
+                    className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all shrink-0 flex-1 sm:flex-initial justify-center cursor-pointer"
+                    id="main-panel-add-chapter-btn"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Add {itemLabel}</span>
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -328,7 +330,7 @@ export default function NotesMainPanel({
                 : `Create your first ${itemLabel.toLowerCase()} to start uploading and organizing topic notes for ${selectedSubject}.`}
             </p>
 
-            {!searchQuery && (
+            {!searchQuery && !isReadOnly && (
               <button
                 type="button"
                 onClick={onAddChapter}
