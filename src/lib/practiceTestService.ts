@@ -1,4 +1,4 @@
-import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote, ChapterNote, ComprehensionPassage, AssessmentTestType } from "../types";
+import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote, ChapterNote, ComprehensionPassage, CaseStudy, AssessmentTestType, AssessmentQuestionType } from "../types";
 import { getResolvedViewUrl } from "./storageService";
 import { uploadToR2, downloadFromR2, getR2BucketName } from "./r2Client";
 import { doc, setDoc, onSnapshot, collection, deleteDoc, getDoc, getDocs, Unsubscribe } from "firebase/firestore";
@@ -1545,6 +1545,28 @@ export function createPracticeTestQuestion(
     ? q.options.filter((o) => typeof o === "string" && o.trim() !== "").map((o) => o.trim())
     : [];
 
+  // Normalize and preserve exact question type; never default to comprehension
+  let resolvedType: AssessmentQuestionType = "unknown";
+  if (q.type) {
+    const rawT = String(q.type).toLowerCase();
+    if (rawT === "mcq") resolvedType = "mcq";
+    else if (rawT === "assertion_reason" || rawT === "assertion_reasoning") resolvedType = "assertion_reason";
+    else if (rawT === "true_false") resolvedType = "true_false";
+    else if (rawT === "very_short_answer") resolvedType = "very_short_answer";
+    else if (rawT === "short_answer") resolvedType = "short_answer";
+    else if (rawT === "long_answer") resolvedType = "long_answer";
+    else if (rawT === "case_based") resolvedType = "case_based";
+    else if (rawT === "comprehension") resolvedType = "comprehension";
+    else if (rawT === "msq" || rawT === "multiple_select") resolvedType = "multiple_select";
+    else if (rawT === "fill_blank") resolvedType = "fill_blank";
+    else if (rawT === "match_following") resolvedType = "match_following";
+    else resolvedType = "unknown";
+  } else if (cleanOptions.length > 0) {
+    resolvedType = "mcq";
+  }
+
+  const parsedMarks = q.marks !== undefined && q.marks !== null && !isNaN(Number(q.marks)) ? Number(q.marks) : 1;
+
   return {
     id: qId,
     classGrade: String(context.classGrade || "").trim(),
@@ -1552,16 +1574,42 @@ export function createPracticeTestQuestion(
     chapterNo: Number(context.chapterNo) || 1,
     chapterName: String(context.chapterName || `Chapter ${context.chapterNo || 1}`).trim(),
     topicName: String(context.topicName || "").trim(),
-    type: q.type === "true_false" || q.type === "assertion_reason" ? q.type : "mcq",
+    type: resolvedType,
     question: String(q.question || "").trim(),
     options: cleanOptions,
-    correctAnswer: String(q.correctAnswer || "A").trim(),
+    parsedOptions: Array.isArray(q.parsedOptions) ? q.parsedOptions : undefined,
+    correctAnswer: String(q.correctAnswer ?? "").trim(),
+    modelAnswer: typeof q.modelAnswer === "string" ? q.modelAnswer.trim() : undefined,
+    isSubjective: q.isSubjective === true || resolvedType === "very_short_answer" || resolvedType === "short_answer" || resolvedType === "long_answer",
+    keyPoints: Array.isArray(q.keyPoints) ? q.keyPoints : undefined,
+    rubric: typeof q.rubric === "string" ? q.rubric.trim() : undefined,
+    assertion: typeof q.assertion === "string" ? q.assertion.trim() : (typeof q.assertionText === "string" ? q.assertionText.trim() : undefined),
+    reason: typeof q.reason === "string" ? q.reason.trim() : (typeof q.reasonText === "string" ? q.reasonText.trim() : undefined),
+    assertionText: typeof q.assertionText === "string" ? q.assertionText.trim() : (typeof q.assertion === "string" ? q.assertion.trim() : undefined),
+    reasonText: typeof q.reasonText === "string" ? q.reasonText.trim() : (typeof q.reason === "string" ? q.reason.trim() : undefined),
     explanation: typeof q.explanation === "string" ? q.explanation.trim() : "",
     imageUrl: typeof q.imageUrl === "string" ? q.imageUrl.trim() : "",
     imageLabel: typeof q.imageLabel === "string" ? q.imageLabel.trim() : "",
     imagePosition: q.imagePosition === "above" || q.imagePosition === "below" ? q.imagePosition : "below",
+    sectionId: q.sectionId ? String(q.sectionId).trim() : undefined,
+    sectionTitle: q.sectionTitle ? String(q.sectionTitle).trim() : undefined,
+    sectionType: q.sectionType ? String(q.sectionType).trim() : undefined,
+    section: q.section ? String(q.section).trim() : undefined,
+    displayNumber: q.displayNumber ? String(q.displayNumber).trim() : undefined,
+    declaredSectionMarks: q.declaredSectionMarks !== undefined ? Number(q.declaredSectionMarks) : undefined,
+    calculatedSectionMarks: q.calculatedSectionMarks !== undefined ? Number(q.calculatedSectionMarks) : undefined,
+    groupId: q.groupId ? String(q.groupId).trim() : undefined,
+    groupType: q.groupType ? String(q.groupType).trim() : undefined,
+    groupTitle: q.groupTitle ? String(q.groupTitle).trim() : undefined,
     passageId: q.passageId ? String(q.passageId).trim() : undefined,
     parentPassageId: q.passageId ? String(q.passageId).trim() : (q.parentPassageId ? String(q.parentPassageId).trim() : undefined),
+    caseId: q.caseId ? String(q.caseId).trim() : undefined,
+    parentCaseId: q.caseId ? String(q.caseId).trim() : (q.parentCaseId ? String(q.parentCaseId).trim() : undefined),
+    marks: parsedMarks,
+    negativeMarks: q.negativeMarks !== undefined && q.negativeMarks !== null && !isNaN(Number(q.negativeMarks)) ? Number(q.negativeMarks) : undefined,
+    marksSource: q.marksSource ? String(q.marksSource) : undefined,
+    marksConfidence: q.marksConfidence !== undefined ? Number(q.marksConfidence) : undefined,
+    marksPending: q.marksPending === true,
     rawText: String(q.rawText || context.rawText || "").trim(),
     published: q.published !== false,
     orderIndex: Number(q.orderIndex) || idx + 1,
@@ -1601,6 +1649,19 @@ export async function saveTopicPracticeTest(
     instructions?: string;
     maxAttempts?: number;
     passages?: Record<string, ComprehensionPassage>;
+    cases?: Record<string, CaseStudy>;
+    groups?: Record<string, { id: string; type: string; title: string; content?: string; text?: string; marks?: number }>;
+    sections?: Array<{
+      id: string;
+      sectionLetter?: string;
+      title: string;
+      sectionType: string;
+      declaredMarks?: number;
+      calculatedMarks?: number;
+      instructions?: string[];
+    }>;
+    declaredTotalMarks?: number;
+    calculatedTotalMarks?: number;
   },
   questions: ParsedAssessmentQuestion[]
 ): Promise<SaveTopicResult> {
@@ -1647,6 +1708,11 @@ export async function saveTopicPracticeTest(
     return createPracticeTestQuestion(q, context, idx);
   });
 
+  const sumOfQuestionMarks = formattedQuestions.reduce((sum, q) => sum + (q.marks ?? 1), 0);
+  const effectiveTotalMarks = context.totalMarks !== undefined && context.totalMarks !== null && !isNaN(Number(context.totalMarks)) && Number(context.totalMarks) > 0
+    ? Number(context.totalMarks)
+    : (context.declaredTotalMarks && context.declaredTotalMarks > 0 ? context.declaredTotalMarks : sumOfQuestionMarks);
+
   const topicTest: TopicPracticeTest = {
     id: assessmentTestId,
     testId: assessmentTestId,
@@ -1657,7 +1723,7 @@ export async function saveTopicPracticeTest(
     testType: testType,
     test_type: testType,
     title: context.title ? String(context.title).trim() : fallbackTitle,
-    totalMarks: context.totalMarks !== undefined && context.totalMarks !== null && !isNaN(Number(context.totalMarks)) ? Number(context.totalMarks) : formattedQuestions.length,
+    totalMarks: effectiveTotalMarks,
     passingMarks: context.passingMarks !== undefined && context.passingMarks !== null && !isNaN(Number(context.passingMarks)) ? Number(context.passingMarks) : undefined,
     durationMinutes: context.durationMinutes !== undefined && context.durationMinutes !== null && !isNaN(Number(context.durationMinutes)) ? Number(context.durationMinutes) : undefined,
     duration_minutes: context.durationMinutes !== undefined && context.durationMinutes !== null && !isNaN(Number(context.durationMinutes)) ? Number(context.durationMinutes) : undefined,
@@ -1672,6 +1738,11 @@ export async function saveTopicPracticeTest(
     questions: formattedQuestions,
     questionCount: formattedQuestions.length,
     passages: context.passages && Object.keys(context.passages).length > 0 ? context.passages : undefined,
+    cases: context.cases && Object.keys(context.cases).length > 0 ? context.cases : undefined,
+    groups: context.groups && Object.keys(context.groups).length > 0 ? context.groups : undefined,
+    sections: context.sections && context.sections.length > 0 ? context.sections : undefined,
+    declaredTotalMarks: context.declaredTotalMarks !== undefined ? Number(context.declaredTotalMarks) : undefined,
+    calculatedTotalMarks: sumOfQuestionMarks,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     uploadedBy: "Admin",

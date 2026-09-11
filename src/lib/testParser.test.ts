@@ -47,7 +47,7 @@ test("Chapter Test Parser parses official 9-section CBSE chapter test with 27 qu
 
   // Section 3: Assertion and Reasoning
   const sec3 = parsed.sections[2];
-  assert.equal(sec3.type, "assertion_reasoning");
+  assert.ok(sec3.type === "assertion_reason" || sec3.type === "assertion_reasoning");
   assert.equal(sec3.questions.length, 2);
   assert.ok(sec3.questions[0].assertionText?.includes("MNCs play an important role"));
   assert.ok(sec3.questions[0].reasonText?.includes("MNCs organise production"));
@@ -214,7 +214,7 @@ Answer: The installation and operation of the rural solar power station.
   const expectedTypes = [
     "mcq",
     "multiple_select",
-    "assertion_reasoning",
+    "assertion_reason",
     "comprehension",
     "true_false",
     "very_short_answer",
@@ -225,7 +225,7 @@ Answer: The installation and operation of the rural solar power station.
 
   parsed.sections.forEach((sec, idx) => {
     assert.equal(sec.sectionLetter, expectedLetters[idx]);
-    assert.equal(sec.type, expectedTypes[idx]);
+    assert.ok(sec.type === expectedTypes[idx] || (expectedTypes[idx] === "assertion_reason" && sec.type === "assertion_reasoning"));
     assert.ok(sec.questions.length > 0);
   });
 
@@ -271,13 +271,18 @@ Answer: B
 });
 
 test("Question Type display names are clear and complete", () => {
-  assert.equal(getQuestionTypeDisplayName("mcq"), "Multiple Choice Question (MCQ)");
-  assert.equal(getQuestionTypeDisplayName("multiple_select"), "Multiple Select Question");
-  assert.equal(getQuestionTypeDisplayName("assertion_reasoning"), "Assertion & Reasoning");
-  assert.equal(getQuestionTypeDisplayName("comprehension"), "Comprehension");
-  assert.equal(getQuestionTypeDisplayName("true_false"), "True / False");
-  assert.equal(getQuestionTypeDisplayName("very_short_answer"), "Very Short Answer (VSA)");
-  assert.equal(getQuestionTypeDisplayName("short_answer"), "Short Answer (SA)");
-  assert.equal(getQuestionTypeDisplayName("long_answer"), "Long Answer (LA)");
-  assert.equal(getQuestionTypeDisplayName("case_based"), "Case-Based Questions");
+  assert.equal(getQuestionTypeDisplayName("mcq"), "Multiple Choice");
+  assert.equal(getQuestionTypeDisplayName("multiple_select"), "Multiple Select");
+  assert.equal(getQuestionTypeDisplayName("msq"), "Multiple Select");
+  assert.equal(getQuestionTypeDisplayName("assertion_reason"), "Assertion and Reasoning");
+  assert.equal(getQuestionTypeDisplayName("assertion_reasoning"), "Assertion and Reasoning");
+  assert.equal(getQuestionTypeDisplayName("comprehension", false), "Comprehension Group");
+  assert.equal(getQuestionTypeDisplayName("comprehension", true), "Comprehension Question");
+  assert.equal(getQuestionTypeDisplayName("true_false"), "True or False");
+  assert.equal(getQuestionTypeDisplayName("very_short_answer"), "Very Short Answer");
+  assert.equal(getQuestionTypeDisplayName("short_answer"), "Short Answer");
+  assert.equal(getQuestionTypeDisplayName("long_answer"), "Long Answer");
+  assert.equal(getQuestionTypeDisplayName("case_based", false), "Case-Based Group");
+  assert.equal(getQuestionTypeDisplayName("case_based", true), "Case-Based Question");
+  assert.equal(getQuestionTypeDisplayName("unknown"), "Needs Review");
 });

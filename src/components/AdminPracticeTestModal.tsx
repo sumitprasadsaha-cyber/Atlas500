@@ -30,7 +30,8 @@ import { SAMPLE_QUESTION_PAPER } from "../constants/sampleQuestionPaper";
 import {
   parseAssessmentText, 
   getAllTestAttempts,
-  subscribeToTestAttempts
+  subscribeToTestAttempts,
+  getQuestionTypeDisplayName
 } from "../utils/assessmentParser";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import Toast from "./Toast";
@@ -72,31 +73,8 @@ interface AdminPracticeTestModalProps {
 
 const SAMPLE_TEST_TEXT = SAMPLE_QUESTION_PAPER;
 
-export const getAssessmentQuestionTypeLabel = (type: string, passageId?: string): string => {
-  if (passageId) return "Comprehension";
-  switch (type) {
-    case "mcq":
-      return "MCQ";
-    case "multiple_select":
-      return "Multiple Select";
-    case "assertion_reason":
-    case "assertion_reasoning":
-      return "Assertion & Reason";
-    case "true_false":
-      return "True / False";
-    case "very_short_answer":
-      return "Very Short Answer";
-    case "short_answer":
-      return "Short Answer";
-    case "long_answer":
-      return "Long Answer";
-    case "case_based":
-      return "Case-Based";
-    case "comprehension":
-      return "Comprehension";
-    default:
-      return type.replace(/_/g, " ").toUpperCase();
-  }
+export const getAssessmentQuestionTypeLabel = (type: string, isChild?: boolean | string): string => {
+  return getQuestionTypeDisplayName(type, typeof isChild === "boolean" ? isChild : false);
 };
 
 export default function AdminPracticeTestModal({
@@ -1093,8 +1071,18 @@ export default function AdminPracticeTestModal({
                         <span className="text-xs font-black text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950 px-2 py-0.5 rounded">
                           Q{idx + 1}
                         </span>
+                        {q.sectionTitle && (
+                          <span className="text-[10px] font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/80 px-2 py-0.5 rounded border border-teal-200 dark:border-teal-800">
+                            {q.sectionTitle}
+                          </span>
+                        )}
+                        {(q.groupTitle || (q.caseId ? "Case Study" : q.passageId ? "Comprehension Passage" : null)) && (
+                          <span className="text-[10px] font-semibold text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/80 px-2 py-0.5 rounded border border-purple-200 dark:border-purple-800">
+                            {q.groupTitle || (q.caseId ? "Case Study" : "Comprehension Passage")}
+                          </span>
+                        )}
                         <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded">
-                          {getAssessmentQuestionTypeLabel(q.type, q.passageId)}
+                          {getAssessmentQuestionTypeLabel(q.type, false)}
                         </span>
                         <span className="text-[10px] font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
                           {q.marks ?? 1} Marks {q.marksSource ? `(${q.marksSource})` : ""}

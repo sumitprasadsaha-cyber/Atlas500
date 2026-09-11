@@ -11,7 +11,7 @@ import { SAMPLE_QUESTION_PAPER } from "../constants/sampleQuestionPaper";
 
 export { SAMPLE_QUESTION_PAPER };
 
-export {
+import {
   parseChapterTest,
   convertToAssessmentQuestions,
   getQuestionTypeDisplayName,
@@ -24,31 +24,22 @@ export {
   type ChapterTestQuestionType
 } from "../lib/testParser";
 
-export const getAssessmentQuestionTypeLabel = (type: string, passageId?: string): string => {
-  if (passageId) return "Comprehension";
-  switch (type) {
-    case "mcq":
-      return "MCQ";
-    case "multiple_select":
-      return "Multiple Select";
-    case "assertion_reason":
-    case "assertion_reasoning":
-      return "Assertion & Reason";
-    case "true_false":
-      return "True / False";
-    case "very_short_answer":
-      return "Very Short Answer";
-    case "short_answer":
-      return "Short Answer";
-    case "long_answer":
-      return "Long Answer";
-    case "case_based":
-      return "Case-Based";
-    case "comprehension":
-      return "Comprehension";
-    default:
-      return type.replace(/_/g, " ").toUpperCase();
-  }
+export {
+  parseChapterTest,
+  convertToAssessmentQuestions,
+  getQuestionTypeDisplayName,
+  type ParsedChapterTest,
+  type ParsedSection,
+  type ParsedQuestion,
+  type ParsedPassage,
+  type ParsedTestMetadata,
+  type TestValidationResult,
+  type ChapterTestQuestionType
+};
+
+export const getAssessmentQuestionTypeLabel = (type: string, passageIdOrIsChild?: boolean | string): string => {
+  const isChild = typeof passageIdOrIsChild === "boolean" ? passageIdOrIsChild : false;
+  return getQuestionTypeDisplayName(type, isChild);
 };
 
 export interface ParsedMetadata {

@@ -6,18 +6,23 @@ import {
 } from "../types";
 
 /**
- * Supported 9 CBSE-style Question Types
+ * Supported 9+ CBSE-style Question Types and Grouping Types
  */
 export type ChapterTestQuestionType =
   | "mcq"
   | "multiple_select"
+  | "msq"
+  | "assertion_reason"
   | "assertion_reasoning"
   | "comprehension"
   | "true_false"
   | "very_short_answer"
   | "short_answer"
   | "long_answer"
-  | "case_based";
+  | "case_based"
+  | "fill_blank"
+  | "match_following"
+  | "unknown";
 
 export interface ParsedOption {
   letter: string; // "A", "B", "C", "D"
@@ -28,12 +33,16 @@ export interface ParsedOption {
 export interface ParsedQuestion {
   id: string;
   questionNumber: number | string;
+  displayNumber?: string;
   type: ChapterTestQuestionType;
   sectionId?: string;
   sectionLetter?: string;
   sectionTitle?: string;
+  sectionType?: string;
   instruction?: string;
   question: string;
+  assertion?: string;
+  reason?: string;
   assertionText?: string;
   reasonText?: string;
   options: string[];
@@ -49,6 +58,12 @@ export interface ParsedQuestion {
   marksPending: boolean;
   passageId?: string;
   caseId?: string;
+  groupId?: string;
+  groupType?: string;
+  groupTitle?: string;
+  groupContent?: string;
+  declaredSectionMarks?: number;
+  calculatedSectionMarks?: number;
   imageUrl?: string;
   imageLabel?: string;
   imagePosition?: "above" | "below";
@@ -72,7 +87,15 @@ export interface ParsedSection {
   type: ChapterTestQuestionType;
   instructions: string[];
   marksPerQuestion?: number;
+  declaredMarks?: number;
   negativeMarks?: number;
+  marksInfo?: {
+    marks: number;
+    negativeMarks?: number;
+    source: string;
+    confidence: number;
+  };
+  calculatedSectionMarks?: number;
   questions: ParsedQuestion[];
   passages?: ParsedPassage[];
   totalMarks: number;
@@ -124,31 +147,71 @@ export interface ParseContext {
 /**
  * Standard readable labels for each question type
  */
-export function getQuestionTypeDisplayName(type: ChapterTestQuestionType, isChild = false): string {
-  if (isChild && type === "comprehension") return "Comprehension Question";
-  if (isChild && type === "case_based") return "Case-Based Question";
-  switch (type) {
+export function getQuestionTypeDisplayName(type: string, isChild = false): string {
+  const norm = String(type || "").toLowerCase().trim();
+  switch (norm) {
     case "mcq":
-      return "Multiple Choice Question (MCQ)";
+      return "Multiple Choice";
     case "multiple_select":
-      return "Multiple Select Question";
+    case "msq":
+      return "Multiple Select";
+    case "assertion_reason":
     case "assertion_reasoning":
-      return "Assertion & Reasoning";
+      return "Assertion and Reasoning";
     case "true_false":
-      return "True / False";
+      return "True or False";
     case "very_short_answer":
-      return "Very Short Answer (VSA)";
+      return "Very Short Answer";
     case "short_answer":
-      return "Short Answer (SA)";
+      return "Short Answer";
     case "long_answer":
-      return "Long Answer (LA)";
+      return "Long Answer";
     case "case_based":
-      return "Case-Based Questions";
+      return isChild ? "Case-Based Question" : "Case-Based Group";
     case "comprehension":
-      return "Comprehension";
+      return isChild ? "Comprehension Question" : "Comprehension Group";
+    case "fill_blank":
+    case "fill_in_the_blank":
+    case "fill_in_the_blanks":
+      return "Fill in the Blanks";
+    case "match_following":
+      return "Match the Following";
+    case "unknown":
+      return "Needs Review";
     default:
-      return type;
+      return norm ? norm.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Needs Review";
   }
+}
+
+/**
+ * Extract CBSE section marks formula e.g. "5 × 1 = 5 Marks", "(4 x 1 = 4)", "2 * 5 = 10 Marks"
+ */
+export function extractSectionMarksFormula(text: string): {
+  count: number;
+  questionCount: number;
+  marksPerQuestion: number;
+  declaredSectionMarks: number;
+  totalMarks: number;
+} | null {
+  if (!text) return null;
+  const match = text.match(
+    /(?:\(|\{|\[)?\s*(\d+)\s*(?:[×\*xX]|times)\s*(\d+(?:\.\d+)?)\s*=\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)?\s*(?:\)|\}|\])?/i
+  );
+  if (match) {
+    const count = parseInt(match[1], 10);
+    const marksPerQuestion = parseFloat(match[2]);
+    const declaredSectionMarks = parseFloat(match[3]);
+    if (!isNaN(count) && !isNaN(marksPerQuestion) && !isNaN(declaredSectionMarks)) {
+      return {
+        count,
+        questionCount: count,
+        marksPerQuestion,
+        declaredSectionMarks,
+        totalMarks: declaredSectionMarks
+      };
+    }
+  }
+  return null;
 }
 
 /**
@@ -161,6 +224,16 @@ export function extractMarks(text: string): {
   confidence: number;
 } | null {
   if (!text) return null;
+
+  // Formula check first: "5 × 1 = 5 Marks"
+  const formula = extractSectionMarksFormula(text);
+  if (formula) {
+    return {
+      marks: formula.marksPerQuestion,
+      source: "section_instruction",
+      confidence: 1.0
+    };
+  }
 
   let negativeMarks: number | undefined;
   const negMatch =
@@ -368,6 +441,7 @@ export function identifySectionHeader(line: string): {
   rawHeading: string;
   type: ChapterTestQuestionType;
   marksInfo?: { marks: number; negativeMarks?: number; source: string; confidence: number };
+  declaredMarks?: number;
 } | null {
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
@@ -378,7 +452,7 @@ export function identifySectionHeader(line: string): {
   }
 
   // Check for Section Letter prefix: "Section A — ...", "Section 1: ...", "Part A - ..."
-  const secLetterMatch = trimmed.match(/^(?:Section|Part)\s+([A-Za-z0-9]+)\s*[\—\-\:\.]\s*(.*)$/i);
+  const secLetterMatch = trimmed.match(/^(?:Section|Part)\s*[\-\:]?\s*([A-Za-z0-9]+)(?:[\s\—\–\-\:\.]+(.*))?$/i);
   let sectionLetter: string | undefined;
   let candidateTitle = trimmed;
 
@@ -387,17 +461,26 @@ export function identifySectionHeader(line: string): {
     candidateTitle = (secLetterMatch[2] || "").trim();
   } else {
     // Numbered header: "1. Multiple Choice Questions", "4. Comprehension"
-    const numPrefixMatch = trimmed.match(/^(\d+)[\.\):\-]\s*(.*)$/);
+    const numPrefixMatch = trimmed.match(/^([A-Z]|\d+|[IVXLCDM]+)[\.\)\:\-]\s*(.*)$/i);
     if (numPrefixMatch) {
       sectionLetter = numPrefixMatch[1];
       candidateTitle = (numPrefixMatch[2] || "").trim();
     }
   }
 
-  const marksInfo = extractMarks(trimmed) || extractMarks(candidateTitle);
+  const formula = extractSectionMarksFormula(candidateTitle) || extractSectionMarksFormula(trimmed);
+  let marksInfo = extractMarks(trimmed) || extractMarks(candidateTitle);
+  if (formula) {
+    marksInfo = {
+      marks: formula.marksPerQuestion,
+      source: "section_instruction",
+      confidence: 1.0
+    };
+  }
 
-  // Clean candidate title of bracketed marks for category detection
+  // Clean candidate title of formulas and bracketed marks for category detection
   const cleanTitle = candidateTitle
+    .replace(/(?:\(|\{|\[)?\s*\d+\s*(?:[×\*xX]|times)\s*\d+(?:\.\d+)?\s*=\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)?\s*(?:\)|\}|\])?/gi, "")
     .replace(/\([\w\s\.\,\-\:]+\)/g, "")
     .replace(/\[[\w\s\.\,\-\:]+\]/g, "")
     .trim();
@@ -407,7 +490,10 @@ export function identifySectionHeader(line: string): {
     return null;
   }
 
-  // Test against 9 distinct categories
+  const finalTitle = cleanTitle || candidateTitle;
+  const declaredMarks = formula ? formula.declaredSectionMarks : undefined;
+
+  // Test against distinct categories
   const testPhrases = [cleanTitle, candidateTitle];
 
   for (const str of testPhrases) {
@@ -420,10 +506,11 @@ export function identifySectionHeader(line: string): {
       return {
         isSection: true,
         sectionLetter,
-        sectionTitle: candidateTitle,
+        sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "multiple_select",
-        marksInfo: marksInfo || undefined
+        marksInfo: marksInfo || undefined,
+        declaredMarks
       };
     }
 
@@ -434,10 +521,11 @@ export function identifySectionHeader(line: string): {
       return {
         isSection: true,
         sectionLetter,
-        sectionTitle: candidateTitle,
+        sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "mcq",
-        marksInfo: marksInfo || undefined
+        marksInfo: marksInfo || undefined,
+        declaredMarks
       };
     }
 
@@ -448,10 +536,11 @@ export function identifySectionHeader(line: string): {
       return {
         isSection: true,
         sectionLetter,
-        sectionTitle: candidateTitle,
+        sectionTitle: finalTitle,
         rawHeading: trimmed,
-        type: "assertion_reasoning",
-        marksInfo: marksInfo || undefined
+        type: "assertion_reason",
+        marksInfo: marksInfo || undefined,
+        declaredMarks
       };
     }
 
@@ -462,10 +551,11 @@ export function identifySectionHeader(line: string): {
       return {
         isSection: true,
         sectionLetter,
-        sectionTitle: candidateTitle,
+        sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "true_false",
-        marksInfo: marksInfo || undefined
+        marksInfo: marksInfo || undefined,
+        declaredMarks
       };
     }
 
@@ -476,10 +566,11 @@ export function identifySectionHeader(line: string): {
       return {
         isSection: true,
         sectionLetter,
-        sectionTitle: candidateTitle,
+        sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "very_short_answer",
-        marksInfo: marksInfo || undefined
+        marksInfo: marksInfo || undefined,
+        declaredMarks
       };
     }
 
@@ -490,10 +581,11 @@ export function identifySectionHeader(line: string): {
       return {
         isSection: true,
         sectionLetter,
-        sectionTitle: candidateTitle,
+        sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "short_answer",
-        marksInfo: marksInfo || undefined
+        marksInfo: marksInfo || undefined,
+        declaredMarks
       };
     }
 
@@ -504,10 +596,11 @@ export function identifySectionHeader(line: string): {
       return {
         isSection: true,
         sectionLetter,
-        sectionTitle: candidateTitle,
+        sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "long_answer",
-        marksInfo: marksInfo || undefined
+        marksInfo: marksInfo || undefined,
+        declaredMarks
       };
     }
 
@@ -518,10 +611,11 @@ export function identifySectionHeader(line: string): {
       return {
         isSection: true,
         sectionLetter,
-        sectionTitle: candidateTitle,
+        sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "case_based",
-        marksInfo: marksInfo || undefined
+        marksInfo: marksInfo || undefined,
+        declaredMarks
       };
     }
 
@@ -532,12 +626,56 @@ export function identifySectionHeader(line: string): {
       return {
         isSection: true,
         sectionLetter,
-        sectionTitle: candidateTitle,
+        sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "comprehension",
-        marksInfo: marksInfo || undefined
+        marksInfo: marksInfo || undefined,
+        declaredMarks
       };
     }
+
+    // 10. Fill in the Blanks
+    if (
+      /^(?:Fill\s+(?:in\s+)?(?:the\s+)?(?:Blanks?|Blank)|Blanks?)(?:\s+Questions?)?$/i.test(str)
+    ) {
+      return {
+        isSection: true,
+        sectionLetter,
+        sectionTitle: finalTitle,
+        rawHeading: trimmed,
+        type: "fill_blank",
+        marksInfo: marksInfo || undefined,
+        declaredMarks
+      };
+    }
+
+    // 11. Match the Following
+    if (
+      /^(?:Match\s+(?:the\s+)?(?:Following|Columns?)|Matching)(?:\s+Questions?)?$/i.test(str)
+    ) {
+      return {
+        isSection: true,
+        sectionLetter,
+        sectionTitle: finalTitle,
+        rawHeading: trimmed,
+        type: "match_following",
+        marksInfo: marksInfo || undefined,
+        declaredMarks
+      };
+    }
+  }
+
+  // If Section/Part letter was matched explicitly, treat as section even if title is non-standard
+  if (secLetterMatch) {
+    return {
+      isSection: true,
+      sectionLetter,
+      sectionTitle: finalTitle || `Section ${sectionLetter}`,
+      rawHeading: trimmed,
+      type: "mcq",
+      marksInfo: marksInfo || undefined,
+      declaredMarks
+    };
   }
 
   return null;
@@ -554,6 +692,14 @@ export function detectPassageOrCaseStart(line: string): {
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
 
+  // Do not match general directions, instructions, or assertion & reason directions
+  if (
+    /^(?:Directions?|Instructions?|Note)\s*[\:\-]/i.test(trimmed) ||
+    /^(?:Read|Study)\s+(?:the\s+)?(?:Assertion|Reason|Instructions|Directions)/i.test(trimmed)
+  ) {
+    return null;
+  }
+
   const isCase = /case/i.test(trimmed);
 
   // Standalone phrases:
@@ -562,7 +708,7 @@ export function detectPassageOrCaseStart(line: string): {
   // "Read the case carefully."
   // "Study the case given below."
   if (
-    /^(?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|case|case\s+study|information)?(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?[\.\:\-]?$/i.test(
+    /^(?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|case|case\s+study|information)(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?[\.\:\-]?$/i.test(
       trimmed
     )
   ) {
@@ -571,7 +717,7 @@ export function detectPassageOrCaseStart(line: string): {
 
   // Inline passage: "Read the passage carefully. Water is one of the most..."
   const inlineMatch = trimmed.match(
-    /^((?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|case)?(?:\s+carefully)?[\.\:\-])\s+(.+)$/i
+    /^((?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|case|case\s+study)?(?:\s+carefully)?[\.\:\-])\s+(.+)$/i
   );
   if (inlineMatch) {
     return {
@@ -674,13 +820,18 @@ export function parseChapterTest(
         questionTypeBreakdown: {
           mcq: 0,
           multiple_select: 0,
+          msq: 0,
+          assertion_reason: 0,
           assertion_reasoning: 0,
           comprehension: 0,
           true_false: 0,
           very_short_answer: 0,
           short_answer: 0,
           long_answer: 0,
-          case_based: 0
+          case_based: 0,
+          fill_blank: 0,
+          match_following: 0,
+          unknown: 0
         }
       },
       rawText: ""
@@ -855,7 +1006,7 @@ export function parseChapterTest(
       // Create new section object
       currentSectionInfo = secDetected;
       const secLetter = secDetected.sectionLetter || String.fromCharCode(65 + sectionList.length);
-      const secId = `section_${secLetter.toLowerCase()}`;
+      const secId = `section-${secLetter.toLowerCase()}`;
 
       currentSectionObj = {
         id: secId,
@@ -865,6 +1016,7 @@ export function parseChapterTest(
         type: secDetected.type,
         instructions: [],
         marksPerQuestion: secDetected.marksInfo?.marks,
+        declaredMarks: secDetected.declaredMarks,
         negativeMarks: secDetected.marksInfo?.negativeMarks,
         questions: [],
         passages: [],
@@ -886,6 +1038,27 @@ export function parseChapterTest(
         };
       } else {
         activePassage = null;
+      }
+      continue;
+    }
+
+    // Standalone formula line e.g. "4 × 1 = 4 Marks", "5 x 1 = 5" right under section header
+    const formulaLine = extractSectionMarksFormula(trimmed);
+    if (
+      formulaLine &&
+      currentSectionObj &&
+      (!activeCandidate || activeCandidate.lines.length === 0) &&
+      (!activePassage || activePassage.questionIds.length === 0)
+    ) {
+      currentSectionObj.marksPerQuestion = formulaLine.marksPerQuestion;
+      currentSectionObj.declaredMarks = formulaLine.declaredSectionMarks;
+      currentSectionObj.marksInfo = {
+        marks: formulaLine.marksPerQuestion,
+        source: "section_instruction",
+        confidence: 1.0
+      };
+      if (activePassage) {
+        activePassage.sectionMarks = currentSectionObj.marksInfo;
       }
       continue;
     }
@@ -970,7 +1143,7 @@ export function parseChapterTest(
       // Default section if none has been encountered yet
       if (!currentSectionObj) {
         currentSectionObj = {
-          id: "section_a",
+          id: "section-a",
           sectionLetter: "A",
           heading: "Section A — Multiple Choice Questions",
           title: "Multiple Choice Questions",
@@ -982,15 +1155,13 @@ export function parseChapterTest(
         sectionList.push(currentSectionObj);
       }
 
-      let qSectionType = activePassage
-        ? (activePassage.isCase ? "case_based" : "comprehension")
-        : currentSectionObj.type;
+      let qSectionType = currentSectionObj.type;
 
       // Inline type checks
-      if (!activePassage && /^(?:True\s*[\/\\]\s*False|T\/F|True\s+or\s+False)\b/i.test(qMatch.remainder)) {
+      if (/^(?:True\s*[\/\\]\s*False|T\/F|True\s+or\s+False)\b/i.test(qMatch.remainder)) {
         qSectionType = "true_false";
-      } else if (!activePassage && /^(?:Assertion\s*(?:&|and|-)\s*Reason(?:ing)?)\b/i.test(qMatch.remainder)) {
-        qSectionType = "assertion_reasoning";
+      } else if (/^(?:Assertion\s*(?:&|and|-)\s*Reason(?:ing)?)\b/i.test(qMatch.remainder)) {
+        qSectionType = "assertion_reason";
       }
 
       const candId = `q_${qMatch.qNum}_${Math.random().toString(36).substring(2, 7)}`;
@@ -1048,17 +1219,23 @@ export function parseChapterTest(
 
   // Process all Question Candidates into ParsedQuestion
   const allParsedQuestions: ParsedQuestion[] = [];
-  const typeBreakdown: Record<ChapterTestQuestionType, number> = {
+  const typeBreakdown: Record<string, number> = {
     mcq: 0,
     multiple_select: 0,
+    assertion_reason: 0,
     assertion_reasoning: 0,
     comprehension: 0,
     true_false: 0,
     very_short_answer: 0,
     short_answer: 0,
     long_answer: 0,
-    case_based: 0
+    case_based: 0,
+    fill_blank: 0,
+    match_following: 0,
+    unknown: 0
   };
+
+  const seenQIds = new Set<string>();
 
   questionCandidates.forEach((candidate, idx) => {
     const cleanLines = candidate.lines
@@ -1150,16 +1327,17 @@ export function parseChapterTest(
 
     // Assertion & Reasoning Specific Parsing
     const isAssertion =
+      candidate.sectionType === "assertion_reason" ||
       candidate.sectionType === "assertion_reasoning" ||
-      /Assertion\s*\([A-Za-z]\)/i.test(fullBlockText) ||
-      /Reason\s*\([A-Za-z]\)/i.test(fullBlockText);
+      /Assertion\s*(?:\([A-Za-z]\)|:|\-)/i.test(fullBlockText) ||
+      /Reason\s*(?:\([A-Za-z]\)|:|\-)/i.test(fullBlockText);
 
     let assertionText = "";
     let reasonText = "";
     if (isAssertion) {
-      const aMatch = fullBlockText.match(/Assertion\s*\([A-Za-z]\)\s*[\:\-]\s*([^\n]+)/i);
+      const aMatch = fullBlockText.match(/Assertion\s*(?:\([A-Za-z]\)|:|\-)\s*[:\-]?\s*([^\n]+)/i);
       if (aMatch) assertionText = aMatch[1].trim();
-      const rMatch = fullBlockText.match(/Reason\s*\([A-Za-z]\)\s*[\:\-]\s*([^\n]+)/i);
+      const rMatch = fullBlockText.match(/Reason\s*(?:\([A-Za-z]\)|:|\-)\s*[:\-]?\s*([^\n]+)/i);
       if (rMatch) reasonText = rMatch[1].trim();
     }
 
@@ -1174,29 +1352,74 @@ export function parseChapterTest(
     // Multiple Select Checking
     const isMultipleSelect =
       candidate.sectionType === "multiple_select" ||
+      candidate.sectionType === "msq" ||
       /^[A-E]\s*,\s*[A-E]/i.test(explicitAnswer) ||
       /^[A-E]\s*,\s*[A-E]\s*(?:and|&)\s*[A-E]/i.test(explicitAnswer);
 
-    // Subjective Checking (VSA, SA, LA, or subjective comprehension child question)
+    // Fill in the blanks checking
+    const isFillBlank =
+      candidate.sectionType === "fill_blank" ||
+      (!hasOptions && /_{3,}|\[\s*\.\.\.\s*\]|\.{4,}/.test(fullBlockText));
+
+    // Match the following checking
+    const isMatchFollowing =
+      candidate.sectionType === "match_following" ||
+      (/Column\s+I\b/i.test(fullBlockText) && /Column\s+II\b/i.test(fullBlockText));
+
+    // Subjective Checking (VSA, SA, LA, or subjective child question)
     const isSubjectiveType =
       candidate.sectionType === "very_short_answer" ||
       candidate.sectionType === "short_answer" ||
       candidate.sectionType === "long_answer" ||
-      (!hasOptions && !isTFQuestion && !isAssertion);
+      (!hasOptions && !isTFQuestion && !isAssertion && !isFillBlank && !isMatchFollowing);
 
     let resolvedType: ChapterTestQuestionType = candidate.sectionType;
-    if (isTFQuestion) resolvedType = "true_false";
-    else if (isAssertion) resolvedType = "assertion_reasoning";
-    else if (isMultipleSelect) resolvedType = "multiple_select";
-    else if (isSubjectiveType) {
+    if (isTFQuestion) {
+      resolvedType = "true_false";
+    } else if (isAssertion) {
+      resolvedType = "assertion_reason";
+    } else if (isMultipleSelect) {
+      resolvedType = "multiple_select";
+    } else if (isFillBlank) {
+      resolvedType = "fill_blank";
+    } else if (isMatchFollowing) {
+      resolvedType = "match_following";
+    } else if (hasOptions) {
+      resolvedType = "mcq";
+    } else if (isSubjectiveType) {
       if (candidate.sectionType === "very_short_answer") resolvedType = "very_short_answer";
       else if (candidate.sectionType === "long_answer") resolvedType = "long_answer";
       else resolvedType = "short_answer";
+    } else if (cleanLines.length > 0) {
+      resolvedType = "short_answer";
     } else {
-      resolvedType = "mcq";
+      resolvedType = "unknown";
     }
 
     typeBreakdown[resolvedType] = (typeBreakdown[resolvedType] || 0) + 1;
+
+    // Parent group resolution
+    const parentSection = sectionList.find((s) => s.id === candidate.sectionId);
+    const parentPassage = candidate.passageId ? passagesMap[candidate.passageId] : undefined;
+    const parentCase = candidate.caseId ? casesMap[candidate.caseId] : undefined;
+    const parentGroup = parentCase || parentPassage;
+
+    const groupId = candidate.caseId || candidate.passageId;
+    const groupType: ChapterTestQuestionType | undefined = candidate.caseId
+      ? "case_based"
+      : candidate.passageId
+      ? "comprehension"
+      : undefined;
+    const groupTitle = parentGroup?.title;
+    const groupContent = parentGroup?.text;
+
+    // Question ID generation
+    const cleanSectionId = candidate.sectionId || "section";
+    let qId = `${cleanSectionId}-q${candidate.qNum}`;
+    if (seenQIds.has(qId)) {
+      qId = `${cleanSectionId}-q${candidate.qNum}_${idx + 1}`;
+    }
+    seenQIds.add(qId);
 
     // Build Question Object
     let questionText = "";
@@ -1240,7 +1463,7 @@ export function parseChapterTest(
         { letter: "True", text: "True", raw: "True" },
         { letter: "False", text: "False", raw: "False" }
       ];
-    } else if (isSubjectiveType) {
+    } else if (isSubjectiveType || resolvedType === "short_answer" || resolvedType === "long_answer" || resolvedType === "very_short_answer") {
       isSubjective = true;
       questionText = linesAfterImage
         .filter(
@@ -1356,13 +1579,23 @@ export function parseChapterTest(
     }
 
     const questionObj: ParsedQuestion = {
-      id: `q_${resolvedType}_${candidate.qNum}_${Math.random().toString(36).substring(2, 7)}`,
+      id: qId,
       questionNumber: candidate.qNum,
+      displayNumber: candidate.label || `Q${candidate.qNum}`,
       type: resolvedType,
       sectionId: candidate.sectionId,
       sectionLetter: candidate.sectionLetter,
       sectionTitle: candidate.sectionTitle,
+      sectionType: parentSection?.type,
+      declaredSectionMarks: parentSection?.declaredMarks,
+      calculatedSectionMarks: parentSection?.totalMarks,
+      groupId,
+      groupType,
+      groupTitle,
+      groupContent,
       question: questionText,
+      assertion: assertionText || undefined,
+      reason: reasonText || undefined,
       assertionText: assertionText || undefined,
       reasonText: reasonText || undefined,
       options: optionsList,
@@ -1385,15 +1618,30 @@ export function parseChapterTest(
     allParsedQuestions.push(questionObj);
 
     // Assign question to its section
-    const parentSection = sectionList.find((s) => s.id === candidate.sectionId);
     if (parentSection) {
       parentSection.questions.push(questionObj);
       parentSection.totalMarks += questionMarks;
     }
   });
 
+  // Synchronize final section marks onto section objects and their child questions
+  sectionList.forEach((sec) => {
+    sec.calculatedSectionMarks = sec.totalMarks;
+    sec.questions.forEach((q) => {
+      q.calculatedSectionMarks = sec.totalMarks;
+    });
+  });
+
   // Calculate total marks across all questions
   const totalCalculatedMarks = allParsedQuestions.reduce((sum, q) => sum + (q.marks || 0), 0);
+
+  // If test-level declared total marks is missing, sum declared section marks
+  if (metadata.declaredTotalMarks === undefined) {
+    const sumDeclared = sectionList.reduce((sum, s) => sum + (s.declaredMarks || 0), 0);
+    if (sumDeclared > 0) {
+      metadata.declaredTotalMarks = sumDeclared;
+    }
+  }
 
   // Validate consistency of declared total marks vs calculated marks
   let marksMatch = true;
@@ -1471,8 +1719,24 @@ export function convertToAssessmentQuestions(
     chapterName: chapterTest.metadata.chapterName || context.chapterName || "Chapter",
     topicName: chapterTest.metadata.topicName || context.topicName || "Full Chapter Test",
     type: q.type as AssessmentQuestionType,
+    sectionId: q.sectionId,
+    sectionTitle: q.sectionTitle,
+    sectionType: q.sectionType,
+    section: q.sectionTitle,
+    displayNumber: q.displayNumber,
+    declaredSectionMarks: q.declaredSectionMarks,
+    calculatedSectionMarks: q.calculatedSectionMarks,
+    groupId: q.groupId,
+    groupType: q.groupType,
+    groupTitle: q.groupTitle,
+    groupContent: q.groupContent,
     question: q.question,
+    assertion: q.assertion,
+    reason: q.reason,
+    assertionText: q.assertionText,
+    reasonText: q.reasonText,
     options: q.options,
+    parsedOptions: q.parsedOptions?.map(po => ({ label: po.letter, text: po.text })),
     correctAnswer: q.correctAnswer,
     modelAnswer: q.modelAnswer,
     explanation: q.explanation,

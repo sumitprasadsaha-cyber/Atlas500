@@ -322,6 +322,7 @@ export type AssessmentTestType = "TOPIC" | "CHAPTER" | "SUBJECT" | "PYQ" | "topi
 export type AssessmentQuestionType = 
   | "mcq" 
   | "multiple_select" 
+  | "msq"
   | "assertion_reasoning" 
   | "assertion_reason" 
   | "true_false" 
@@ -329,7 +330,10 @@ export type AssessmentQuestionType =
   | "very_short_answer" 
   | "short_answer" 
   | "long_answer" 
-  | "case_based";
+  | "case_based"
+  | "fill_blank"
+  | "match_following"
+  | "unknown";
 
 export interface ComprehensionPassage {
   id: string;
@@ -343,6 +347,11 @@ export interface CaseStudy {
   text: string;
 }
 
+export interface ParsedOption {
+  label: string;
+  text: string;
+}
+
 export interface ParsedAssessmentQuestion {
   id: string;
   classGrade: string;
@@ -353,6 +362,7 @@ export interface ParsedAssessmentQuestion {
   type: AssessmentQuestionType;
   question: string;
   options: string[]; // Clean option text for student view (e.g. ["A. Plants and animals", "B. Internal and external forces"])
+  parsedOptions?: ParsedOption[];
   correctAnswer: string; // "A" | "B" | "A, B, C" | "True" | model answer text
   explanation?: string; // Optional explanation for the answer
   imageUrl?: string; // Optional image data URL or hosted image URL for diagram/image-based questions
@@ -363,10 +373,30 @@ export interface ParsedAssessmentQuestion {
   orderIndex?: number;
   createdAt?: string;
   updatedAt?: string;
+
+  // Section context
+  sectionId?: string;
+  sectionTitle?: string;
+  sectionType?: string;
+  section?: string;
+  displayNumber?: string;
+  declaredSectionMarks?: number;
+  calculatedSectionMarks?: number;
+
+  // Parent group context (case-based / comprehension)
+  groupId?: string;
+  groupType?: string;
+  groupTitle?: string;
   passageId?: string; // Reference to parent ComprehensionPassage ID
   parentPassageId?: string; // Alias reference to parent ComprehensionPassage ID
   caseId?: string; // Reference to parent CaseStudy ID
   parentCaseId?: string; // Alias reference to parent CaseStudy ID
+
+  // Assertion and Reason distinct fields
+  assertion?: string;
+  reason?: string;
+  assertionText?: string;
+  reasonText?: string;
 
   // Dynamic Marks System
   marks?: number;
@@ -399,6 +429,18 @@ export interface TopicPracticeTest {
   questions: ParsedAssessmentQuestion[];
   passages?: Record<string, ComprehensionPassage>;
   cases?: Record<string, CaseStudy>;
+  groups?: Record<string, { id: string; type: string; title: string; content?: string; text?: string; marks?: number }>;
+  sections?: Array<{
+    id: string;
+    sectionLetter?: string;
+    title: string;
+    sectionType: string;
+    declaredMarks?: number;
+    calculatedMarks?: number;
+    instructions?: string[];
+  }>;
+  declaredTotalMarks?: number;
+  calculatedTotalMarks?: number;
 
   // Assessment System Enhancement (vNext) settings
   testType?: AssessmentTestType;

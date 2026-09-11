@@ -773,8 +773,13 @@ export default function StudentPracticeTestModal({
                 <span className="text-[11px] sm:text-xs font-extrabold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/80 border border-blue-100 dark:border-blue-900/50 px-2.5 py-1 rounded-lg">
                   Question {currentQuestionIdx + 1} of {questions.length}
                 </span>
+                {currentQuestion.sectionTitle && (
+                  <span className="text-[11px] sm:text-xs font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/80 border border-teal-200 dark:border-teal-800 px-2.5 py-1 rounded-lg">
+                    {currentQuestion.sectionTitle}
+                  </span>
+                )}
                 <span className="text-[11px] sm:text-xs font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
-                  {getAssessmentQuestionTypeLabel(currentQuestion.type, currentQuestion.passageId)}
+                  {getAssessmentQuestionTypeLabel(currentQuestion.type, false)}
                 </span>
                 <span className="text-[11px] sm:text-xs font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 border border-indigo-200 dark:border-indigo-800 px-2.5 py-1 rounded-lg">
                   {currentQuestion.marks ?? 1} {((currentQuestion.marks ?? 1) === 1) ? "Mark" : "Marks"}
@@ -1280,8 +1285,13 @@ export default function StudentPracticeTestModal({
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 space-y-1">
                             <div className="flex flex-wrap items-center gap-1.5">
+                              {q.sectionTitle && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/80 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800">
+                                  {q.sectionTitle}
+                                </span>
+                              )}
                               <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                                {getAssessmentQuestionTypeLabel(q.type, q.passageId)}
+                                {getAssessmentQuestionTypeLabel(q.type, false)}
                               </span>
                               <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
                                 {marksAwarded} / {qMaxMarks} {qMaxMarks === 1 ? "Mark" : "Marks"}
