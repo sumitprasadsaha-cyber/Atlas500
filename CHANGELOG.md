@@ -4,6 +4,34 @@ All notable changes to the **Tuition Ledger Management (Atlas400)** project are 
 
 ---
 
+## [7.12.0] - 2026-09-11
+
+### 📚 Dedicated CBSE Chapter Test Parser Implementation
+- **Comprehensive 9 Question Types Architecture:**
+  - Implemented `parseChapterTest` in `src/lib/testParser.ts` supporting 9 distinct categories without merging:
+    1. Multiple Choice Questions (MCQs)
+    2. Multiple Select Questions
+    3. Assertion and Reasoning
+    4. Comprehension (Parent passages with structured child questions)
+    5. True and False
+    6. Very Short Answer Questions
+    7. Short Answer Questions
+    8. Long Answer Questions
+    9. Case-Based Questions (Case studies with structured child questions)
+- **Arbitrary Section Identification & Instructions:**
+  - Identified sections using varied headings ("Section A — Multiple Choice Questions", "Section B — Multiple Select Questions", numbered sections, etc.).
+  - Preserved section-level instructions (e.g. Directions for MSQs and Assertion/Reasoning) and general test instructions.
+- **Passage-Child Relationship & Structure:**
+  - Built passage and case-study structures linking parent passages (`passagesMap` / `casesMap`) to child questions without classifying passages as single MCQs.
+  - Retained all options without truncation or omission.
+- **Dynamic Marks Calculation & Strict Validation:**
+  - Calculated section total marks, question-level marks, and test-level marks.
+  - Performed consistency verification between declared total marks and calculated question marks, reporting discrepancies in warnings without dropping questions.
+- **Full Backward Compatibility:**
+  - Provided `convertToAssessmentQuestions` adapter for seamless integration with existing `AdminPracticeTestModal` and assessment components.
+
+---
+
 ## [7.11.0] - 2026-09-11
 
 ### 📝 Assessment Parser Hardening & Flexible Assessment Ingestion

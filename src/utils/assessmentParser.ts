@@ -11,6 +11,19 @@ import { SAMPLE_QUESTION_PAPER } from "../constants/sampleQuestionPaper";
 
 export { SAMPLE_QUESTION_PAPER };
 
+export {
+  parseChapterTest,
+  convertToAssessmentQuestions,
+  getQuestionTypeDisplayName,
+  type ParsedChapterTest,
+  type ParsedSection,
+  type ParsedQuestion,
+  type ParsedPassage,
+  type ParsedTestMetadata,
+  type TestValidationResult,
+  type ChapterTestQuestionType
+} from "../lib/testParser";
+
 export const getAssessmentQuestionTypeLabel = (type: string, passageId?: string): string => {
   if (passageId) return "Comprehension";
   switch (type) {
