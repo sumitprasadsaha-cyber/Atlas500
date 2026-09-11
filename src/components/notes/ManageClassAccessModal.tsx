@@ -4,7 +4,8 @@ import {
   SubjectClassAccess,
   getSubjectAccessConfig,
   saveSubjectAccessRule,
-  normalizeClassId,
+  toStableClassId,
+  getClassDisplayName,
 } from "../../lib/curriculumAccessService";
 
 interface ManageClassAccessModalProps {
@@ -38,29 +39,66 @@ export const ManageClassAccessModal: React.FC<ManageClassAccessModalProps> = ({
     setSuccessMessage(null);
 
     const accessConfig = getSubjectAccessConfig(subjectName, currentClass);
-    const resolvedOwner = accessConfig.ownerClassId || currentClass;
-    setOwnerClass(resolvedOwner);
+    const resolvedOwnerRaw = accessConfig.ownerClassId || currentClass;
+    const ownerStableId = toStableClassId(resolvedOwnerRaw);
+    const canonicalOwner = getClassDisplayName(ownerStableId, availableClasses) || resolvedOwnerRaw;
+    setOwnerClass(canonicalOwner);
 
-    // Initial allowed classes must always include the owner class
-    const initialAllowed = new Set<string>(accessConfig.allowedClasses || [resolvedOwner]);
-    initialAllowed.add(resolvedOwner);
-
-    // If current class isn't in allowed, add it
-    if (currentClass) {
-      initialAllowed.add(currentClass);
+    // Initial allowed IDs: strictly deduplicated by stable class ID
+    const initialAllowedIds = new Set<string>();
+    if (ownerStableId) {
+      initialAllowedIds.add(ownerStableId);
     }
 
-    setSelectedClasses(Array.from(initialAllowed));
-  }, [isOpen, subjectName, currentClass]);
+    if (Array.isArray(accessConfig.allowedClassIds)) {
+      accessConfig.allowedClassIds.forEach((id) => {
+        const sid = toStableClassId(id);
+        if (sid) initialAllowedIds.add(sid);
+      });
+    }
 
-  // List of distinct school classes to show
+    if (Array.isArray(accessConfig.allowedClasses)) {
+      accessConfig.allowedClasses.forEach((cls) => {
+        const sid = toStableClassId(cls);
+        if (sid) initialAllowedIds.add(sid);
+      });
+    }
+
+    // Convert stable IDs to canonical display names
+    const initialSelectedNames = Array.from(initialAllowedIds).map((sid) =>
+      getClassDisplayName(sid, availableClasses)
+    );
+    setSelectedClasses(initialSelectedNames);
+  }, [isOpen, subjectName, currentClass, availableClasses]);
+
+  // List of distinct school classes to show (deduplicated strictly by stable class ID)
   const displayClasses = useMemo(() => {
-    const list = Array.from(new Set([...availableClasses, ownerClass, currentClass])).filter(Boolean);
-    // Sort logically e.g. Class 6, Class 7, Class 8...
-    return list.sort((a, b) => {
-      const numA = parseInt(a.replace(/\D/g, ""), 10) || 0;
-      const numB = parseInt(b.replace(/\D/g, ""), 10) || 0;
-      if (numA && numB) return numA - numB;
+    const rawCandidates = [...availableClasses, ownerClass, currentClass].filter(Boolean);
+
+    // Deduplicate by stable class ID so "Foundation" and "Class Foundation" never both appear
+    const seenIds = new Set<string>();
+    const distinct: string[] = [];
+
+    for (const raw of rawCandidates) {
+      const stableId = toStableClassId(raw);
+      if (!stableId) continue;
+      if (!seenIds.has(stableId)) {
+        seenIds.add(stableId);
+        distinct.push(getClassDisplayName(stableId, availableClasses));
+      }
+    }
+
+    // Sort: Non-numeric foundation/prep batches first, then numeric classes in order
+    return distinct.sort((a, b) => {
+      const isNumA = /\d+/.test(a);
+      const isNumB = /\d+/.test(b);
+      if (isNumA && isNumB) {
+        const numA = parseInt(a.replace(/\D/g, ""), 10) || 0;
+        const numB = parseInt(b.replace(/\D/g, ""), 10) || 0;
+        return numA - numB;
+      }
+      if (!isNumA && isNumB) return -1;
+      if (isNumA && !isNumB) return 1;
       return a.localeCompare(b);
     });
   }, [availableClasses, ownerClass, currentClass]);
@@ -68,19 +106,22 @@ export const ManageClassAccessModal: React.FC<ManageClassAccessModalProps> = ({
   if (!isOpen) return null;
 
   const handleToggleClass = (cls: string) => {
+    const targetStableId = toStableClassId(cls);
+    const ownerStableId = toStableClassId(ownerClass);
+
     // Owner class can NEVER be unchecked
-    if (normalizeClassId(cls) === normalizeClassId(ownerClass)) {
+    if (targetStableId === ownerStableId) {
       return;
     }
 
     setErrorMessage(null);
     setSelectedClasses((prev) => {
-      const norm = normalizeClassId(cls);
-      const isSelected = prev.some((c) => normalizeClassId(c) === norm);
+      const isSelected = prev.some((c) => toStableClassId(c) === targetStableId);
       if (isSelected) {
-        return prev.filter((c) => normalizeClassId(c) !== norm);
+        return prev.filter((c) => toStableClassId(c) !== targetStableId);
       } else {
-        return [...prev, cls];
+        const canonical = getClassDisplayName(targetStableId, availableClasses);
+        return [...prev, canonical];
       }
     });
   };
@@ -90,15 +131,33 @@ export const ManageClassAccessModal: React.FC<ManageClassAccessModalProps> = ({
       setIsSaving(true);
       setErrorMessage(null);
 
-      // Strict client-side check: owner cannot be removed
-      const normOwner = normalizeClassId(ownerClass);
-      const finalAllowed = Array.from(new Set([ownerClass, ...selectedClasses]));
-
-      if (!finalAllowed.some((c) => normalizeClassId(c) === normOwner)) {
-        throw new Error(`Owner class "${ownerClass}" cannot be removed from allowed classes.`);
+      const ownerStableId = toStableClassId(ownerClass);
+      if (!ownerStableId) {
+        throw new Error("Invalid owner class.");
       }
+      const canonicalOwner = getClassDisplayName(ownerStableId, availableClasses) || ownerClass;
 
-      const updated = await saveSubjectAccessRule(subjectName, ownerClass, finalAllowed);
+      // Build deduplicated map of stable IDs -> canonical display names
+      const classMap = new Map<string, string>();
+      // Owner is ALWAYS authorized
+      classMap.set(ownerStableId, canonicalOwner);
+
+      selectedClasses.forEach((cls) => {
+        const sid = toStableClassId(cls);
+        if (sid && !classMap.has(sid)) {
+          classMap.set(sid, getClassDisplayName(sid, availableClasses));
+        }
+      });
+
+      const finalAllowedNames = Array.from(classMap.values());
+      const finalAllowedIds = Array.from(classMap.keys());
+
+      const updated = await saveSubjectAccessRule(
+        subjectName,
+        canonicalOwner,
+        finalAllowedNames,
+        finalAllowedIds
+      );
 
       setSuccessMessage("Curriculum access updated successfully.");
       onAccessSaved?.(updated);
@@ -178,8 +237,8 @@ export const ManageClassAccessModal: React.FC<ManageClassAccessModalProps> = ({
             </label>
             <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-60 overflow-y-auto bg-white">
               {displayClasses.map((cls) => {
-                const isOwner = normalizeClassId(cls) === normalizeClassId(ownerClass);
-                const isChecked = isOwner || selectedClasses.some((c) => normalizeClassId(c) === normalizeClassId(cls));
+                const isOwner = toStableClassId(cls) === toStableClassId(ownerClass);
+                const isChecked = isOwner || selectedClasses.some((c) => toStableClassId(c) === toStableClassId(cls));
 
                 return (
                   <div

@@ -28,6 +28,37 @@ function isSupportedFileType(filename: string, mimeType: string): boolean {
   return false;
 }
 
+// Helper: Resolve stable class ID in backend API
+function toStableClassIdBackend(raw?: string): string {
+  if (!raw) return "";
+  const trimmed = String(raw).trim().toLowerCase();
+  if (/^upsc$/i.test(trimmed) || /^class\s+upsc$/i.test(trimmed)) return "upsc";
+  if (
+    trimmed === "foundation" ||
+    trimmed === "class foundation" ||
+    trimmed === "class-foundation" ||
+    trimmed === "foundation-class-id" ||
+    trimmed === "foundation-id"
+  ) {
+    return "foundation";
+  }
+  if (
+    trimmed === "prep" ||
+    trimmed === "class prep" ||
+    trimmed === "class-prep" ||
+    trimmed === "prep-class-id" ||
+    trimmed === "prep-id"
+  ) {
+    return "prep";
+  }
+  const digitMatch = trimmed.match(/(?:class|grade)?[\s_-]*(\d+)/i);
+  if (digitMatch) {
+    return `class-${digitMatch[1]}`;
+  }
+  const stripped = trimmed.replace(/^class[\s_-]+/i, "");
+  return (stripped || trimmed).replace(/[\s_-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
 export default async function handler(req: any, res: any) {
   if (handleOptions(req, res)) return;
 
@@ -83,7 +114,7 @@ export default async function handler(req: any, res: any) {
       case "manage-access":
       case "subject-access": {
         const parsedBody = parseRequestBody(req.body) || {};
-        const { subjectName, ownerClassId, allowedClasses } = parsedBody;
+        const { subjectName, ownerClassId, ownerClassStableId, allowedClasses, allowedClassIds } = parsedBody;
 
         // 1. ownerClassId exists
         if (!ownerClassId || typeof ownerClassId !== "string" || !ownerClassId.trim()) {
@@ -103,8 +134,14 @@ export default async function handler(req: any, res: any) {
           });
         }
 
-        // 3. allowedClasses is an array
-        if (!Array.isArray(allowedClasses)) {
+        // 3. allowedClasses or allowedClassIds is an array
+        const rawAllowed = Array.isArray(allowedClasses)
+          ? allowedClasses
+          : Array.isArray(allowedClassIds)
+          ? allowedClassIds
+          : null;
+
+        if (!rawAllowed) {
           return res.status(400).json({
             success: false,
             code: "INVALID_ALLOWED_CLASSES",
@@ -112,8 +149,8 @@ export default async function handler(req: any, res: any) {
           });
         }
 
-        // 4. Invalid class IDs rejected
-        for (const cls of allowedClasses) {
+        // 4. Invalid class strings rejected
+        for (const cls of rawAllowed) {
           if (!cls || typeof cls !== "string" || !cls.trim() || /[<>{}]/.test(cls)) {
             return res.status(400).json({
               success: false,
@@ -123,38 +160,31 @@ export default async function handler(req: any, res: any) {
           }
         }
 
-        // 5. Duplicate class IDs are rejected
-        const normOwner = ownerClassId.trim().toLowerCase().replace(/[\s_-]/g, "");
-        const normalizedSeen = new Set<string>();
-        for (const cls of allowedClasses) {
-          const norm = cls.trim().toLowerCase().replace(/[\s_-]/g, "");
-          if (normalizedSeen.has(norm)) {
-            return res.status(400).json({
-              success: false,
-              code: "DUPLICATE_CLASS_ID",
-              error: `Duplicate class ID rejected: "${cls}".`,
-            });
+        // 5. Stable deduplication by stable class ID
+        const resolvedOwnerStableId = ownerClassStableId || toStableClassIdBackend(ownerClassId);
+        const deduplicatedMap = new Map<string, string>(); // stableId -> cleanDisplayName
+        deduplicatedMap.set(resolvedOwnerStableId, ownerClassId.trim());
+
+        for (const cls of rawAllowed) {
+          const sid = toStableClassIdBackend(cls);
+          if (sid && !deduplicatedMap.has(sid)) {
+            deduplicatedMap.set(sid, cls.trim());
           }
-          normalizedSeen.add(norm);
         }
 
-        // 6. allowedClasses always includes ownerClassId & ownerClassId cannot be removed
-        if (!normalizedSeen.has(normOwner)) {
-          return res.status(400).json({
-            success: false,
-            code: "OWNER_CLASS_REQUIRED",
-            error: `ownerClassId "${ownerClassId}" must always be included in allowedClasses and cannot be removed.`,
-          });
-        }
+        const cleanAllowedClasses = Array.from(deduplicatedMap.values());
+        const cleanAllowedClassIds = Array.from(deduplicatedMap.keys());
 
         return res.status(200).json({
           success: true,
           message: "Subject class access permissions successfully validated.",
           access: {
-            id: `school_${normOwner}_${subjectName.trim().toLowerCase().replace(/[^a-z0-9]/g, "_")}`,
+            id: `school_${resolvedOwnerStableId}_${subjectName.trim().toLowerCase().replace(/[^a-z0-9]/g, "_")}`,
             name: subjectName.trim(),
             ownerClassId: ownerClassId.trim(),
-            allowedClasses: allowedClasses.map((c: string) => c.trim()),
+            ownerClassStableId: resolvedOwnerStableId,
+            allowedClasses: cleanAllowedClasses,
+            allowedClassIds: cleanAllowedClassIds,
             updatedAt: new Date().toISOString(),
           },
         });

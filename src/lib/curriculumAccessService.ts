@@ -18,10 +18,13 @@ import { safeLocalStorageGetItem, safeLocalStorageSetItem } from "./safeStorage"
 import { deleteClassNoteDoc } from "./firestoreService";
 
 export interface SubjectClassAccess {
-  id: string; // canonical subject access ID, e.g. "school_class6_science" or "science"
-  name: string; // subject display name, e.g. "Science"
-  ownerClassId: string; // canonical owner class, e.g. "Class 6" or "class6"
-  allowedClasses: string[]; // list of allowed classes, e.g. ["Class 6", "Class 7", "Class 8"]
+  id: string; // canonical subject access ID, e.g. "school_foundation_english" or "science"
+  subjectId?: string; // e.g. "english"
+  name: string; // subject display name, e.g. "English"
+  ownerClassId: string; // canonical owner class, e.g. "Foundation" or "Class 6"
+  ownerClassStableId?: string; // stable class ID, e.g. "foundation" or "class-6"
+  allowedClasses: string[]; // list of allowed classes, e.g. ["Foundation", "Class 7", "Class 8"]
+  allowedClassIds?: string[]; // stable class IDs, e.g. ["foundation", "class-7", "class-8"]
   enabled?: boolean; // whether curriculum access is active (defaults to true)
   createdAt?: string;
   updatedAt?: string;
@@ -82,8 +85,14 @@ export function initSubjectAccessFirestoreListener(): () => void {
         if (snap.exists()) {
           const data = snap.data();
           if (data && data.rules && typeof data.rules === "object") {
-            inMemorySubjectAccess = { ...data.rules };
-            safeLocalStorageSetItem(STORAGE_KEY_SUBJECT_ACCESS, JSON.stringify(data.rules));
+            const sanitizedRules: Record<string, SubjectClassAccess> = {};
+            for (const [k, v] of Object.entries(data.rules)) {
+              if (v && typeof v === "object") {
+                sanitizedRules[k] = sanitizeAccessRule(v as SubjectClassAccess);
+              }
+            }
+            inMemorySubjectAccess = sanitizedRules;
+            safeLocalStorageSetItem(STORAGE_KEY_SUBJECT_ACCESS, JSON.stringify(sanitizedRules));
             notifyAccessListeners();
           }
         }
@@ -96,8 +105,14 @@ export function initSubjectAccessFirestoreListener(): () => void {
           if (snap.exists()) {
             const data = snap.data();
             if (data && data.rules && typeof data.rules === "object") {
-              inMemorySubjectAccess = { ...data.rules };
-              safeLocalStorageSetItem(STORAGE_KEY_SUBJECT_ACCESS, JSON.stringify(data.rules));
+              const sanitizedRules: Record<string, SubjectClassAccess> = {};
+              for (const [k, v] of Object.entries(data.rules)) {
+                if (v && typeof v === "object") {
+                  sanitizedRules[k] = sanitizeAccessRule(v as SubjectClassAccess);
+                }
+              }
+              inMemorySubjectAccess = sanitizedRules;
+              safeLocalStorageSetItem(STORAGE_KEY_SUBJECT_ACCESS, JSON.stringify(sanitizedRules));
               notifyAccessListeners();
             }
           }
@@ -118,7 +133,13 @@ export function initSubjectAccessFirestoreListener(): () => void {
         try {
           const parsed = JSON.parse(e.newValue);
           if (parsed && typeof parsed === "object") {
-            inMemorySubjectAccess = parsed;
+            const sanitizedRules: Record<string, SubjectClassAccess> = {};
+            for (const [k, v] of Object.entries(parsed)) {
+              if (v && typeof v === "object") {
+                sanitizedRules[k] = sanitizeAccessRule(v as SubjectClassAccess);
+              }
+            }
+            inMemorySubjectAccess = sanitizedRules;
             notifyAccessListeners();
           }
         } catch {}
@@ -143,19 +164,169 @@ if (typeof window !== "undefined") {
 }
 
 /**
- * Normalizes class identifiers for strictly reliable comparisons:
- * "Class 6", "class 6", "class-6", "class6" -> "class6"
+ * Resolves any class name, formatted name, or legacy identifier into a unique, stable class ID.
+ * Requirements:
+ * - "Foundation" -> "foundation" (Never prepend "Class ")
+ * - "Class Foundation" -> "foundation" (Resolves legacy duplicate to canonical ID)
+ * - "Prep" -> "prep" (Never prepend "Class ")
+ * - "Class Prep" -> "prep" (Resolves legacy duplicate to canonical ID)
+ * - "Class 7", "class 7", "class-7", "class7" -> "class-7"
+ * - "Class 10", "class-10", "class10" -> "class-10"
+ * - "UPSC", "upsc" -> "upsc"
+ * - "Batch A", "batch-a" -> "batch-a"
+ */
+export function toStableClassId(classNameOrId?: string): string {
+  if (!classNameOrId) return "";
+  const trimmed = String(classNameOrId).trim().toLowerCase();
+
+  if (/^upsc$/i.test(trimmed) || /^class\s+upsc$/i.test(trimmed)) {
+    return "upsc";
+  }
+
+  // Foundation batch (always stable "foundation", never "class-foundation")
+  if (
+    trimmed === "foundation" ||
+    trimmed === "class foundation" ||
+    trimmed === "class-foundation" ||
+    trimmed === "foundation-class-id" ||
+    trimmed === "foundation-id"
+  ) {
+    return "foundation";
+  }
+
+  // Prep batch (always stable "prep", never "class-prep")
+  if (
+    trimmed === "prep" ||
+    trimmed === "class prep" ||
+    trimmed === "class-prep" ||
+    trimmed === "prep-class-id" ||
+    trimmed === "prep-id"
+  ) {
+    return "prep";
+  }
+
+  // Standard numeric classes: "Class 7", "class-7", "class7", "class-7-id", "Grade 7" -> "class-7"
+  const digitMatch = trimmed.match(/(?:class|grade)?[\s_-]*(\d+)/i);
+  if (digitMatch) {
+    return `class-${digitMatch[1]}`;
+  }
+
+  // Generic non-numeric: strip redundant "class " prefix if non-numeric
+  const stripped = trimmed.replace(/^class[\s_-]+/i, "");
+  return (stripped || trimmed).replace(/[\s_-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Backward compatibility alias for toStableClassId.
  */
 export function normalizeClassId(className?: string): string {
-  if (!className) return "";
-  const trimmed = className.trim().toLowerCase();
-  if (/^upsc$/i.test(trimmed) || /^class\s+upsc$/i.test(trimmed)) return "upsc";
-  const digits = trimmed.match(/\d+/);
-  if (digits) return `class${digits[0]}`;
-  // Strip redundant leading "class " if followed by a non-numeric word
-  // e.g. "Class Foundation" -> "foundation", "Class Prep" -> "prep"
-  const stripped = trimmed.replace(/^class[\s_-]+/i, "");
-  return (stripped || trimmed).replace(/[\s_-]/g, "");
+  return toStableClassId(className);
+}
+
+/**
+ * Maps a stable class ID or class string to its canonical human-readable display name.
+ * Respects availableClasses from school hierarchy if provided.
+ */
+export function getClassDisplayName(
+  classIdOrName?: string,
+  availableClasses?: string[]
+): string {
+  if (!classIdOrName) return "";
+  const stableId = toStableClassId(classIdOrName);
+  if (!stableId) return "";
+
+  // 1. If availableClasses has a matching class, use its exact casing/name
+  if (Array.isArray(availableClasses) && availableClasses.length > 0) {
+    const match = availableClasses.find((c) => toStableClassId(c) === stableId);
+    if (match) {
+      const trimmedMatch = match.trim();
+      // Ensure "Class Foundation" in availableClasses is displayed as "Foundation"
+      if (stableId === "foundation") return "Foundation";
+      if (stableId === "prep") return "Prep";
+      return trimmedMatch;
+    }
+  }
+
+  // 2. Known well-defined names
+  if (stableId === "foundation") return "Foundation";
+  if (stableId === "prep") return "Prep";
+  if (stableId === "upsc") return "UPSC";
+
+  // 3. Numeric classes "class-7" -> "Class 7"
+  const digitMatch = stableId.match(/^class-(\d+)$/);
+  if (digitMatch) {
+    return `Class ${digitMatch[1]}`;
+  }
+
+  // 4. If input was already a nicely formatted title string without hyphens, use it
+  const raw = String(classIdOrName).trim();
+  if (raw && !raw.includes("-") && !raw.includes("_") && /[A-Z]/.test(raw)) {
+    if (/^class\s+foundation$/i.test(raw)) return "Foundation";
+    if (/^class\s+prep$/i.test(raw)) return "Prep";
+    return raw;
+  }
+
+  // 5. Fallback: Title case hyphenated words
+  return stableId
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/**
+ * Sanitizes and normalizes an access rule:
+ * - Deduplicates allowedClasses strictly by stable class ID
+ * - Removes legacy duplicates like "Class Foundation" when "Foundation" is present
+ * - Guarantees ownerClassId is in allowedClasses
+ * - Populates both allowedClasses and allowedClassIds
+ */
+export function sanitizeAccessRule(
+  rule: SubjectClassAccess,
+  availableClasses?: string[]
+): SubjectClassAccess {
+  if (!rule) return rule;
+
+  const ownerStableId = toStableClassId(rule.ownerClassStableId || rule.ownerClassId);
+  const canonicalOwnerName = getClassDisplayName(ownerStableId, availableClasses) || rule.ownerClassId || "Foundation";
+
+  const classMap = new Map<string, string>(); // stableId -> canonicalName
+  if (ownerStableId) {
+    classMap.set(ownerStableId, canonicalOwnerName);
+  }
+
+  // Process allowedClassIds
+  if (Array.isArray(rule.allowedClassIds)) {
+    rule.allowedClassIds.forEach((id) => {
+      const sid = toStableClassId(id);
+      if (sid && !classMap.has(sid)) {
+        classMap.set(sid, getClassDisplayName(sid, availableClasses));
+      }
+    });
+  }
+
+  // Process allowedClasses (resolves legacy names like "Class Foundation" to "Foundation")
+  if (Array.isArray(rule.allowedClasses)) {
+    rule.allowedClasses.forEach((cls) => {
+      const sid = toStableClassId(cls);
+      if (sid && !classMap.has(sid)) {
+        classMap.set(sid, getClassDisplayName(sid, availableClasses));
+      }
+    });
+  }
+
+  const cleanAllowedClassIds = Array.from(classMap.keys());
+  const cleanAllowedClasses = Array.from(classMap.values());
+
+  return {
+    ...rule,
+    name: rule.name || "General",
+    subjectId: rule.subjectId || normalizeSubjectName(rule.name),
+    ownerClassId: canonicalOwnerName,
+    ownerClassStableId: ownerStableId,
+    allowedClasses: cleanAllowedClasses,
+    allowedClassIds: cleanAllowedClassIds,
+    enabled: rule.enabled !== false,
+  };
 }
 
 /**
@@ -173,7 +344,7 @@ export function normalizeSubjectName(subjectName?: string): string {
 export function getSubjectAccessKey(subjectName: string, ownerClass?: string): string {
   const normSubj = normalizeSubjectName(subjectName);
   if (ownerClass) {
-    return `${normSubj}__${normalizeClassId(ownerClass)}`;
+    return `${normSubj}__${toStableClassId(ownerClass)}`;
   }
   return normSubj;
 }
@@ -191,8 +362,14 @@ export function getAllSubjectAccessRules(): Record<string, SubjectClassAccess> {
     try {
       const parsed = JSON.parse(cached);
       if (parsed && typeof parsed === "object") {
-        inMemorySubjectAccess = parsed;
-        return parsed;
+        const sanitized: Record<string, SubjectClassAccess> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v && typeof v === "object") {
+            sanitized[k] = sanitizeAccessRule(v as SubjectClassAccess);
+          }
+        }
+        inMemorySubjectAccess = sanitized;
+        return sanitized;
       }
     } catch {
       // ignore
@@ -224,16 +401,27 @@ export function isClassAllowedForSubject(
   // Non-owner classes require subject_access.enabled == true (or enabled !== false)
   if (access.enabled === false) return false;
 
-  const normTarget = normalizeClassId(targetClass);
-  const normOwner = normalizeClassId(access.ownerClassId);
+  const targetStableId = toStableClassId(targetClass);
+  const ownerStableId = toStableClassId(access.ownerClassStableId || access.ownerClassId);
 
   // Owner class always has access
-  if (normTarget === normOwner) return true;
+  if (targetStableId === ownerStableId) return true;
 
-  // Check allowedClasses
-  return (access.allowedClasses || []).some(
-    (c) => normalizeClassId(c) === normTarget
-  );
+  // Check allowedClassIds
+  if (Array.isArray(access.allowedClassIds)) {
+    if (access.allowedClassIds.some((id) => toStableClassId(id) === targetStableId)) {
+      return true;
+    }
+  }
+
+  // Check allowedClasses (for backward compatibility)
+  if (Array.isArray(access.allowedClasses)) {
+    return access.allowedClasses.some(
+      (c) => toStableClassId(c) === targetStableId
+    );
+  }
+
+  return false;
 }
 
 /**
@@ -246,38 +434,45 @@ export function getSubjectAccessConfig(
 ): SubjectClassAccess {
   const rules = getAllSubjectAccessRules();
   const normSubj = normalizeSubjectName(subjectName);
-  const normClass = contextClass ? normalizeClassId(contextClass) : "";
+  const contextStableId = contextClass ? toStableClassId(contextClass) : "";
 
   // 1. Direct match by specific owner key
   if (contextClass) {
     const specificKey = getSubjectAccessKey(subjectName, contextClass);
     if (rules[specificKey]) {
-      return rules[specificKey];
+      return sanitizeAccessRule(rules[specificKey]);
     }
   }
 
   // 2. Search for any rule matching the subject name where contextClass is either owner or in allowedClasses
-  const matchingRules = Object.values(rules).filter(
-    (r) => normalizeSubjectName(r.name) === normSubj
-  );
+  const matchingRules = Object.values(rules)
+    .filter((r) => r && normalizeSubjectName(r.name) === normSubj)
+    .map((r) => sanitizeAccessRule(r));
 
   if (matchingRules.length > 0) {
     // If a rule explicitly allows or owns contextClass, pick that rule
-    if (normClass) {
-      const classMatch = matchingRules.find((r) => isClassAllowedForSubject(r, contextClass));
+    if (contextStableId) {
+      const classMatch = matchingRules.find((r) => isClassAllowedForSubject(r, contextClass!));
       if (classMatch) return classMatch;
     }
     // Fall back to first matching rule for this subject name
     return matchingRules[0];
   }
 
-  // 3. Fallback: contextClass or default "Class 10" is the canonical owner
-  const defaultOwner = contextClass || "Class 10";
+  // 3. Fallback: contextClass or default "Foundation" is the canonical owner
+  const defaultOwner = contextClass || "Foundation";
+  const defaultOwnerStableId = toStableClassId(defaultOwner);
+  const defaultOwnerName = getClassDisplayName(defaultOwnerStableId);
+
   return {
     id: `subject_${normSubj}`,
+    subjectId: normSubj,
     name: subjectName,
-    ownerClassId: defaultOwner,
-    allowedClasses: [defaultOwner],
+    ownerClassId: defaultOwnerName,
+    ownerClassStableId: defaultOwnerStableId,
+    allowedClasses: [defaultOwnerName],
+    allowedClassIds: [defaultOwnerStableId],
+    enabled: true,
   };
 }
 
@@ -303,7 +498,7 @@ export function isSubjectOwner(
 ): boolean {
   if (!subjectName || !className) return false;
   const owner = getCanonicalOwnerClass(subjectName, className);
-  return normalizeClassId(owner) === normalizeClassId(className);
+  return toStableClassId(owner) === toStableClassId(className);
 }
 
 /**
@@ -319,8 +514,8 @@ export function verifyCurriculumEditPermission(
   error?: string;
 } {
   const access = getSubjectAccessConfig(subjectName, currentClass);
-  const normCurrent = normalizeClassId(currentClass);
-  const normOwner = normalizeClassId(access.ownerClassId);
+  const normCurrent = toStableClassId(currentClass);
+  const normOwner = toStableClassId(access.ownerClassStableId || access.ownerClassId);
 
   if (normCurrent !== normOwner) {
     return {
@@ -339,16 +534,21 @@ export function verifyCurriculumEditPermission(
 /**
  * Validates Subject Class Access payload against strict architectural rules:
  * - ownerClassId exists
- * - allowedClasses always includes ownerClassId
- * - ownerClassId cannot be removed
- * - duplicate class IDs are rejected
- * - invalid class IDs are rejected
+ * - allowedClasses or allowedClassIds exists as an array
+ * - rejects empty or malicious strings
+ * - ensures idempotence by deduplicating stable class IDs
  */
 export function validateSubjectAccessPayload(payload: {
   subjectName: string;
   ownerClassId: string;
-  allowedClasses: string[];
-}): { valid: boolean; error?: string } {
+  allowedClasses?: string[];
+  allowedClassIds?: string[];
+}): {
+  valid: boolean;
+  error?: string;
+  cleanAllowedClasses?: string[];
+  cleanAllowedClassIds?: string[];
+} {
   if (!payload.subjectName || !payload.subjectName.trim()) {
     return { valid: false, error: "Subject name is required." };
   }
@@ -357,64 +557,112 @@ export function validateSubjectAccessPayload(payload: {
     return { valid: false, error: "Owner class is required and cannot be empty." };
   }
 
-  if (!Array.isArray(payload.allowedClasses)) {
-    return { valid: false, error: "allowedClasses must be an array of class names." };
+  const ownerStableId = toStableClassId(payload.ownerClassId);
+  if (!ownerStableId) {
+    return { valid: false, error: "Invalid owner class ID." };
   }
 
-  // Reject invalid class names
-  for (const c of payload.allowedClasses) {
+  if (!Array.isArray(payload.allowedClasses) && !Array.isArray(payload.allowedClassIds)) {
+    return { valid: false, error: "allowedClasses or allowedClassIds must be an array of class identifiers." };
+  }
+
+  // Reject invalid class names (empty strings or illegal characters)
+  const allEntries = [
+    ...(payload.allowedClasses || []),
+    ...(payload.allowedClassIds || []),
+  ];
+
+  for (const c of allEntries) {
     if (!c || typeof c !== "string" || !c.trim()) {
-      return { valid: false, error: "allowedClasses contains an invalid or empty class name." };
+      return { valid: false, error: "Allowed classes contains an invalid or empty class name." };
     }
     if (/[<>{}]/.test(c)) {
       return { valid: false, error: `Invalid characters in class name: "${c}".` };
     }
   }
 
-  // Reject duplicates
-  const normalizedSet = new Set<string>();
-  for (const c of payload.allowedClasses) {
-    const norm = normalizeClassId(c);
-    if (normalizedSet.has(norm)) {
-      return { valid: false, error: `Duplicate class detected in allowedClasses: "${c}".` };
+  // Check that owner is present
+  const hasOwner = allEntries.some((c) => toStableClassId(c) === ownerStableId);
+  if (!hasOwner) {
+    return {
+      valid: false,
+      error: `Owner class "${payload.ownerClassId}" must always be included in allowedClasses and cannot be removed.`,
+    };
+  }
+
+  // Build clean deduplicated maps
+  const classMap = new Map<string, string>();
+  classMap.set(ownerStableId, getClassDisplayName(ownerStableId));
+  for (const c of allEntries) {
+    const sid = toStableClassId(c);
+    if (sid && !classMap.has(sid)) {
+      classMap.set(sid, getClassDisplayName(sid));
     }
-    normalizedSet.add(norm);
   }
 
-  // Validate ownerClassId is in allowedClasses
-  const normOwner = normalizeClassId(payload.ownerClassId);
-  if (!normalizedSet.has(normOwner)) {
-    return { valid: false, error: `Owner class "${payload.ownerClassId}" must always be included in allowedClasses and cannot be removed.` };
-  }
-
-  return { valid: true };
+  return {
+    valid: true,
+    cleanAllowedClasses: Array.from(classMap.values()),
+    cleanAllowedClassIds: Array.from(classMap.keys()),
+  };
 }
 
 /**
  * Saves or updates a subject's class access permissions.
  * Persists locally and to Firestore.
+ * Supports passing both allowedClasses (display names) and allowedClassIds (stable IDs).
+ * Strictly deduplicates classes by stable class ID so no false duplicate class error is thrown.
  */
 export async function saveSubjectAccessRule(
   subjectName: string,
   ownerClassId: string,
-  allowedClasses: string[]
+  allowedClasses: string[],
+  allowedClassIds?: string[]
 ): Promise<SubjectClassAccess> {
   const cleanSubject = subjectName.trim();
-  const cleanOwner = ownerClassId.trim();
+  const rawOwner = ownerClassId.trim();
+  const ownerStableId = toStableClassId(rawOwner);
 
-  // Ensure owner is included in allowedClasses
-  const normOwner = normalizeClassId(cleanOwner);
-  const classesSet = new Set<string>(allowedClasses.map((c) => c.trim()));
-  if (!Array.from(classesSet).some((c) => normalizeClassId(c) === normOwner)) {
-    classesSet.add(cleanOwner);
+  if (!ownerStableId) {
+    throw new Error("Invalid owner class ID.");
   }
-  const cleanAllowedClasses = Array.from(classesSet);
+
+  const hierarchy = getSchoolHierarchy();
+  const availableClasses = hierarchy?.classes || [];
+  const canonicalOwner = getClassDisplayName(ownerStableId, availableClasses) || rawOwner;
+
+  // Build clean deduplicated list of allowed classes strictly by stable ID
+  const classMap = new Map<string, string>(); // stableId -> canonicalName
+  // Owner is ALWAYS authorized
+  classMap.set(ownerStableId, canonicalOwner);
+
+  // Add from allowedClasses (resolving any formatted or legacy names like "Class Foundation" -> "Foundation")
+  (allowedClasses || []).forEach((c) => {
+    if (!c || typeof c !== "string") return;
+    const sid = toStableClassId(c);
+    if (sid && !classMap.has(sid)) {
+      classMap.set(sid, getClassDisplayName(sid, availableClasses));
+    }
+  });
+
+  // Add from allowedClassIds
+  (allowedClassIds || []).forEach((id) => {
+    if (!id || typeof id !== "string") return;
+    const sid = toStableClassId(id);
+    if (sid && !classMap.has(sid)) {
+      classMap.set(sid, getClassDisplayName(sid, availableClasses));
+    }
+  });
+
+  const cleanAllowedClassIds = Array.from(classMap.keys());
+  const cleanAllowedClasses = Array.from(classMap.values());
 
   // Validate
   const validation = validateSubjectAccessPayload({
     subjectName: cleanSubject,
-    ownerClassId: cleanOwner,
+    ownerClassId: canonicalOwner,
     allowedClasses: cleanAllowedClasses,
+    allowedClassIds: cleanAllowedClassIds,
   });
 
   if (!validation.valid) {
@@ -422,42 +670,52 @@ export async function saveSubjectAccessRule(
   }
 
   const normSubj = normalizeSubjectName(cleanSubject);
-  const ruleId = `school_${normalizeClassId(cleanOwner)}_${normSubj}`;
+  const ruleId = `school_${ownerStableId}_${normSubj}`;
   const now = new Date().toISOString();
 
+  const existingRules = getAllSubjectAccessRules();
+  const ruleKey = getSubjectAccessKey(cleanSubject, canonicalOwner);
+  const prevRule = existingRules[ruleKey] || existingRules[normSubj];
+
   const newRule: SubjectClassAccess = {
-    id: ruleId,
+    id: prevRule?.id || ruleId,
+    subjectId: normSubj,
     name: cleanSubject,
-    ownerClassId: cleanOwner,
+    ownerClassId: canonicalOwner,
+    ownerClassStableId: ownerStableId,
     allowedClasses: cleanAllowedClasses,
+    allowedClassIds: cleanAllowedClassIds,
     enabled: true,
-    createdAt: now,
+    createdAt: prevRule?.createdAt || now,
     updatedAt: now,
   };
 
-  const existingRules = getAllSubjectAccessRules();
-  const ruleKey = getSubjectAccessKey(cleanSubject, cleanOwner);
+  // Persist in memory map
   existingRules[ruleKey] = newRule;
-  // Also store by subject name alone for default lookup
   existingRules[normSubj] = newRule;
+
+  // Clean up any stale legacy keys like `${normSubj}__classfoundation`
+  const staleKey = `${normSubj}__classfoundation`;
+  if (existingRules[staleKey]) {
+    delete existingRules[staleKey];
+  }
 
   persistSubjectAccessRules(existingRules);
 
   // Update curriculum hierarchy subjects map: only the canonical owner class retains this subject
-  const hierarchy = getSchoolHierarchy();
   let hierarchyChanged = false;
   const updatedSubjects = { ...(hierarchy.subjects || {}) };
 
   // 1. Ensure canonical owner class has the subject
-  const ownerList = updatedSubjects[cleanOwner] || [];
+  const ownerList = updatedSubjects[canonicalOwner] || [];
   if (!ownerList.includes(cleanSubject)) {
-    updatedSubjects[cleanOwner] = [...ownerList, cleanSubject];
+    updatedSubjects[canonicalOwner] = [...ownerList, cleanSubject];
     hierarchyChanged = true;
   }
 
   // 2. Ensure consumer classes DO NOT have the subject in their native hierarchy
   Object.keys(updatedSubjects).forEach((cls) => {
-    if (normalizeClassId(cls) !== normOwner) {
+    if (toStableClassId(cls) !== ownerStableId) {
       const list = updatedSubjects[cls] || [];
       if (list.includes(cleanSubject)) {
         updatedSubjects[cls] = list.filter((s) => s !== cleanSubject);
@@ -465,6 +723,12 @@ export async function saveSubjectAccessRule(
       }
     }
   });
+
+  // Remove any legacy "Class Foundation" key from hierarchy subjects if present
+  if (updatedSubjects["Class Foundation"]) {
+    delete updatedSubjects["Class Foundation"];
+    hierarchyChanged = true;
+  }
 
   if (hierarchyChanged) {
     await saveSchoolHierarchy({
@@ -481,14 +745,16 @@ export async function saveSubjectAccessRule(
       await setDoc(accessDocRef, { rules: existingRules, updatedAt: now }, { merge: true });
 
       // Also set in subjects collection
-      const subjectDocRef = doc(db, "subjects", ruleId);
+      const subjectDocRef = doc(db, "subjects", newRule.id);
       await setDoc(subjectDocRef, {
-        id: ruleId,
+        id: newRule.id,
         name: cleanSubject,
         subjectName: cleanSubject,
         category: "school",
-        ownerClassId: cleanOwner,
+        ownerClassId: canonicalOwner,
+        ownerClassStableId: ownerStableId,
         allowedClasses: cleanAllowedClasses,
+        allowedClassIds: cleanAllowedClassIds,
         updatedAt: now,
       }, { merge: true });
     }
@@ -504,8 +770,10 @@ export async function saveSubjectAccessRule(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           subjectName: cleanSubject,
-          ownerClassId: cleanOwner,
+          ownerClassId: canonicalOwner,
+          ownerClassStableId: ownerStableId,
           allowedClasses: cleanAllowedClasses,
+          allowedClassIds: cleanAllowedClassIds,
         }),
       }).catch(() => {});
     }
@@ -578,32 +846,33 @@ export function getAccessibleClassesGrantedToClass(
   targetClass: string
 ): AccessibleClassInfo[] {
   if (!targetClass) return [];
-  const normTarget = normalizeClassId(targetClass);
+  const targetStableId = toStableClassId(targetClass);
   const rules = getAllSubjectAccessRules();
 
-  // Map: ownerClassKey -> { ownerClass, subjects: Set<string> }
+  // Map: ownerStableId -> { ownerClass, subjects: Set<string> }
   const classMap = new Map<string, { ownerClass: string; subjects: Set<string> }>();
 
   Object.values(rules).forEach((rule) => {
-    if (!rule || !rule.ownerClassId || !rule.name) return;
-    const normOwner = normalizeClassId(rule.ownerClassId);
+    if (!rule || !rule.name) return;
+    const ownerStableId = toStableClassId(rule.ownerClassStableId || rule.ownerClassId);
+    if (!ownerStableId) return;
 
     // Skip if owner is the target class itself (that belongs to student's own class)
-    if (normOwner === normTarget) return;
+    if (ownerStableId === targetStableId) return;
 
     // Check if targetClass is granted permission
     if (isClassAllowedForSubject(rule, targetClass)) {
       const cleanSubj = rule.name.trim();
       if (!cleanSubj) return;
 
-      const ownerKey = normOwner;
-      if (!classMap.has(ownerKey)) {
-        classMap.set(ownerKey, {
-          ownerClass: rule.ownerClassId.trim(),
+      if (!classMap.has(ownerStableId)) {
+        const canonicalOwner = getClassDisplayName(ownerStableId) || (rule.ownerClassId ? rule.ownerClassId.trim() : "Foundation");
+        classMap.set(ownerStableId, {
+          ownerClass: canonicalOwner,
           subjects: new Set<string>(),
         });
       }
-      classMap.get(ownerKey)!.subjects.add(cleanSubj);
+      classMap.get(ownerStableId)!.subjects.add(cleanSubj);
     }
   });
 
