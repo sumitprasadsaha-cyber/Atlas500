@@ -21,6 +21,14 @@ export function normalizeClassGrade(grade?: string): string {
   if (cleanGrade && romanMap[cleanGrade]) {
     return `Class ${romanMap[cleanGrade]}`;
   }
+  if (/^class\s+class$/i.test(trimmed)) {
+    return "";
+  }
+  // Strip redundant "Class " for non-numeric batches like Foundation, Prep
+  const nonNumericMatch = trimmed.match(/^class\s+([A-Za-z]+)$/i);
+  if (nonNumericMatch && nonNumericMatch[1].toLowerCase() !== "class") {
+    return nonNumericMatch[1].charAt(0).toUpperCase() + nonNumericMatch[1].slice(1);
+  }
   if (/^class/i.test(trimmed)) {
     return trimmed;
   }

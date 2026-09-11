@@ -11,12 +11,14 @@ import {
   getUpscHierarchy, 
   saveSchoolHierarchy, 
   saveUpscHierarchy, 
-  extractHierarchyFromNotes 
+  extractHierarchyFromNotes,
+  BASELINE_SCHOOL_CLASSES,
+  sortSchoolClasses
 } from "./curriculumService";
 import { getLocalClassNotes, saveLocalClassNotes, saveClassNoteDoc } from "./firestoreService";
 import { repairStorageIntegrity } from "./storageIntegrityService";
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 const STORAGE_KEY_SCHEMA_VERSION = "tuition_database_schema_version";
 
 export interface DatabaseSchemaInfo {
@@ -29,7 +31,9 @@ export interface DatabaseSchemaInfo {
  * Reconciles duplicate or ghost classes and fixes note associations.
  * Guarantees:
  * - "Class Class" is removed.
+ * - All baseline classes (Classes 6-10) are guaranteed to exist.
  * - If "Foundation" exists, any unwanted "Class Foundation" duplicate is merged into "Foundation".
+ * - If "Prep" exists, any unwanted "Class Prep" duplicate is merged into "Prep".
  * - Notes belonging to Foundation that were mistakenly assigned "Class Foundation" are fixed.
  */
 export async function reconcileDuplicateClassesAndNotes(): Promise<{
@@ -51,7 +55,11 @@ export async function reconcileDuplicateClassesAndNotes(): Promise<{
         if (snap.exists()) {
           const remoteSchool = snap.data() as any;
           if (Array.isArray(remoteSchool.classes)) {
-            const mergedClasses = Array.from(new Set([...school.classes, ...remoteSchool.classes]));
+            const mergedClasses = sortSchoolClasses([
+              ...BASELINE_SCHOOL_CLASSES,
+              ...school.classes,
+              ...remoteSchool.classes
+            ]);
             school.classes = mergedClasses;
             school.subjects = { ...school.subjects, ...(remoteSchool.subjects || {}) };
             school.chapters = { ...school.chapters, ...(remoteSchool.chapters || {}) };
@@ -63,6 +71,13 @@ export async function reconcileDuplicateClassesAndNotes(): Promise<{
       } catch (err) {
         console.warn("[Reconcile] Notice reading remote school hierarchy:", err);
       }
+    }
+
+    // Ensure baseline classes are present
+    const missingBaseline = BASELINE_SCHOOL_CLASSES.filter((bc) => !school.classes.includes(bc));
+    if (missingBaseline.length > 0) {
+      school.classes = sortSchoolClasses([...BASELINE_SCHOOL_CLASSES, ...school.classes]);
+      schoolModified = true;
     }
 
     // 1. Reconcile "Class Class" ghost class
@@ -119,6 +134,49 @@ export async function reconcileDuplicateClassesAndNotes(): Promise<{
       reconciledClassesCount++;
       console.log(`[Reconcile] Merged duplicate class "${classFoundationName}" into "${foundationKey}"`);
     }
+
+    // 2b. Reconcile "Class Prep" vs "Prep"
+    const hasPrep = school.classes.some(
+      (c) => c && c.toLowerCase().trim() === "prep"
+    );
+    const classPrepIdx = school.classes.findIndex(
+      (c) => c && c.toLowerCase().trim() === "class prep"
+    );
+
+    if (hasPrep && classPrepIdx !== -1) {
+      const classPrepName = school.classes[classPrepIdx];
+      const prepKey = school.classes.find((c) => c && c.toLowerCase().trim() === "prep") || "Prep";
+
+      // Merge subjects
+      const cpSubjs = school.subjects[classPrepName] || [];
+      const pSubjs = school.subjects[prepKey] || [];
+      school.subjects[prepKey] = Array.from(new Set([...pSubjs, ...cpSubjs]));
+      delete school.subjects[classPrepName];
+
+      // Merge chapters
+      if (school.chapters[classPrepName]) {
+        if (!school.chapters[prepKey]) school.chapters[prepKey] = {};
+        for (const [subj, chList] of Object.entries(school.chapters[classPrepName])) {
+          const existingChs = school.chapters[prepKey][subj] || [];
+          const chMap = new Map<number, string>();
+          existingChs.forEach((ch) => chMap.set(ch.number, ch.name));
+          (chList || []).forEach((ch) => chMap.set(ch.number, ch.name));
+          school.chapters[prepKey][subj] = Array.from(chMap.entries())
+            .map(([number, name]) => ({ number, name }))
+            .sort((a, b) => a.number - b.number);
+        }
+        delete school.chapters[classPrepName];
+      }
+
+      if (school.removedSubjects) delete school.removedSubjects[classPrepName];
+      school.classes.splice(classPrepIdx, 1);
+      schoolModified = true;
+      reconciledClassesCount++;
+      console.log(`[Reconcile] Merged duplicate class "${classPrepName}" into "${prepKey}"`);
+    }
+
+    // Ensure final sorted order
+    school.classes = sortSchoolClasses(school.classes);
 
     if (schoolModified) {
       await saveSchoolHierarchy(school);
@@ -251,17 +309,11 @@ export async function runDatabaseMigrationsIfNeeded(): Promise<void> {
         currentUpsc
       );
 
-      // If database is completely empty (no classes at all and no notes)
-      if (mergedSchool.classes.length === 0 && existingNotes.length === 0) {
-        // Seed default classes once only on fresh empty install
-        mergedSchool.classes = ["Class 9", "Class 10", "Class 11", "Class 12"];
-        mergedSchool.subjects = {
-          "Class 9": ["Mathematics", "Science", "Social Science"],
-          "Class 10": ["Mathematics", "Science", "Social Science"],
-          "Class 11": ["Physics", "Chemistry", "Mathematics", "Biology"],
-          "Class 12": ["Physics", "Chemistry", "Mathematics", "Biology"]
-        };
-      }
+      // Ensure all baseline classes exist
+      mergedSchool.classes = sortSchoolClasses([
+        ...BASELINE_SCHOOL_CLASSES,
+        ...(mergedSchool.classes || [])
+      ]);
 
       if (mergedUpsc.papers.length === 0 && existingNotes.length === 0) {
         mergedUpsc.papers = ["GS Paper 1", "GS Paper 2", "GS Paper 3", "GS Paper 4"];

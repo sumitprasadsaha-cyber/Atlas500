@@ -95,6 +95,25 @@ function safeParseJson<T>(jsonStr: string | null, fallback: T): T {
   }
 }
 
+export const BASELINE_SCHOOL_CLASSES = [
+  "Class 6",
+  "Class 7",
+  "Class 8",
+  "Class 9",
+  "Class 10"
+];
+
+export function sortSchoolClasses(classes: string[]): string[] {
+  return Array.from(new Set((classes || []).map((c) => (c || "").trim()).filter(Boolean))).sort((a, b) => {
+    const numA = parseInt(a.replace(/\D/g, ""), 10);
+    const numB = parseInt(b.replace(/\D/g, ""), 10);
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    if (!isNaN(numA)) return -1;
+    if (!isNaN(numB)) return 1;
+    return a.localeCompare(b);
+  });
+}
+
 /**
  * Migrate and load legacy storage keys into unified hierarchy structure
  */
@@ -102,14 +121,27 @@ function getInitialSchoolHierarchy(): SchoolHierarchyData {
   if (inMemorySchoolHierarchy) return inMemorySchoolHierarchy;
 
   if (typeof window === "undefined") {
-    return { classes: [], subjects: {}, chapters: {}, removedSubjects: {}, version: 2 };
+    return {
+      classes: [...BASELINE_SCHOOL_CLASSES, "Foundation", "Prep"],
+      subjects: {},
+      chapters: {},
+      removedSubjects: {},
+      version: 2
+    };
   }
 
   const cached = safeLocalStorageGetItem(STORAGE_KEY_SCHOOL_HIERARCHY);
   if (cached) {
     const parsed = safeParseJson<SchoolHierarchyData | null>(cached, null);
     if (parsed && Array.isArray(parsed.classes)) {
-      inMemorySchoolHierarchy = parsed;
+      const completeClasses = sortSchoolClasses([
+        ...BASELINE_SCHOOL_CLASSES,
+        ...parsed.classes
+      ]);
+      inMemorySchoolHierarchy = {
+        ...parsed,
+        classes: completeClasses
+      };
       return inMemorySchoolHierarchy;
     }
   }
@@ -120,8 +152,13 @@ function getInitialSchoolHierarchy(): SchoolHierarchyData {
   const legacyChapters = safeParseJson<Record<string, Record<string, ChapterInfo[]>>>(localStorage.getItem(LEGACY_STORAGE_CUSTOM_SCHOOL_CHAPTERS), {});
   const legacyRemoved = safeParseJson<Record<string, string[]>>(localStorage.getItem(LEGACY_STORAGE_REMOVED_SCHOOL_SUBJECTS), {});
 
+  const initialClasses = sortSchoolClasses([
+    ...BASELINE_SCHOOL_CLASSES,
+    ...legacyClasses
+  ]);
+
   const initial: SchoolHierarchyData = {
-    classes: legacyClasses,
+    classes: initialClasses,
     subjects: legacySubjects,
     chapters: legacyChapters,
     removedSubjects: legacyRemoved,
@@ -177,9 +214,15 @@ export function mergeSchoolHierarchies(
   base: SchoolHierarchyData,
   incoming: Partial<SchoolHierarchyData>
 ): SchoolHierarchyData {
-  let mergedClasses = Array.from(new Set([...(base.classes || []), ...(incoming.classes || [])]))
-    .map((c) => (c || "").trim())
-    .filter((c) => c && c.toLowerCase() !== "class class");
+  const mergedClasses = sortSchoolClasses(
+    Array.from(new Set([
+      ...BASELINE_SCHOOL_CLASSES,
+      ...(base.classes || []),
+      ...(incoming.classes || [])
+    ]))
+      .map((c) => (c || "").trim())
+      .filter((c) => c && c.toLowerCase() !== "class class")
+  );
 
   const mergedSubjects: Record<string, string[]> = { ...(base.subjects || {}) };
   if (incoming.subjects) {
@@ -242,8 +285,35 @@ export function mergeSchoolHierarchies(
     mergedClasses.splice(classFoundationIdx, 1);
   }
 
+  // Deduplicate Prep vs Class Prep if both are present
+  const hasPrep = mergedClasses.some((c) => c.toLowerCase() === "prep");
+  const classPrepIdx = mergedClasses.findIndex((c) => c.toLowerCase() === "class prep");
+  if (hasPrep && classPrepIdx !== -1) {
+    const cpName = mergedClasses[classPrepIdx];
+    const pKey = mergedClasses.find((c) => c.toLowerCase() === "prep") || "Prep";
+    if (mergedSubjects[cpName]) {
+      mergedSubjects[pKey] = Array.from(new Set([...(mergedSubjects[pKey] || []), ...(mergedSubjects[cpName] || [])]));
+      delete mergedSubjects[cpName];
+    }
+    if (mergedChapters[cpName]) {
+      if (!mergedChapters[pKey]) mergedChapters[pKey] = {};
+      for (const [sKey, chList] of Object.entries(mergedChapters[cpName])) {
+        const exList = mergedChapters[pKey][sKey] || [];
+        const chMap = new Map<number, string>();
+        exList.forEach((c) => chMap.set(c.number, c.name));
+        (chList || []).forEach((c) => chMap.set(c.number, c.name));
+        mergedChapters[pKey][sKey] = Array.from(chMap.entries())
+          .map(([number, name]) => ({ number, name }))
+          .sort((a, b) => a.number - b.number);
+      }
+      delete mergedChapters[cpName];
+    }
+    delete mergedRemoved[cpName];
+    mergedClasses.splice(classPrepIdx, 1);
+  }
+
   return {
-    classes: mergedClasses,
+    classes: sortSchoolClasses(mergedClasses),
     subjects: mergedSubjects,
     chapters: mergedChapters,
     removedSubjects: mergedRemoved,
@@ -359,8 +429,10 @@ export function extractHierarchyFromNotes(
 
       // CRITICAL: Classes must be created ONLY through an explicit admin action.
       // Do NOT create or add classes based on notes, files, or metadata!
+      const normCls = normalizeClassId(cls);
       const matchedClass = newSchool.classes.find(
-        (c) => c.toLowerCase().trim() === (cls || "").toLowerCase().trim()
+        (c) => c.toLowerCase().trim() === (cls || "").toLowerCase().trim() ||
+               normalizeClassId(c) === normCls
       );
       if (matchedClass && subject) {
         if (!newSchool.subjects[matchedClass]) newSchool.subjects[matchedClass] = [];
@@ -395,8 +467,18 @@ export function getUpscHierarchy(): UpscHierarchyData {
 }
 
 export async function saveSchoolHierarchy(data: SchoolHierarchyData): Promise<void> {
+  const safeClasses = sortSchoolClasses(
+    Array.from(new Set([
+      ...BASELINE_SCHOOL_CLASSES,
+      ...(data.classes || [])
+    ]))
+      .map((c) => (c || "").trim())
+      .filter((c) => c && c.toLowerCase() !== "class class")
+  );
+
   const updatedData: SchoolHierarchyData = {
     ...data,
+    classes: safeClasses,
     updatedAt: new Date().toISOString(),
     version: 2
   };

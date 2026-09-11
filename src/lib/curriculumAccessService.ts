@@ -149,10 +149,13 @@ if (typeof window !== "undefined") {
 export function normalizeClassId(className?: string): string {
   if (!className) return "";
   const trimmed = className.trim().toLowerCase();
-  if (/^upsc$/i.test(trimmed)) return "upsc";
+  if (/^upsc$/i.test(trimmed) || /^class\s+upsc$/i.test(trimmed)) return "upsc";
   const digits = trimmed.match(/\d+/);
   if (digits) return `class${digits[0]}`;
-  return trimmed.replace(/[\s_-]/g, "");
+  // Strip redundant leading "class " if followed by a non-numeric word
+  // e.g. "Class Foundation" -> "foundation", "Class Prep" -> "prep"
+  const stripped = trimmed.replace(/^class[\s_-]+/i, "");
+  return (stripped || trimmed).replace(/[\s_-]/g, "");
 }
 
 /**

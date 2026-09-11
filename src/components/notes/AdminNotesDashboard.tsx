@@ -78,6 +78,7 @@ import {
   getSavedNotesSelectionState,
   saveNotesSelectionState,
   extractHierarchyFromNotes,
+  sortSchoolClasses,
   SchoolHierarchyData,
   UpscHierarchyData
 } from "../../lib/curriculumService";
@@ -421,12 +422,7 @@ export default function AdminNotesDashboard({
     customSchoolClasses.forEach((c) => {
       if (c && c.trim() && c.toLowerCase() !== "class class") set.add(c.trim());
     });
-    return Array.from(set).sort((a, b) => {
-      const numA = parseInt(a.replace(/\D/g, ""), 10);
-      const numB = parseInt(b.replace(/\D/g, ""), 10);
-      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-      return a.localeCompare(b);
-    });
+    return sortSchoolClasses(Array.from(set));
   }, [customSchoolClasses]);
 
   useEffect(() => {

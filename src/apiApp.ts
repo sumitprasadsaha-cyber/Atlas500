@@ -403,7 +403,7 @@ router.post("/r2/upload", async (req, res) => {
       if (reqContentType.includes("application/json")) {
         try {
           const parsed = JSON.parse(req.body.toString("utf8"));
-          if (parsed.base64) {
+          if (parsed && typeof parsed === "object" && parsed.base64) {
             buffer = Buffer.from(parsed.base64, "base64");
             if (parsed.mimeType) contentType = parsed.mimeType;
           } else {
@@ -415,9 +415,13 @@ router.post("/r2/upload", async (req, res) => {
       } else {
         buffer = req.body;
       }
-    } else if (req.body && typeof req.body === "object" && req.body.base64) {
-      buffer = Buffer.from(req.body.base64, "base64");
-      if (req.body.mimeType) contentType = req.body.mimeType;
+    } else if (req.body && typeof req.body === "object") {
+      if (req.body.base64) {
+        buffer = Buffer.from(req.body.base64, "base64");
+        if (req.body.mimeType) contentType = req.body.mimeType;
+      } else {
+        buffer = Buffer.from(JSON.stringify(req.body), "utf-8");
+      }
     } else if (typeof req.body === "string") {
       buffer = Buffer.from(req.body, "utf-8");
     } else {

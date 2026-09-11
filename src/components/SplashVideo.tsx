@@ -35,22 +35,20 @@ export const SplashVideo: React.FC<SplashVideoProps> = ({ onComplete }) => {
       return;
     }
 
-    // Attempt autoplay with sound
-    video.muted = false;
+    // Guarantee muted autoplay works cleanly across all browsers/webviews/iframes
+    video.muted = true;
+    video.defaultMuted = true;
 
     const playPromise = video.play();
     if (playPromise !== undefined) {
       playPromise.catch((error) => {
-        console.warn("[SplashVideo] Unmuted autoplay prevented by browser policy:", error);
-        // Fallback: try autoplay muted if unmuted autoplay is blocked by the browser/WebView
+        console.warn("[SplashVideo] Autoplay notice:", error);
         if (video && !completedRef.current) {
           video.muted = true;
-          video.play().catch((playErr) => {
-            console.warn("[SplashVideo] Autoplay completely blocked or failed:", playErr);
-            // If playback fails, advance to app after a short timeout instead of getting stuck
+          video.play().catch(() => {
             setTimeout(() => {
               handleFinish();
-            }, 800);
+            }, 400);
           });
         }
       });
@@ -113,6 +111,7 @@ export const SplashVideo: React.FC<SplashVideoProps> = ({ onComplete }) => {
         }}
         playsInline
         autoPlay
+        muted
         preload="auto"
         controls={false}
         disablePictureInPicture

@@ -845,7 +845,6 @@ export async function getObjectFromR2(params: {
             "last-modified": response.LastModified?.toISOString(),
           },
           bodySize: response.ContentLength || 0,
-          errorDetails: null,
         });
 
         console.log(`[Stage 5: Backend Streaming] S3 GetObject stream opened:`, {
