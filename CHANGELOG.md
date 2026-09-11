@@ -4,6 +4,22 @@ All notable changes to the **Tuition Ledger Management (Atlas400)** project are 
 
 ---
 
+## [7.11.0] - 2026-09-11
+
+### 📝 Assessment Parser Hardening & Flexible Assessment Ingestion
+- **Resilient Numbering & Checkmark Support:**
+  - Enhanced `matchQuestionHeader` and block segmentation to reliably parse varied question numbering styles (`1.`, `2)`, `15:`, `30.`).
+  - Stripped extraneous checkmarks and status markers (`✅`, `❌`, `(correct)`, `(trap)`) while preserving explicit correct answers.
+- **Section vs. Question Lookahead Disambiguation:**
+  - Implemented `isSectionHeaderWithLookahead` to distinguish between standalone section markers (e.g. `2. True / False` followed by question headers) and inline numbered questions (e.g. `30. True / False` followed directly by statement text).
+- **Fault-Tolerant Question Ingestion:**
+  - Handled malformed question blocks gracefully without failing the entire assessment import, reporting clear warnings while importing all valid questions.
+  - Added robust validation for comprehension passages, linked passage questions, Assertion & Reasoning formats, and True/False questions.
+- **Full Test Suite & Verification:**
+  - Added test cases covering comprehension passages, mixed question formats, and edge-case layouts in `src/utils/assessmentParser.test.ts`.
+
+---
+
 ## [5.2.1] - 2026-08-27
 
 ### 🎯 Persistent Topic Test Synchronization & Real-Time Sync

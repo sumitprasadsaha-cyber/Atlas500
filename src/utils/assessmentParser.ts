@@ -132,6 +132,65 @@ function matchSectionHeader(line: string): "mcq" | "assertion_reason" | "true_fa
 }
 
 /**
+ * Distinguishes between a section header (e.g. "2. True / False" followed by "3. Earth revolves...")
+ * and a numbered question (e.g. "30. True / False" followed directly by the statement "Stomata open...").
+ */
+function isSectionHeaderWithLookahead(
+  line: string,
+  lines: string[],
+  currentIndex: number
+): "mcq" | "assertion_reason" | "true_false" | "comprehension" | null {
+  const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
+  if (!trimmed) return null;
+
+  const hasLeadingDigit = /^\d+[\.\):\-]\s*/.test(trimmed);
+  if (!hasLeadingDigit) {
+    return matchSectionHeader(trimmed);
+  }
+
+  const secType = matchSectionHeader(trimmed);
+  if (!secType) return null;
+
+  if (secType === "comprehension") {
+    return "comprehension";
+  }
+
+  // If there is significant text on the same line after the section name, e.g. "30. True / False: Stomata open..."
+  // then it's a question, not a standalone section header.
+  const afterSection = trimmed
+    .replace(/^\d+[\.\):\-]\s*/, "")
+    .replace(
+      /^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?|Assertion\s*(?:&|and|-)\s*Reason(?:ing)?|True\s*[\/\\]\s*False|True[\/\\]False|True\s+or\s+False|T\/F)[\:\.\-\s]*/i,
+      ""
+    )
+    .trim();
+  if (afterSection.length > 0) {
+    return null;
+  }
+
+  // Look ahead for the next non-empty, non-divider line
+  for (let j = currentIndex + 1; j < lines.length; j++) {
+    const nextLine = lines[j].trim();
+    if (!nextLine || isIgnoredMarkerOrDivider(nextLine) || extractMetadataLine(nextLine, {})) {
+      continue;
+    }
+    // If the next line is a numbered question (e.g. "1. ...", "3. ...")
+    if (matchQuestionHeader(nextLine)) {
+      return secType;
+    }
+    // If the next line is another section header
+    if (matchSectionHeader(nextLine)) {
+      return secType;
+    }
+    // If next line does NOT start with a number (e.g. "Stomata open when guard cells lose water." or options or True/False)
+    // then this line was a question number for the following statement!
+    return null;
+  }
+
+  return secType;
+}
+
+/**
  * Detects whether a line is the beginning of a comprehension reading passage.
  * Supports headings such as:
  * - Read the following passage
@@ -422,7 +481,7 @@ export function parseAssessmentText(
     }
 
     // 3. Check for other section headers (e.g. "1. Multiple Choice Questions", "2. True / False", "MCQs")
-    const sectionHeader = matchSectionHeader(trimmed);
+    const sectionHeader = isSectionHeaderWithLookahead(trimmed, rawLines, i);
     if (sectionHeader) {
       if (activeBlock) {
         rawBlocks.push(activeBlock);
@@ -463,9 +522,16 @@ export function parseAssessmentText(
       if (activePassage) {
         activePassage.questionCount++;
       }
+      let qSection = activePassage ? "mcq" : currentSection;
+      if (!activePassage && /^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False)\b/i.test(qHeader.remainder)) {
+        qSection = "true_false";
+      } else if (!activePassage && /^(?:Assertion\s*(?:&|and|-)\s*Reason(?:ing)?)\b/i.test(qHeader.remainder)) {
+        qSection = "assertion_reason";
+      }
+
       activeBlock = {
         qNum: qHeader.qNum,
-        section: activePassage ? "mcq" : currentSection,
+        section: qSection,
         passageId: activePassage ? activePassage.id : undefined,
         lines: qHeader.remainder ? [qHeader.remainder] : [],
         rawBlockLines: [rawLine]
@@ -599,11 +665,13 @@ export function parseAssessmentText(
         (l) =>
           !/^(?:True|False)\s*[✅❌]?$/i.test(l) &&
           !/^[A-B][\.\)]\s*(?:True|False)/i.test(l) &&
-          !/^(?:Option\s+[A-B]|[A-B][\.\)\:\-])$/i.test(l)
+          !/^(?:Option\s+[A-B]|[A-B][\.\)\:\-])$/i.test(l) &&
+          !/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False)[\:\.]?$/i.test(l)
       );
 
       let cleanQuestion = statementLines
         .join(" ")
+        .replace(/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False)[\:\.\-\s]*/gi, "")
         .replace(/—\s*(True|False)\s*[✅❌]?/gi, "")
         .replace(/-\s*(True|False)\s*[✅❌]?/gi, "")
         .replace(/\b(True|False)\s*[✅❌]?$/gi, "")
@@ -679,7 +747,12 @@ export function parseAssessmentText(
       const firstOptIdx = optionIndices[0];
 
       // Question text lines before the first option line
-      const rawQLines = linesAfterImage.slice(0, firstOptIdx).filter((l) => l.toLowerCase() !== "question:");
+      const rawQLines = linesAfterImage
+        .slice(0, firstOptIdx)
+        .filter((l) => 
+          l.toLowerCase() !== "question:" && 
+          !/^(?:Assertion\s*(?:&|and|-)\s*Reason(?:ing)?|Multiple\s+Choice(?:\s+Questions?)?|MCQs?)[\:\.]?$/i.test(l.trim())
+        );
       const questionText = rawQLines.join("\n").trim();
 
       if (!questionText) {
@@ -807,22 +880,11 @@ export function parseAssessmentText(
 
   console.log(`[AssessmentParser] Processed ${questions.length} questions. Passages: ${Object.keys(passagesResult).length}. Errors: ${errors.length}`);
 
-  // Reject incomplete sections with clear validation messages instead of partially importing them
-  if (errors.length > 0) {
-    return {
-      success: false,
-      questions: [],
-      passages: {},
-      errors,
-      metadata
-    };
-  }
-
   return {
     success: questions.length > 0,
     questions,
     passages: passagesResult,
-    errors: [],
+    errors,
     metadata
   };
 }

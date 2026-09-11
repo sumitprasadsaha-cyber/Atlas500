@@ -231,3 +231,114 @@ Correct Answer: A
   assert.ok(result.questions[0].question.includes("Assertion (A): The Sun is a star."));
   assert.ok(result.questions[0].question.includes("Reason (R): It generates its own heat and light through nuclear fusion."));
 });
+
+test("Parses Comprehension passage with linked questions correctly", () => {
+  const compInput = `
+3. Comprehension
+
+Read the following passage carefully.
+Water is one of the most important natural resources on Earth. It is essential for drinking, agriculture, industries, and maintaining ecosystems. Although nearly 71% of the Earth's surface is covered with water, only a small percentage is freshwater.
+
+1. Why is water considered an important natural resource?
+A. It is only used for drinking.
+B. It is essential for life and many human activities. ✅
+C. It is available in unlimited quantities.
+D. It is only useful for industries.
+Correct Answer: B
+
+2. Approximately what percentage of the Earth's surface is covered with water?
+A. 51%
+B. 61%
+C. 71% ✅
+D. 81%
+Correct Answer: C
+`;
+
+  const result = parseAssessmentText(compInput, mockContext);
+  assert.equal(result.success, true);
+  assert.equal(result.questions.length, 2);
+  assert.ok(result.passages);
+  const passageKeys = Object.keys(result.passages);
+  assert.equal(passageKeys.length, 1);
+  const passage = result.passages[passageKeys[0]];
+  assert.ok(passage.text.includes("Water is one of the most important natural resources"));
+
+  // Check question links to passage
+  assert.equal(result.questions[0].passageId, passage.id);
+  assert.equal(result.questions[1].passageId, passage.id);
+  assert.equal(result.questions[0].correctAnswer, "B");
+  assert.equal(result.questions[1].correctAnswer, "C");
+});
+
+test("Parses complete sample test with MCQs, True/False, and Comprehension", () => {
+  const sampleTestText = `Chapter 8: World Geography: Some Glimpses
+
+Topic 1: The Blue Planet – Water and Oceans
+
+1. Multiple Choice Questions
+
+1. What is the capital of Nepal?
+A. Pokhara
+B. Kathmandu ✅
+C. Biratnagar
+D. Butwal
+
+Correct Answer: B
+
+⸻
+
+2. Approximately what percentage of Earth’s surface is covered by oceans?
+A. 29%
+B. 50%
+C. 71% ✅
+D. 97%
+
+Correct Answer: C
+
+⸻
+
+2. True / False
+
+3. Earth revolves around the Sun.
+True ✅
+False
+
+Correct Answer: True
+
+⸻
+
+4. Sound travels faster than light.
+True
+False ❌
+
+Correct Answer: False
+
+⸻
+
+3. Comprehension
+
+Read the following passage carefully.
+Water is one of the most important natural resources on Earth. It is essential for drinking, agriculture, industries, and maintaining ecosystems.
+
+5. Why is water considered an important natural resource?
+A. It is only used for drinking.
+B. It is essential for life and many human activities. ✅
+C. It is available in unlimited quantities.
+D. It is only useful for industries.
+
+Correct Answer: B
+`;
+
+  const result = parseAssessmentText(sampleTestText, mockContext);
+  assert.equal(result.success, true);
+  assert.equal(result.questions.length, 5);
+  assert.equal(result.questions[0].type, "mcq");
+  assert.equal(result.questions[1].type, "mcq");
+  assert.equal(result.questions[2].type, "true_false");
+  assert.equal(result.questions[3].type, "true_false");
+  assert.equal(result.questions[4].type, "mcq");
+  assert.ok(result.questions[4].passageId);
+  assert.equal(result.questions[2].correctAnswer, "True");
+  assert.equal(result.questions[3].correctAnswer, "False");
+});
+
