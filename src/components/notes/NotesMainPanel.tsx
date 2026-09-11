@@ -414,7 +414,7 @@ export default function NotesMainPanel({
                       </div>
                     </div>
 
-                    {/* Right: Chapter Action Buttons (+ Upload Note, Rename, Delete, Chapter Test) */}
+                    {/* Right: Chapter Action Buttons (+ Upload Note, Rename, Delete) */}
                     <div 
                       className="flex items-center gap-1.5 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 dark:border-slate-800 justify-end w-full sm:w-auto flex-wrap"
                       onClick={(e) => e.stopPropagation()}
