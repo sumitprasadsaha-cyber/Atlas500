@@ -68,7 +68,7 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [selectedClass, setSelectedClass] = useState<string>("All");
   const [selectedSubject, setSelectedSubject] = useState<string>("All");
-  const [selectedType, setSelectedType] = useState<"ALL" | "SUBJECT" | "CHAPTER" | "TOPIC" | "PYQ">("ALL");
+  const [selectedType, setSelectedType] = useState<"ALL" | "SUBJECT" | "CHAPTER" | "PYQ">("ALL");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Modal states
@@ -142,6 +142,35 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
     });
     return Array.from(subs).sort();
   }, [notes, testsBank]);
+
+  // Compute available uploaded chapters for the selected class & subject
+  const availableChaptersForNewTest = useMemo(() => {
+    const chMap = new Map<number, string>();
+    const selectedClassNorm = toStableClassId(newTestClass);
+    const selectedSubjNorm = newTestSubject.trim().toLowerCase();
+
+    notes.forEach((n) => {
+      const noteClass = toStableClassId(n.classGrade || (n as any).className || "");
+      const noteSubj = (n.subject || (n as any).subjectName || "").trim().toLowerCase();
+      if (noteClass === selectedClassNorm && noteSubj === selectedSubjNorm && n.chapterNo) {
+        chMap.set(n.chapterNo, n.chapterName || `Chapter ${n.chapterNo}`);
+      }
+    });
+
+    Object.values(testsBank).forEach((t) => {
+      const testClass = toStableClassId(t.classGrade || "");
+      const testSubj = (t.subject || "").trim().toLowerCase();
+      if (testClass === selectedClassNorm && testSubj === selectedSubjNorm && t.chapterNo) {
+        if (!chMap.has(t.chapterNo)) {
+          chMap.set(t.chapterNo, t.chapterName || `Chapter ${t.chapterNo}`);
+        }
+      }
+    });
+
+    return Array.from(chMap.entries())
+      .map(([chapterNo, chapterName]) => ({ chapterNo, chapterName }))
+      .sort((a, b) => a.chapterNo - b.chapterNo);
+  }, [notes, testsBank, newTestClass, newTestSubject]);
 
   // Transform testsBank into a sorted list
   const testList = useMemo(() => {
@@ -302,7 +331,6 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
               { id: "ALL", label: "All Tests", count: Object.keys(testsBank).length },
               { id: "SUBJECT", label: "Subject Tests", count: Object.values(testsBank).filter(t => (t.testType || (t as any).test_type) === "SUBJECT").length },
               { id: "CHAPTER", label: "Chapter Tests", count: Object.values(testsBank).filter(t => (t.testType || (t as any).test_type) === "CHAPTER" || (t.testType || (t as any).test_type) === "FULL_CHAPTER").length },
-              { id: "TOPIC", label: "Topic Tests", count: Object.values(testsBank).filter(t => !(t.testType || (t as any).test_type) || (t.testType || (t as any).test_type) === "TOPIC").length },
               { id: "PYQ", label: "PYQs", count: Object.values(testsBank).filter(t => (t.testType || (t as any).test_type) === "PYQ").length },
             ].map((tab) => (
               <button
@@ -594,11 +622,10 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                   Test Type
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {[
                     { id: "CHAPTER", label: "Chapter Test" },
                     { id: "SUBJECT", label: "Subject Test" },
-                    { id: "TOPIC", label: "Topic Test" },
                     { id: "PYQ", label: "PYQ Exam" },
                   ].map((t) => (
                     <button
@@ -655,45 +682,74 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
                 />
               </div>
 
-              {/* Chapter Details if Chapter or Topic test */}
-              {newTestType !== "SUBJECT" && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Chapter No.
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={newTestChapterNo}
-                      onChange={(e) => setNewTestChapterNo(parseInt(e.target.value, 10) || 1)}
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white font-medium"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Chapter Name
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Nationalism in India"
-                      value={newTestChapterName}
-                      onChange={(e) => setNewTestChapterName(e.target.value)}
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white font-medium"
-                    />
+              {/* Chapter Details if Chapter test */}
+              {newTestType === "CHAPTER" && (
+                <div className="space-y-3">
+                  {availableChaptersForNewTest.length > 0 && (
+                    <div>
+                      <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 text-xs">
+                        Select from Uploaded Chapters ({availableChaptersForNewTest.length} available)
+                      </label>
+                      <select
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (!val) return;
+                          const found = availableChaptersForNewTest.find((c) => String(c.chapterNo) === val);
+                          if (found) {
+                            setNewTestChapterNo(found.chapterNo);
+                            setNewTestChapterName(found.chapterName);
+                          }
+                        }}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white font-semibold text-xs"
+                      >
+                        <option value="">-- Choose an uploaded chapter or enter below --</option>
+                        {availableChaptersForNewTest.map((c) => (
+                          <option key={c.chapterNo} value={c.chapterNo}>
+                            Chapter {c.chapterNo}: {c.chapterName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                        Chapter No.
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={newTestChapterNo}
+                        onChange={(e) => setNewTestChapterNo(parseInt(e.target.value, 10) || 1)}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white font-medium"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                        Chapter Name
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Nationalism in India"
+                        value={newTestChapterName}
+                        onChange={(e) => setNewTestChapterName(e.target.value)}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white font-medium"
+                      />
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* Topic Name if Topic test or PYQ */}
-              {(newTestType === "TOPIC" || newTestType === "PYQ") && (
+              {/* Tag if PYQ */}
+              {newTestType === "PYQ" && (
                 <div>
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                    {newTestType === "PYQ" ? "Exam / Year Tag" : "Topic Name"}
+                    Exam / Year Tag
                   </label>
                   <input
                     type="text"
-                    placeholder={newTestType === "PYQ" ? "e.g. UPSC Prelims 2023 Paper 1" : "e.g. Rise of Mass Nationalism"}
+                    placeholder="e.g. UPSC Prelims 2023 Paper 1"
                     value={newTestTopicName}
                     onChange={(e) => setNewTestTopicName(e.target.value)}
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white font-medium"

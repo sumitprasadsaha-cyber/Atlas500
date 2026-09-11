@@ -17,7 +17,9 @@ import {
   ZoomIn,
   Loader2,
   AlertTriangle,
-  Info
+  Info,
+  CheckSquare,
+  Square
 } from "lucide-react";
 import ImageZoomModal from "./ImageZoomModal";
 import { ParsedAssessmentQuestion, TestAttemptRecord, ComprehensionPassage, AssessmentTestType, TopicPracticeTest } from "../types";
@@ -25,7 +27,8 @@ import {
   saveTestAttempt, 
   getStudentNextAttemptNumber,
   getStudentTestAttempts,
-  normalizeQuestionOptions
+  normalizeQuestionOptions,
+  getAssessmentQuestionTypeLabel
 } from "../utils/assessmentParser";
 import {
   buildTopicTestId,
@@ -380,6 +383,20 @@ export default function StudentPracticeTestModal({
     });
   };
 
+  const handleToggleMultipleSelect = (questionId: string, optionLetter: string) => {
+    const currentVal = userAnswers[questionId] || "";
+    let selected = currentVal.split(/[, ]+/).filter(Boolean).map(s => s.trim().toUpperCase());
+    const target = optionLetter.trim().toUpperCase();
+    if (selected.includes(target)) {
+      selected = selected.filter(s => s !== target);
+    } else {
+      selected.push(target);
+    }
+    selected.sort();
+    const nextAns = selected.join(", ");
+    handleSelectAnswer(questionId, nextAns);
+  };
+
   const handleNextQuestion = () => {
     if (currentQuestionIdx < questions.length - 1) {
       const nextIdx = currentQuestionIdx + 1;
@@ -431,34 +448,121 @@ export default function StudentPracticeTestModal({
     let correctCount = 0;
     let wrongCount = 0;
     let unattemptedCount = 0;
+    let totalMarksAwarded = 0;
+    let totalPossibleMarks = 0;
+
+    const questionScores: Record<string, {
+      marks: number;
+      maxMarks: number;
+      isCorrect: boolean;
+      type: import("../types").AssessmentQuestionType;
+      studentAnswer?: string;
+      correctAnswer?: string;
+      modelAnswer?: string;
+      feedback?: string;
+      status?: "evaluated" | "pending_review";
+    }> = {};
 
     questions.forEach((q) => {
+      const qMaxMarks = typeof q.marks === "number" && q.marks > 0 ? q.marks : 1;
+      totalPossibleMarks += qMaxMarks;
+
       const studentAns = userAnswers[q.id];
-      if (!studentAns) {
+      const isSubjective = (!q.options || q.options.length === 0) || 
+        ["very_short_answer", "short_answer", "long_answer"].includes(q.type);
+
+      if (!studentAns || studentAns.trim() === "") {
         unattemptedCount++;
+        questionScores[q.id] = {
+          marks: 0,
+          maxMarks: qMaxMarks,
+          isCorrect: false,
+          type: q.type,
+          studentAnswer: "",
+          correctAnswer: q.correctAnswer || q.modelAnswer || "",
+          modelAnswer: q.modelAnswer || q.correctAnswer || "",
+          status: "evaluated"
+        };
         return;
       }
 
-      if (q.type !== "true_false") {
-        if (studentAns.toLowerCase().startsWith(q.correctAnswer.toLowerCase())) {
-          correctCount++;
+      let isCorrect = false;
+      let awardedMarks = 0;
+
+      if (q.type === "true_false") {
+        isCorrect = studentAns.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim();
+      } else if (isSubjective) {
+        const expected = (q.correctAnswer || q.modelAnswer || "").trim().toLowerCase();
+        const studentClean = studentAns.trim().toLowerCase();
+
+        if (expected && (studentClean === expected || (expected.length < 60 && studentClean.includes(expected)))) {
+          isCorrect = true;
+          awardedMarks = qMaxMarks;
+        } else if (expected) {
+          const expectedWords = expected.split(/\s+/).filter(w => w.length > 3);
+          const matchedWords = expectedWords.filter(w => studentClean.includes(w));
+          const matchRatio = expectedWords.length > 0 ? (matchedWords.length / expectedWords.length) : 0;
+
+          if (matchRatio >= 0.6) {
+            isCorrect = true;
+            awardedMarks = qMaxMarks;
+          } else if (matchRatio >= 0.3) {
+            awardedMarks = Math.round(qMaxMarks * 0.5 * 10) / 10;
+            isCorrect = false;
+          } else {
+            isCorrect = false;
+            awardedMarks = 0;
+          }
         } else {
-          wrongCount++;
+          isCorrect = studentClean.length > 5;
+          awardedMarks = isCorrect ? qMaxMarks : 0;
         }
+      } else if (q.type === "multiple_select") {
+        const studentSet = studentAns.toUpperCase().split(/[, ]+/).filter(Boolean).sort().join(",");
+        const correctSet = q.correctAnswer.toUpperCase().split(/[, ]+/).filter(Boolean).sort().join(",");
+        isCorrect = studentSet === correctSet;
       } else {
-        if (studentAns.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()) {
-          correctCount++;
+        const corrNorm = q.correctAnswer.trim().toLowerCase();
+        const studentNorm = studentAns.trim().toLowerCase();
+        const optChar = studentNorm.charAt(0);
+        const corrChar = corrNorm.charAt(0);
+        isCorrect = optChar === corrChar || studentNorm === corrNorm || studentNorm.startsWith(corrNorm);
+      }
+
+      if (!isSubjective) {
+        if (isCorrect) {
+          awardedMarks = qMaxMarks;
+        } else if (q.negativeMarks && q.negativeMarks > 0) {
+          awardedMarks = -q.negativeMarks;
         } else {
-          wrongCount++;
+          awardedMarks = 0;
         }
       }
+
+      if (isCorrect) {
+        correctCount++;
+      } else {
+        wrongCount++;
+      }
+
+      totalMarksAwarded += awardedMarks;
+
+      questionScores[q.id] = {
+        marks: awardedMarks,
+        maxMarks: qMaxMarks,
+        isCorrect,
+        type: q.type,
+        studentAnswer: studentAns,
+        correctAnswer: q.correctAnswer || q.modelAnswer || "",
+        modelAnswer: q.modelAnswer || q.correctAnswer || "",
+        status: isSubjective && !isCorrect ? "pending_review" : "evaluated"
+      };
     });
 
     const totalQuestions = questions.length;
-    const totalMarks = testMeta?.totalMarks && testMeta.totalMarks > 0 ? testMeta.totalMarks : totalQuestions;
-    const markPerQuestion = totalMarks / (totalQuestions || 1);
-    const score = Math.round(correctCount * markPerQuestion * 10) / 10;
-    const percentage = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
+    const totalMarks = testMeta?.totalMarks && testMeta.totalMarks > 0 ? testMeta.totalMarks : (totalPossibleMarks || totalQuestions);
+    const score = Math.max(0, Math.round(totalMarksAwarded * 10) / 10);
+    const percentage = totalMarks > 0 ? Math.min(100, Math.max(0, Math.round((score / totalMarks) * 100))) : 0;
     const passingMarks = testMeta?.passingMarks;
     const isPassed = passingMarks != null ? (score >= passingMarks) : percentage >= 40;
 
@@ -501,7 +605,8 @@ export default function StudentPracticeTestModal({
       correctAnswersCount: correctCount,
       wrongAnswersCount: wrongCount,
       unattemptedCount,
-      userAnswers
+      userAnswers,
+      questionScores
     };
 
     saveTestAttempt(attemptRecord);
@@ -669,7 +774,10 @@ export default function StudentPracticeTestModal({
                   Question {currentQuestionIdx + 1} of {questions.length}
                 </span>
                 <span className="text-[11px] sm:text-xs font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
-                  {currentQuestion.passageId ? "COMPREHENSION MCQ" : (currentQuestion.type === "mcq" ? "MCQ" : (currentQuestion.type === "assertion_reason" ? "ASSERTION & REASON" : "TRUE / FALSE"))}
+                  {getAssessmentQuestionTypeLabel(currentQuestion.type, currentQuestion.passageId)}
+                </span>
+                <span className="text-[11px] sm:text-xs font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 border border-indigo-200 dark:border-indigo-800 px-2.5 py-1 rounded-lg">
+                  {currentQuestion.marks ?? 1} {((currentQuestion.marks ?? 1) === 1) ? "Mark" : "Marks"}
                 </span>
                 <span className="text-[11px] sm:text-xs font-extrabold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
                   {Object.keys(userAnswers).length} / {questions.length} Answered
@@ -769,7 +877,108 @@ export default function StudentPracticeTestModal({
               <div className="my-3">
                 {(() => {
                   const studentAns = userAnswers[currentQuestion.id];
-                  const hasAnswered = studentAns !== undefined && studentAns !== null;
+                  const hasAnswered = studentAns !== undefined && studentAns !== null && studentAns !== "";
+                  const isSubjective = (!currentQuestion.options || currentQuestion.options.length === 0) || 
+                    ["very_short_answer", "short_answer", "long_answer"].includes(currentQuestion.type);
+                  const isMultipleSelect = currentQuestion.type === "multiple_select";
+                  const isTrueFalse = currentQuestion.type === "true_false";
+
+                  if (isSubjective) {
+                    const charCount = (studentAns || "").length;
+                    const wordCount = (studentAns || "").trim() ? (studentAns || "").trim().split(/\s+/).length : 0;
+
+                    return (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                          <span className="font-bold flex items-center gap-1 text-indigo-600 dark:text-indigo-400">
+                            <Info className="w-3.5 h-3.5" />
+                            {currentQuestion.type === "very_short_answer" 
+                              ? "Very Short Answer (1-2 sentences)" 
+                              : currentQuestion.type === "short_answer" 
+                              ? "Short Answer (30-50 words recommended)" 
+                              : "Detailed Long Answer (Key points & explanation)"}
+                          </span>
+                          <span className="text-[11px] font-semibold">
+                            {wordCount} words • {charCount} chars
+                          </span>
+                        </div>
+
+                        <textarea
+                          rows={currentQuestion.type === "long_answer" ? 6 : currentQuestion.type === "short_answer" ? 4 : 3}
+                          value={studentAns || ""}
+                          onChange={(e) => handleSelectAnswer(currentQuestion.id, e.target.value)}
+                          placeholder={
+                            currentQuestion.type === "very_short_answer"
+                              ? "Write your direct answer here..."
+                              : currentQuestion.type === "long_answer"
+                              ? "Type your detailed explanation with headings or bullet points here..."
+                              : "Type your answer here..."
+                          }
+                          className="w-full p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-medium text-xs sm:text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none leading-relaxed transition-all"
+                        />
+
+                        <div className="flex items-center justify-between text-[11px] px-1">
+                          <div className="flex items-center gap-1.5 font-bold">
+                            {hasAnswered ? (
+                              <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Answer Recorded
+                              </span>
+                            ) : (
+                              <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                                <HelpCircle className="w-3.5 h-3.5" /> Pending Response
+                              </span>
+                            )}
+                          </div>
+                          {currentQuestion.rubric && (
+                            <span className="text-slate-500 dark:text-slate-400 italic">
+                              Rubric: {currentQuestion.rubric}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (isMultipleSelect) {
+                    const selectedList = (studentAns || "").toUpperCase().split(/[, ]+/).filter(Boolean);
+                    const currentOptions = normalizeQuestionOptions(currentQuestion.options);
+
+                    return (
+                      <div className="space-y-2.5">
+                        <div className="p-2.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 text-[11px] font-bold text-indigo-800 dark:text-indigo-300 flex items-center gap-2">
+                          <Info className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                          <span>Multiple Correct Options: You can select one or more options.</span>
+                        </div>
+
+                        {currentOptions.map((opt, oIdx) => {
+                          const letter = opt.charAt(0).toUpperCase();
+                          const isSelected = selectedList.includes(letter);
+
+                          return (
+                            <button
+                              key={oIdx}
+                              type="button"
+                              onClick={() => handleToggleMultipleSelect(currentQuestion.id, letter)}
+                              className={`w-full min-h-[48px] p-3 sm:p-3.5 rounded-xl text-left text-xs sm:text-sm font-semibold transition-all border flex items-start sm:items-center justify-between gap-2.5 cursor-pointer ${
+                                isSelected
+                                  ? "bg-indigo-50 dark:bg-indigo-950/70 border-indigo-500 text-indigo-900 dark:text-indigo-200 font-bold ring-2 ring-indigo-500/30"
+                                  : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-indigo-300"
+                              }`}
+                            >
+                              <span className="flex-1 break-words leading-snug">{opt}</span>
+                              <div className="shrink-0 mt-0.5 sm:mt-0">
+                                {isSelected ? (
+                                  <CheckSquare className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                                ) : (
+                                  <Square className="w-5 h-5 text-slate-300 dark:text-slate-600" />
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  }
 
                   const isOptionCorrect = (optValue: string) => {
                     const corrNorm = currentQuestion.correctAnswer.trim().toLowerCase();
@@ -780,16 +989,15 @@ export default function StudentPracticeTestModal({
                   };
 
                   const isStudentCorrect = hasAnswered && isOptionCorrect(studentAns);
+                  const currentOptions = !isTrueFalse
+                    ? normalizeQuestionOptions(currentQuestion.options)
+                    : currentQuestion.options;
 
-                    const currentOptions = currentQuestion.type !== "true_false"
-                      ? normalizeQuestionOptions(currentQuestion.options)
-                      : currentQuestion.options;
-
-                    return (
-                      <>
-                        {currentQuestion.type !== "true_false" ? (
-                          <div className="space-y-2.5">
-                            {currentOptions.map((opt, oIdx) => {
+                  return (
+                    <>
+                      {!isTrueFalse ? (
+                        <div className="space-y-2.5">
+                          {currentOptions.map((opt, oIdx) => {
                             const letter = opt.charAt(0);
                             const isThisSelected = studentAns === letter;
                             const isThisCorrect = isOptionCorrect(letter);
@@ -1045,42 +1253,45 @@ export default function StudentPracticeTestModal({
                   Detailed Answer Review
                 </h4>
 
-                <div className="space-y-2.5">
+                <div className="space-y-3">
                   {questions.map((q, idx) => {
                     const userAns = userAnswers[q.id];
-                    const isAttempted = !!userAns;
-                    let isCorrect = false;
-
-                    if (isAttempted) {
-                      if (q.type !== "true_false") {
-                        isCorrect = userAns.toLowerCase().startsWith(q.correctAnswer.toLowerCase());
-                      } else {
-                        isCorrect = userAns.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim();
-                      }
-                    }
+                    const isAttempted = !!(userAns && userAns.trim());
+                    const qScore = lastAttemptRecord.questionScores?.[q.id];
+                    const qMaxMarks = qScore?.maxMarks ?? (q.marks ?? 1);
+                    const marksAwarded = qScore?.marks ?? (isAttempted ? 1 : 0);
+                    const isCorrect = qScore?.isCorrect ?? false;
+                    const isSubjective = (!q.options || q.options.length === 0) || 
+                      ["very_short_answer", "short_answer", "long_answer"].includes(q.type);
 
                     return (
                       <div
                         key={q.id}
-                        className={`p-3.5 rounded-xl border space-y-1.5 ${
+                        className={`p-4 rounded-xl border space-y-2.5 transition-all ${
                           !isAttempted
                             ? "bg-amber-50/40 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/60"
                             : isCorrect
                             ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60"
+                            : marksAwarded > 0
+                            ? "bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800/60"
                             : "bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/60"
                         }`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 space-y-1">
-                            {q.passageId && (
-                              <span className="inline-block text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
-                                Comprehension
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                {getAssessmentQuestionTypeLabel(q.type, q.passageId)}
                               </span>
-                            )}
-                            <p className="text-xs font-bold text-slate-800 dark:text-slate-200 leading-snug break-words">
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                {marksAwarded} / {qMaxMarks} {qMaxMarks === 1 ? "Mark" : "Marks"}
+                              </span>
+                            </div>
+                            <p className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 leading-snug break-words">
                               Q{idx + 1}. {q.question}
                             </p>
                           </div>
+
                           {!isAttempted ? (
                             <span className="text-[11px] font-bold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded-md border border-amber-300 dark:border-amber-800 flex items-center gap-1 shrink-0">
                               <HelpCircle className="w-3 h-3 text-amber-600 dark:text-amber-400" /> Not Attempted
@@ -1089,6 +1300,10 @@ export default function StudentPracticeTestModal({
                             <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-950/80 px-2 py-0.5 rounded-md border border-emerald-300 dark:border-emerald-800 flex items-center gap-1 shrink-0">
                               <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" /> Correct
                             </span>
+                          ) : marksAwarded > 0 ? (
+                            <span className="text-[11px] font-bold text-blue-700 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/80 px-2 py-0.5 rounded-md border border-blue-300 dark:border-blue-800 flex items-center gap-1 shrink-0">
+                              <CheckCircle2 className="w-3 h-3 text-blue-600 dark:text-blue-400" /> Partial Credit
+                            </span>
                           ) : (
                             <span className="text-[11px] font-bold text-rose-700 dark:text-rose-400 bg-rose-100 dark:bg-rose-950/80 px-2 py-0.5 rounded-md border border-rose-300 dark:border-rose-800 flex items-center gap-1 shrink-0">
                               <XCircle className="w-3 h-3 text-rose-600 dark:text-rose-400" /> Wrong
@@ -1096,20 +1311,45 @@ export default function StudentPracticeTestModal({
                           )}
                         </div>
 
-                        <div className="text-xs space-y-0.5 pt-1 font-semibold">
-                          <p className="text-slate-600 dark:text-slate-400">
-                            Your Choice:{" "}
+                        {/* Answer Details */}
+                        <div className="text-xs space-y-1.5 pt-1.5 border-t border-slate-200/50 dark:border-slate-800/50">
+                          <div>
+                            <span className="text-slate-500 dark:text-slate-400 font-semibold">Your Answer: </span>
                             {!isAttempted ? (
-                              <strong className="text-amber-700 dark:text-amber-400 italic">Not Attempted</strong>
+                              <span className="text-amber-700 dark:text-amber-400 italic font-bold">None</span>
                             ) : (
-                              <strong className={isCorrect ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"}>
+                              <span className={`font-bold ${isCorrect ? "text-emerald-700 dark:text-emerald-300" : marksAwarded > 0 ? "text-blue-700 dark:text-blue-300" : "text-rose-700 dark:text-rose-300"}`}>
                                 {userAns}
-                              </strong>
+                              </span>
                             )}
-                          </p>
-                          <p className="text-emerald-700 dark:text-emerald-300">
-                            Correct Answer: <strong>{q.correctAnswer}</strong>
-                          </p>
+                          </div>
+
+                          {q.correctAnswer && (
+                            <div>
+                              <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Correct Answer / Key: </span>
+                              <span className="font-bold text-emerald-800 dark:text-emerald-200">{q.correctAnswer}</span>
+                            </div>
+                          )}
+
+                          {q.modelAnswer && (
+                            <div className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">
+                              <p className="text-[11px] font-bold text-indigo-700 dark:text-indigo-400 uppercase">Model Answer / Key Points:</p>
+                              <p className="text-xs font-medium mt-0.5 whitespace-pre-wrap leading-relaxed">{q.modelAnswer}</p>
+                            </div>
+                          )}
+
+                          {q.rubric && (
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
+                              <span className="font-semibold">Grading Rubric:</span> {q.rubric}
+                            </p>
+                          )}
+
+                          {q.explanation && (
+                            <p className="text-[11px] text-slate-600 dark:text-slate-300 pt-1 leading-relaxed">
+                              <strong className="text-slate-800 dark:text-slate-200">Explanation: </strong>
+                              {q.explanation}
+                            </p>
+                          )}
                         </div>
                       </div>
                     );

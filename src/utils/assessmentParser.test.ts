@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseAssessmentText } from "./assessmentParser";
+import { parseAssessmentText, SAMPLE_QUESTION_PAPER } from "./assessmentParser";
 
 const mockContext = {
   classGrade: "Class 10",
@@ -93,7 +93,7 @@ Correct Answer: True
 
   // Q3 Assertion & Reasoning check
   const q3 = result.questions[2];
-  assert.equal(q3.type, "assertion_reason");
+  assert.ok(q3.type === "assertion_reasoning" || q3.type === "assertion_reason");
   assert.ok(q3.question.includes("Assertion (A): Plants synthesize their own food through photosynthesis."));
   assert.ok(q3.question.includes("Reason (R): Photosynthesis converts light energy into chemical energy stored in glucose."));
   assert.equal(q3.options.length, 4);
@@ -227,7 +227,7 @@ Correct Answer: A
   const result = parseAssessmentText(input, mockContext);
   assert.equal(result.success, true);
   assert.equal(result.questions.length, 1);
-  assert.equal(result.questions[0].type, "assertion_reason");
+  assert.ok(result.questions[0].type === "assertion_reasoning" || result.questions[0].type === "assertion_reason");
   assert.ok(result.questions[0].question.includes("Assertion (A): The Sun is a star."));
   assert.ok(result.questions[0].question.includes("Reason (R): It generates its own heat and light through nuclear fusion."));
 });
@@ -341,4 +341,85 @@ Correct Answer: B
   assert.equal(result.questions[2].correctAnswer, "True");
   assert.equal(result.questions[3].correctAnswer, "False");
 });
+
+test("Parses official 27-question sample paper across all 9 question types with dynamic marks", () => {
+  const result = parseAssessmentText(SAMPLE_QUESTION_PAPER, {
+    classGrade: "Class 10",
+    subject: "Social Science",
+    chapterNo: 4,
+    chapterName: "Globalisation and the Indian Economy",
+    topicName: "Globalisation"
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.questions.length, 27);
+
+  // Section 1: MCQs (Q1 to Q2) - 2 marks each
+  assert.equal(result.questions[0].type, "mcq");
+  assert.equal(result.questions[0].marks, 2);
+  assert.equal(result.questions[0].correctAnswer, "B");
+  assert.equal(result.questions[1].type, "mcq");
+  assert.equal(result.questions[1].marks, 2);
+  assert.equal(result.questions[1].correctAnswer, "B");
+
+  // Section 2: Multiple Select (Q1 to Q2) - 2 marks each
+  assert.equal(result.questions[2].type, "multiple_select");
+  assert.equal(result.questions[2].marks, 2);
+  assert.equal(result.questions[2].correctAnswer, "A, B, C");
+  assert.equal(result.questions[3].type, "multiple_select");
+  assert.equal(result.questions[3].marks, 2);
+  assert.equal(result.questions[3].correctAnswer, "A, B, C");
+
+  // Section 3: Assertion & Reasoning (Q1 to Q2) - 2 marks each
+  assert.ok(result.questions[4].type === "assertion_reasoning" || result.questions[4].type === "assertion_reason");
+  assert.equal(result.questions[4].marks, 2);
+  assert.ok(result.questions[5].type === "assertion_reasoning" || result.questions[5].type === "assertion_reason");
+  assert.equal(result.questions[5].marks, 2);
+
+  // Section 4: Comprehension (Q1 to Q7) - 2 marks each
+  assert.ok(result.passages && Object.keys(result.passages).length > 0);
+  for (let i = 6; i <= 12; i++) {
+    assert.ok(result.questions[i].passageId);
+    assert.equal(result.questions[i].marks, 2);
+  }
+
+  // Section 5: True / False (Q1 to Q4)
+  for (let i = 13; i <= 16; i++) {
+    assert.equal(result.questions[i].type, "true_false");
+  }
+  assert.equal(result.questions[13].correctAnswer, "False");
+  assert.equal(result.questions[14].correctAnswer, "True");
+  assert.equal(result.questions[15].correctAnswer, "False");
+  assert.equal(result.questions[16].correctAnswer, "True");
+
+  // Section 6: Very Short Answer (Q1 to Q2)
+  for (let i = 17; i <= 18; i++) {
+    assert.equal(result.questions[i].type, "very_short_answer");
+    assert.equal(result.questions[i].isSubjective, true);
+    assert.ok(result.questions[i].modelAnswer);
+  }
+
+  // Section 7: Short Answer (Q1 to Q2)
+  for (let i = 19; i <= 20; i++) {
+    assert.equal(result.questions[i].type, "short_answer");
+    assert.equal(result.questions[i].isSubjective, true);
+    assert.ok(result.questions[i].modelAnswer);
+  }
+
+  // Section 8: Long Answer (Q1 to Q2)
+  for (let i = 21; i <= 22; i++) {
+    assert.equal(result.questions[i].type, "long_answer");
+    assert.equal(result.questions[i].isSubjective, true);
+    assert.ok(result.questions[i].modelAnswer);
+  }
+
+  // Section 9: Case-Based (Q1 to Q4)
+  for (let i = 23; i <= 26; i++) {
+    assert.ok(result.questions[i].caseId);
+    assert.equal(result.questions[i].isSubjective, true);
+    assert.ok(result.questions[i].modelAnswer);
+  }
+});
+
 

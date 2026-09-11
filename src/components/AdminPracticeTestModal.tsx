@@ -25,7 +25,8 @@ import {
   Clock
 } from "lucide-react";
 import ImageZoomModal from "./ImageZoomModal";
-import { TopicPracticeTest, TestAttemptRecord, ParsedAssessmentQuestion, AssessmentTestType } from "../types";
+import { TopicPracticeTest, TestAttemptRecord, ParsedAssessmentQuestion, AssessmentTestType, AssessmentQuestionType } from "../types";
+import { SAMPLE_QUESTION_PAPER } from "../constants/sampleQuestionPaper";
 import {
   parseAssessmentText, 
   getAllTestAttempts,
@@ -69,80 +70,34 @@ interface AdminPracticeTestModalProps {
   onPracticeTestChanged?: () => void;
 }
 
-const SAMPLE_TEST_TEXT = `Chapter 8: World Geography: Some Glimpses
+const SAMPLE_TEST_TEXT = SAMPLE_QUESTION_PAPER;
 
-Topic 1: The Blue Planet – Water and Oceans
-
-Sample Test
-
-1. Multiple Choice Questions
-
-1. What is the capital of Nepal?
-A. Pokhara
-B. Kathmandu ✅
-C. Biratnagar
-D. Butwal
-
-Correct Answer: B
-
-⸻
-
-2. Approximately what percentage of Earth’s surface is covered by oceans?
-A. 29%
-B. 50%
-C. 71% ✅
-D. 97%
-
-Correct Answer: C
-
-⸻
-
-2. True / False
-
-3. Earth revolves around the Sun.
-True ✅
-False
-
-Correct Answer: True
-
-⸻
-
-4. Sound travels faster than light.
-True
-False ❌
-
-Correct Answer: False
-
-⸻
-
-3. Comprehension
-
-Read the following passage carefully.
-Water is one of the most important natural resources on Earth. It is essential for drinking, agriculture, industries, and maintaining ecosystems. Although nearly 71% of the Earth's surface is covered with water, only a small percentage is freshwater that can be used by humans. Therefore, conserving water is necessary for sustainable development.
-
-5. Why is water considered an important natural resource?
-A. It is only used for drinking.
-B. It is essential for life and many human activities. ✅
-C. It is available in unlimited quantities.
-D. It is only useful for industries.
-
-Correct Answer: B
-
-6. Approximately what percentage of the Earth's surface is covered with water?
-A. 51%
-B. 61%
-C. 71% ✅
-D. 81%
-
-Correct Answer: C
-
-7. Why should we conserve water?
-A. Freshwater resources are limited. ✅
-B. Oceans are drying up.
-C. Water cannot be recycled.
-D. Rainfall has stopped.
-
-Correct Answer: A`;
+export const getAssessmentQuestionTypeLabel = (type: string, passageId?: string): string => {
+  if (passageId) return "Comprehension";
+  switch (type) {
+    case "mcq":
+      return "MCQ";
+    case "multiple_select":
+      return "Multiple Select";
+    case "assertion_reason":
+    case "assertion_reasoning":
+      return "Assertion & Reason";
+    case "true_false":
+      return "True / False";
+    case "very_short_answer":
+      return "Very Short Answer";
+    case "short_answer":
+      return "Short Answer";
+    case "long_answer":
+      return "Long Answer";
+    case "case_based":
+      return "Case-Based";
+    case "comprehension":
+      return "Comprehension";
+    default:
+      return type.replace(/_/g, " ").toUpperCase();
+  }
+};
 
 export default function AdminPracticeTestModal({
   isOpen,
@@ -192,7 +147,11 @@ export default function AdminPracticeTestModal({
   const [editQText, setEditQText] = useState("");
   const [editQOptions, setEditQOptions] = useState<string[]>([]);
   const [editQCorrectAns, setEditQCorrectAns] = useState("");
-  const [editQType, setEditQType] = useState<"mcq" | "true_false" | "assertion_reason">("mcq");
+  const [editQType, setEditQType] = useState<AssessmentQuestionType>("mcq");
+  const [editQMarks, setEditQMarks] = useState<number>(1);
+  const [editQNegativeMarks, setEditQNegativeMarks] = useState<number | undefined>(undefined);
+  const [editQModelAnswer, setEditQModelAnswer] = useState("");
+  const [editQRubric, setEditQRubric] = useState("");
   const [editQImageUrl, setEditQImageUrl] = useState("");
   const [editQImageLabel, setEditQImageLabel] = useState("");
   const [editQImagePosition, setEditQImagePosition] = useState<"above" | "below">("below");
@@ -784,9 +743,13 @@ export default function AdminPracticeTestModal({
   const handleOpenEditQuestion = (q: ParsedAssessmentQuestion) => {
     setEditingQuestion(q);
     setEditQText(q.question);
-    setEditQOptions([...q.options]);
-    setEditQCorrectAns(q.correctAnswer);
+    setEditQOptions([...(q.options || [])]);
+    setEditQCorrectAns(q.correctAnswer || "");
     setEditQType(q.type);
+    setEditQMarks(typeof q.marks === "number" && q.marks > 0 ? q.marks : 1);
+    setEditQNegativeMarks(q.negativeMarks);
+    setEditQModelAnswer(q.modelAnswer || "");
+    setEditQRubric(q.rubric || "");
     setEditQImageUrl(q.imageUrl || "");
     setEditQImageLabel(q.imageLabel || "");
     setEditQImagePosition(q.imagePosition || "below");
@@ -800,6 +763,12 @@ export default function AdminPracticeTestModal({
       options: editQOptions,
       correctAnswer: editQCorrectAns,
       type: editQType,
+      marks: editQMarks,
+      negativeMarks: editQNegativeMarks,
+      modelAnswer: editQModelAnswer.trim() || undefined,
+      rubric: editQRubric.trim() || undefined,
+      marksPending: false,
+      marksSource: "manual",
       imageUrl: editQImageUrl.trim() || undefined,
       imageLabel: editQImageLabel.trim() || undefined,
       imagePosition: editQImagePosition
@@ -1120,13 +1089,26 @@ export default function AdminPracticeTestModal({
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs font-black text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950 px-2 py-0.5 rounded">
                           Q{idx + 1}
                         </span>
-                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded">
-                          {q.passageId ? "Comprehension MCQ" : (q.type === "mcq" ? "MCQ" : (q.type === "assertion_reason" ? "Assertion & Reason" : "True / False"))}
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded">
+                          {getAssessmentQuestionTypeLabel(q.type, q.passageId)}
                         </span>
+                        <span className="text-[10px] font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
+                          {q.marks ?? 1} Marks {q.marksSource ? `(${q.marksSource})` : ""}
+                        </span>
+                        {q.negativeMarks ? (
+                          <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 px-1.5 py-0.5 rounded">
+                            -{q.negativeMarks} Neg
+                          </span>
+                        ) : null}
+                        {q.marksPending && (
+                          <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 text-amber-600" /> Pending Marks
+                          </span>
+                        )}
                         {q.published === false && (
                           <span className="text-[10px] font-bold text-amber-600 bg-amber-100 dark:bg-amber-950 px-2 py-0.5 rounded flex items-center gap-1">
                             <Lock className="w-3 h-3" /> Unpublished
@@ -1329,28 +1311,49 @@ export default function AdminPracticeTestModal({
                       </>
                     )}
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                      {q.options.map((opt, oIdx) => {
-                        const optLetter = opt.charAt(0);
-                        const isCorrect = q.type === "mcq" ? optLetter === q.correctAnswer : opt === q.correctAnswer;
+                    {q.options && q.options.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                        {q.options.map((opt, oIdx) => {
+                          const optLetter = opt.charAt(0);
+                          const isCorrect = q.type === "mcq" ? optLetter === q.correctAnswer : opt === q.correctAnswer;
 
-                        return (
-                          <div
-                            key={oIdx}
-                            className={`p-2.5 rounded-lg text-xs font-semibold border flex items-center justify-between ${
-                              isCorrect
-                                ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 font-bold"
-                                : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                            }`}
-                          >
-                            <span>{opt}</span>
-                            {isCorrect && (
-                              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                            )}
+                          return (
+                            <div
+                              key={oIdx}
+                              className={`p-2.5 rounded-lg text-xs font-semibold border flex items-center justify-between ${
+                                isCorrect
+                                  ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 font-bold"
+                                  : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                              }`}
+                            >
+                              <span>{opt}</span>
+                              {isCorrect && (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Model Answer / Rubric for subjective or explained questions */}
+                    {q.modelAnswer && (
+                      <div className="p-3 bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl space-y-1.5 mt-2 text-xs">
+                        <div className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Expected / Model Answer:</span>
+                        </div>
+                        <div className="text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-line bg-white/70 dark:bg-slate-900/60 p-2.5 rounded-lg border border-emerald-100 dark:border-emerald-900/40 font-normal">
+                          {q.modelAnswer}
+                        </div>
+                        {q.rubric && (
+                          <div className="text-[11px] text-slate-600 dark:text-slate-400 italic pt-0.5">
+                            <strong className="text-slate-700 dark:text-slate-300 not-italic">Key Points / Rubric: </strong>
+                            {q.rubric}
                           </div>
-                        );
-                      })}
-                    </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1523,7 +1526,56 @@ export default function AdminPracticeTestModal({
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <div className="space-y-3 text-xs max-h-[70vh] overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Question Type:</label>
+                  <select
+                    value={editQType}
+                    onChange={(e) => setEditQType(e.target.value as AssessmentQuestionType)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-bold text-slate-800 dark:text-slate-200"
+                  >
+                    <option value="mcq">Multiple Choice Question (MCQ)</option>
+                    <option value="multiple_select">Multiple Select</option>
+                    <option value="assertion_reasoning">Assertion & Reason</option>
+                    <option value="true_false">True / False</option>
+                    <option value="very_short_answer">Very Short Answer (VSA)</option>
+                    <option value="short_answer">Short Answer (SA)</option>
+                    <option value="long_answer">Long Answer (LA)</option>
+                    <option value="case_based">Case-Based Question</option>
+                    <option value="comprehension">Comprehension Passage</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Marks:</label>
+                    <input
+                      type="number"
+                      min={0.5}
+                      step={0.5}
+                      value={editQMarks}
+                      onChange={(e) => setEditQMarks(parseFloat(e.target.value) || 1)}
+                      className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-bold text-indigo-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Neg. Marks:</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.25}
+                      value={editQNegativeMarks ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setEditQNegativeMarks(val === "" ? undefined : parseFloat(val) || 0);
+                      }}
+                      placeholder="0"
+                      className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-semibold"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Question Text:</label>
                 <textarea
@@ -1535,13 +1587,35 @@ export default function AdminPracticeTestModal({
               </div>
 
               <div>
-                <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Correct Answer:</label>
+                <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Correct / Expected Answer:</label>
                 <input
                   type="text"
                   value={editQCorrectAns}
                   onChange={(e) => setEditQCorrectAns(e.target.value)}
-                  placeholder="e.g. B or True"
+                  placeholder="e.g. B or True or keyword"
                   className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-bold text-emerald-600"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Model Answer / Explanation (For Evaluation):</label>
+                <textarea
+                  value={editQModelAnswer}
+                  onChange={(e) => setEditQModelAnswer(e.target.value)}
+                  rows={2}
+                  placeholder="Detailed expected answer or model solution..."
+                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-normal text-slate-900 dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Marking Rubric / Key Points:</label>
+                <input
+                  type="text"
+                  value={editQRubric}
+                  onChange={(e) => setEditQRubric(e.target.value)}
+                  placeholder="e.g. 1 mark for definition, 2 marks for 2 examples"
+                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs"
                 />
               </div>
 

@@ -319,7 +319,25 @@ export interface TuitionStats {
 
 export type AssessmentTestType = "TOPIC" | "CHAPTER" | "SUBJECT" | "PYQ" | "topic" | "chapter" | "subject" | "full_chapter" | "pyq";
 
+export type AssessmentQuestionType = 
+  | "mcq" 
+  | "multiple_select" 
+  | "assertion_reasoning" 
+  | "assertion_reason" 
+  | "true_false" 
+  | "comprehension" 
+  | "very_short_answer" 
+  | "short_answer" 
+  | "long_answer" 
+  | "case_based";
+
 export interface ComprehensionPassage {
+  id: string;
+  title?: string;
+  text: string;
+}
+
+export interface CaseStudy {
   id: string;
   title?: string;
   text: string;
@@ -332,10 +350,10 @@ export interface ParsedAssessmentQuestion {
   chapterNo: number;
   chapterName: string;
   topicName: string;
-  type: "mcq" | "true_false" | "assertion_reason";
+  type: AssessmentQuestionType;
   question: string;
   options: string[]; // Clean option text for student view (e.g. ["A. Plants and animals", "B. Internal and external forces"])
-  correctAnswer: string; // "A" | "B" | "C" | "D" or "True" | "False"
+  correctAnswer: string; // "A" | "B" | "A, B, C" | "True" | model answer text
   explanation?: string; // Optional explanation for the answer
   imageUrl?: string; // Optional image data URL or hosted image URL for diagram/image-based questions
   imageLabel?: string; // Optional diagram label, e.g. "Ocean-floor diagram"
@@ -347,6 +365,21 @@ export interface ParsedAssessmentQuestion {
   updatedAt?: string;
   passageId?: string; // Reference to parent ComprehensionPassage ID
   parentPassageId?: string; // Alias reference to parent ComprehensionPassage ID
+  caseId?: string; // Reference to parent CaseStudy ID
+  parentCaseId?: string; // Alias reference to parent CaseStudy ID
+
+  // Dynamic Marks System
+  marks?: number;
+  negativeMarks?: number;
+  marksSource?: "question_label" | "section_instruction" | "group_default" | "default_inferred" | string;
+  marksConfidence?: number;
+  marksPending?: boolean;
+
+  // Subjective / Written Evaluation Support
+  isSubjective?: boolean;
+  modelAnswer?: string;
+  keyPoints?: string[];
+  rubric?: string;
 }
 
 export interface TopicPracticeTest {
@@ -365,6 +398,7 @@ export interface TopicPracticeTest {
   rawText: string;
   questions: ParsedAssessmentQuestion[];
   passages?: Record<string, ComprehensionPassage>;
+  cases?: Record<string, CaseStudy>;
 
   // Assessment System Enhancement (vNext) settings
   testType?: AssessmentTestType;
@@ -410,4 +444,18 @@ export interface TestAttemptRecord {
   wrongAnswersCount: number;
   unattemptedCount?: number;
   userAnswers: Record<string, string>; // questionId -> chosen answer
+  
+  // Evaluation breakdown (Objective vs Subjective)
+  objectiveScore?: number;
+  subjectiveScore?: number;
+  evaluationStatus?: "evaluated" | "pending_review" | "partially_evaluated";
+  questionScores?: Record<string, { 
+    marks: number; 
+    maxMarks: number; 
+    isCorrect: boolean; 
+    feedback?: string; 
+    type: AssessmentQuestionType;
+    studentAnswer?: string;
+    modelAnswer?: string;
+  }>;
 }
