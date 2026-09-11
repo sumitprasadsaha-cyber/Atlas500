@@ -419,27 +419,6 @@ export default function NotesMainPanel({
                       className="flex items-center gap-1.5 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 dark:border-slate-800 justify-end w-full sm:w-auto flex-wrap"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {/* Chapter Test Button */}
-                      {onOpenChapterTest && (
-                        <button
-                          type="button"
-                          onClick={() => onOpenChapterTest(chNumber, chName)}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-bold shadow-2xs flex items-center gap-1 transition-all cursor-pointer flex-1 sm:flex-initial justify-center border ${
-                            checkIfChapterHasTest?.(chNumber)
-                              ? "bg-amber-600 hover:bg-amber-700 text-white border-amber-600 shadow-amber-500/20"
-                              : "bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 dark:hover:bg-amber-900/60 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800"
-                          }`}
-                          title={`Create or manage Chapter Test for Chapter ${chNumber}`}
-                          id={`chapter-test-btn-ch-${chNumber}`}
-                        >
-                          <Trophy className="w-3 h-3 text-amber-500" />
-                          <span>Chapter Test</span>
-                          {checkIfChapterHasTest?.(chNumber) && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          )}
-                        </button>
-                      )}
-
                       {/* + Upload Note / Add Topic Button */}
                       <button
                         type="button"

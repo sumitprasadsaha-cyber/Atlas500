@@ -110,6 +110,17 @@ export function buildSubjectTestId(
   return `${normClass}__${normSubj}__subject_test`;
 }
 
+export function buildPyqTestId(
+  classGrade: string = "",
+  subject: string = "",
+  yearOrPaper: string = ""
+): string {
+  const normClass = String(classGrade || "").toLowerCase().trim().replace(/\s+/g, "_");
+  const normSubj = String(subject || "").toLowerCase().trim().replace(/\s+/g, "_");
+  const normYear = String(yearOrPaper || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
+  return `${normClass}__${normSubj}__pyq_${normYear || "test"}`;
+}
+
 export function buildAssessmentTestId(
   classGrade: string = "",
   subject: string = "",
@@ -120,6 +131,7 @@ export function buildAssessmentTestId(
   const t = String(testType || "TOPIC").toUpperCase();
   if (t === "SUBJECT") return buildSubjectTestId(classGrade, subject);
   if (t === "CHAPTER" || t === "FULL_CHAPTER") return buildChapterTestId(classGrade, subject, chapterNo);
+  if (t === "PYQ") return buildPyqTestId(classGrade, subject, topicName);
   return buildTopicTestId(classGrade, subject, chapterNo, topicName);
 }
 

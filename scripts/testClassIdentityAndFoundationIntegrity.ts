@@ -228,16 +228,16 @@ async function runTests() {
   const manifestJson = JSON.parse(fs.readFileSync(path.resolve("./public/manifest.json"), "utf8"));
 
   assert(
-    APP_VERSION === "7.9.10",
-    `APP_VERSION constant is "7.9.10" (actual: ${APP_VERSION})`
+    APP_VERSION === "7.10.0",
+    `APP_VERSION constant is "7.10.0" (actual: ${APP_VERSION})`
   );
   assert(
-    pkgJson.version === "7.9.10",
-    `package.json version is "7.9.10" (actual: ${pkgJson.version})`
+    pkgJson.version === "7.10.0",
+    `package.json version is "7.10.0" (actual: ${pkgJson.version})`
   );
   assert(
-    manifestJson.version === "7.9.10",
-    `manifest.json version is "7.9.10" (actual: ${manifestJson.version})`
+    manifestJson.version === "7.10.0",
+    `manifest.json version is "7.10.0" (actual: ${manifestJson.version})`
   );
 
   // -------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { LayoutDashboard, Users, Settings as SettingsIcon, BookOpen, RefreshCw, Sparkles, Timer, Clock, FolderKanban, Radio, Loader2, AlertCircle, LogOut, ShieldAlert } from "lucide-react";
+import { LayoutDashboard, Users, Settings as SettingsIcon, BookOpen, RefreshCw, Sparkles, Timer, Clock, FolderKanban, Radio, Loader2, AlertCircle, LogOut, ShieldAlert, Trophy } from "lucide-react";
 import { Student, StudentServiceStatus, ChapterNote, ClassNote } from "./types";
 import { INITIAL_STUDENTS } from "./data";
 import Dashboard from "./components/Dashboard";
@@ -7,6 +7,8 @@ import StudentList from "./components/StudentList";
 import StudentDetails from "./components/StudentDetails";
 import SubjectNotes from "./components/SubjectNotes";
 import AdminNotesView from "./components/AdminNotesView";
+import AdminTestsView from "./components/tests/AdminTestsView";
+import StudentTestsView from "./components/tests/StudentTestsView";
 import LiveStudentsView from "./components/LiveStudentsView";
 import AddEditStudentModal from "./components/AddEditStudentModal";
 import ProfilePictureModal from "./components/ProfilePictureModal";
@@ -545,10 +547,10 @@ export default function App() {
   };
 
   // --- Navigation States ---
-  const [activeTab, setActiveTab] = useState<"Dashboard" | "LiveStudents" | "Notes" | "Students" | "My" | "Settings">(() => {
+  const [activeTab, setActiveTab] = useState<"Dashboard" | "LiveStudents" | "Notes" | "Tests" | "Students" | "My" | "Settings">(() => {
     try {
       const saved = sessionStorage.getItem("portal_active_tab");
-      if (saved && ["Dashboard", "LiveStudents", "Notes", "Students", "My", "Settings"].includes(saved)) {
+      if (saved && ["Dashboard", "LiveStudents", "Notes", "Tests", "Students", "My", "Settings"].includes(saved)) {
         return saved as any;
       }
     } catch {}
@@ -1673,6 +1675,19 @@ export default function App() {
             />
           )}
 
+          {activeTab === "Tests" && (
+            <AdminTestsView
+              notes={classNotes}
+              students={students}
+              onRefresh={() => {
+                const refreshedNotes = getLocalClassNotes();
+                setClassNotes(refreshedNotes);
+                const refreshedStudents = getLocalStudents();
+                setStudents(refreshedStudents);
+              }}
+            />
+          )}
+
           {activeTab === "Students" && (
             <StudentList
               students={students}
@@ -1755,6 +1770,13 @@ export default function App() {
               onDeleteNote={(subject, noteId) => handleDeleteNote(activeStudent.id, subject, noteId)}
               onUpdateStudent={handleUpdateStudent}
               isAdmin={false}
+            />
+          )}
+
+          {activeTab === "Tests" && (
+            <StudentTestsView
+              student={activeStudent}
+              notes={classNotes}
             />
           )}
 
@@ -1931,17 +1953,39 @@ export default function App() {
         {/* Content Area (flex: 1, min-h-0) */}
         <main className="flex-1 min-h-0 w-full flex flex-col overflow-hidden relative" id="main-content-viewport">
           <ErrorBoundary fallbackTitle="View Error">
-            {activeTab === "Notes" && auth.role === "admin" ? (
-              <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-0 sm:p-2 md:p-4">
-                <AdminNotesView
+            {(activeTab === "Notes" || activeTab === "Tests") && auth.role === "admin" ? (
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-0">
+                {activeTab === "Notes" ? (
+                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-0 sm:p-2 md:p-4">
+                    <AdminNotesView
+                      notes={classNotes}
+                      students={students}
+                      onRefresh={() => {
+                        const refreshedNotes = getLocalClassNotes();
+                        setClassNotes(refreshedNotes);
+                        const refreshedStudents = getLocalStudents();
+                        setStudents(refreshedStudents);
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <AdminTestsView
+                    notes={classNotes}
+                    students={students}
+                    onRefresh={() => {
+                      const refreshedNotes = getLocalClassNotes();
+                      setClassNotes(refreshedNotes);
+                      const refreshedStudents = getLocalStudents();
+                      setStudents(refreshedStudents);
+                    }}
+                  />
+                )}
+              </div>
+            ) : activeTab === "Tests" && auth.role === "student" && activeStudent ? (
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-0">
+                <StudentTestsView
+                  student={activeStudent}
                   notes={classNotes}
-                  students={students}
-                  onRefresh={() => {
-                    const refreshedNotes = getLocalClassNotes();
-                    setClassNotes(refreshedNotes);
-                    const refreshedStudents = getLocalStudents();
-                    setStudents(refreshedStudents);
-                  }}
                 />
               </div>
             ) : (
@@ -2043,6 +2087,28 @@ export default function App() {
               </button>
             )}
 
+            {/* Nav Tab: Tests (Admin only) */}
+            {auth.role === "admin" && (
+              <button
+                onClick={() => {
+                  setActiveTab("Tests");
+                  setSelectedStudentId(null);
+                  setActiveSubject(null);
+                }}
+                className={`flex flex-col items-center justify-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 min-h-[44px] ${
+                  activeTab === "Tests"
+                    ? "text-blue-600 dark:text-blue-400 scale-102 font-bold"
+                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                }`}
+                id="nav-btn-tests"
+              >
+                <Trophy className="w-5 h-5 stroke-[2] shrink-0" />
+                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 whitespace-nowrap">
+                  Tests
+                </span>
+              </button>
+            )}
+
             {/* Nav Tab 2: My Study Space (Students only) */}
             {auth.role === "student" && (
               <button
@@ -2060,6 +2126,27 @@ export default function App() {
                 <BookOpen className="w-5 h-5 stroke-[2] shrink-0" />
                 <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 whitespace-nowrap">
                   My Study Space
+                </span>
+              </button>
+            )}
+
+            {/* Nav Tab: Tests (Students only) */}
+            {auth.role === "student" && (
+              <button
+                onClick={() => {
+                  setActiveTab("Tests");
+                  setActiveSubject(null);
+                }}
+                className={`flex flex-col items-center justify-center gap-0.5 sm:gap-1 transition-all flex-1 py-1 min-h-[44px] ${
+                  activeTab === "Tests"
+                    ? "text-blue-600 dark:text-blue-400 scale-102 font-bold"
+                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                }`}
+                id="nav-btn-student-tests"
+              >
+                <Trophy className="w-5 h-5 stroke-[2] shrink-0" />
+                <span className="text-[9px] sm:text-[10px] font-bold tracking-wider uppercase mt-0.5 whitespace-nowrap">
+                  Tests
                 </span>
               </button>
             )}

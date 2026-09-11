@@ -1,8 +1,8 @@
 {
   "name": "Academy Connect",
   "short_name": "Academy",
-  "version": "7.9.10",
-  "description": "Academy Connect Tuition Management v7.9.10",
+  "version": "7.10.0",
+  "description": "Academy Connect Tuition Management v7.10.0",
   "theme_color": "#2563eb",
   "background_color": "#ffffff",
   "display": "standalone",

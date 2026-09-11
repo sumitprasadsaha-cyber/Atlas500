@@ -2,5 +2,5 @@
  * Application Version Constant
  * Centralized constant for all build, PWA, and runtime components.
  */
-export const APP_VERSION: string = "7.9.11";
-export const BASE_VERSION: string = "7.9.11";
+export const APP_VERSION: string = "7.10.0";
+export const BASE_VERSION: string = "7.10.0";

@@ -870,52 +870,6 @@ export default function SubjectNotes({
                                   </h3>
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
-                                  {/* Full Chapter Test Button */}
-                                  {(() => {
-                                    const studentIdentifier = studentId || studentName;
-                                    const allAttempts = getAllTestAttempts();
-                                    const chAttempts = allAttempts.filter((a) => {
-                                      const matchesStudent = a.studentId === studentIdentifier || (studentName && a.studentName.toLowerCase() === studentName.toLowerCase());
-                                      const matchesClass = a.classGrade.toLowerCase().trim() === "upsc";
-                                      const matchesSubj = a.subject.toLowerCase().trim() === subject.toLowerCase().trim();
-                                      const matchesCh = a.chapterNo === chGroup.chapterNo;
-                                      return matchesStudent && matchesClass && matchesSubj && matchesCh && a.testType === "full_chapter";
-                                    });
-                                    const latestChAttempt = chAttempts.length > 0 ? chAttempts[chAttempts.length - 1] : null;
-
-                                    return (
-                                      <div className="flex items-center gap-1.5">
-                                        {latestChAttempt && (
-                                          <span
-                                            className="px-2 py-0.5 rounded-lg text-xs font-black bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 flex items-center gap-1 shadow-2xs"
-                                            title={`Score: ${latestChAttempt.score}/${latestChAttempt.totalQuestions} (${latestChAttempt.percentage}%)`}
-                                          >
-                                            <Award className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                                            <span>{latestChAttempt.score}/{latestChAttempt.totalQuestions} ({latestChAttempt.percentage}%)</span>
-                                          </span>
-                                        )}
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setStudentTestTarget({
-                                              classGrade: "UPSC",
-                                              subject,
-                                              chapterNo: chGroup.chapterNo,
-                                              chapterName: chGroup.chapterName,
-                                              topicName: "Full Chapter Test",
-                                              testType: "full_chapter"
-                                            });
-                                          }}
-                                          className="px-2.5 py-1 bg-amber-50 dark:bg-amber-950/50 hover:bg-amber-100 text-amber-700 dark:text-amber-300 rounded-lg transition-all border border-amber-200/80 dark:border-amber-800/40 cursor-pointer text-xs font-bold flex items-center gap-1 shadow-2xs"
-                                          title="Take Full Chapter Practice Test"
-                                        >
-                                          <Trophy className="w-3.5 h-3.5 text-amber-500" />
-                                          <span className="hidden sm:inline">{latestChAttempt ? "Re-take Chapter Test" : "Full Chapter Test"}</span>
-                                        </button>
-                                      </div>
-                                    );
-                                  })()}
-
                                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
                                     {chGroup.topics.length} {chGroup.topics.length === 1 ? "Topic" : "Topics"}
                                   </span>
@@ -1360,54 +1314,6 @@ export default function SubjectNotes({
                         </h3>
                       </div>
                       <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
-                        {/* Full Chapter Test Button & Score */}
-                        {(() => {
-                          const firstNote = group.notes[0];
-                          const noteClass = firstNote?.classGrade || "";
-                          const studentIdentifier = studentId || studentName;
-                          const allAttempts = getAllTestAttempts();
-                          const chAttempts = allAttempts.filter((a) => {
-                            const matchesStudent = a.studentId === studentIdentifier || (studentName && a.studentName.toLowerCase() === studentName.toLowerCase());
-                            const matchesClass = a.classGrade.toLowerCase().trim() === noteClass.toLowerCase().trim();
-                            const matchesSubj = a.subject.toLowerCase().trim() === subject.toLowerCase().trim();
-                            const matchesCh = a.chapterNo === group.chapterNo;
-                            return matchesStudent && matchesClass && matchesSubj && matchesCh && a.testType === "full_chapter";
-                          });
-                          const latestChAttempt = chAttempts.length > 0 ? chAttempts[chAttempts.length - 1] : null;
-
-                          return (
-                            <div className="flex items-center gap-1.5">
-                              {latestChAttempt && (
-                                <span
-                                  className="px-2 py-0.5 rounded-lg text-xs font-black bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 flex items-center gap-1 shadow-2xs"
-                                  title={`Score: ${latestChAttempt.score}/${latestChAttempt.totalQuestions} (${latestChAttempt.percentage}%) on ${latestChAttempt.date}`}
-                                >
-                                  <Award className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                                  <span>{latestChAttempt.score}/{latestChAttempt.totalQuestions} ({latestChAttempt.percentage}%)</span>
-                                </span>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setStudentTestTarget({
-                                    classGrade: noteClass,
-                                    subject,
-                                    chapterNo: group.chapterNo,
-                                    chapterName: group.chapterName,
-                                    topicName: "Full Chapter Test",
-                                    testType: "full_chapter"
-                                  });
-                                }}
-                                className="px-2.5 py-1 bg-amber-50 dark:bg-amber-950/50 hover:bg-amber-100 text-amber-700 dark:text-amber-300 rounded-lg transition-all border border-amber-200/80 dark:border-amber-800/40 cursor-pointer text-xs font-bold flex items-center gap-1 shadow-2xs"
-                                title="Take Full Chapter Practice Test"
-                              >
-                                <Trophy className="w-3.5 h-3.5 text-amber-500" />
-                                <span className="hidden sm:inline">{latestChAttempt ? "Re-take Chapter Test" : "Full Chapter Test"}</span>
-                              </button>
-                            </div>
-                          );
-                        })()}
-
                         {isAdmin && (
                           <>
                             <button

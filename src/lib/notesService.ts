@@ -639,23 +639,32 @@ export async function deleteNotePipeline(noteId: string, note?: ClassNote): Prom
   notesLogger.info("DELETE_START", { noteId, storageKey });
 
   try {
-    // 1. Delete R2 storage files via /api/notes/:id
-    const res = await fetchWithRetry(`/api/notes/${encodeURIComponent(noteId)}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: noteId,
-        storageKey,
-      }),
-    });
+    // 1. Delete R2 storage files via /api/notes/:id (resilient: proceed if already deleted or missing)
+    try {
+      const res = await fetchWithRetry(
+        `/api/notes/${encodeURIComponent(noteId)}?action=delete&id=${encodeURIComponent(noteId)}&storageKey=${encodeURIComponent(storageKey)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: noteId,
+            storageKey,
+          }),
+        },
+        2,
+        400
+      );
 
-    if (!res.ok) {
-      let errMsg = "Delete failed. Please try again.";
-      try {
-        const errJson = await res.json();
-        if (errJson?.error) errMsg = errJson.error;
-      } catch {}
-      throw new Error(errMsg);
+      if (!res.ok && res.status !== 404) {
+        let errMsg = "";
+        try {
+          const errJson = await res.json();
+          if (errJson?.error) errMsg = errJson.error;
+        } catch {}
+        console.warn(`[NotesService] R2 storage deletion notice for note ${noteId} (status ${res.status}):`, errMsg);
+      }
+    } catch (storageErr) {
+      console.warn(`[NotesService] R2 storage delete request notice for note ${noteId}:`, storageErr);
     }
 
     // 2. Delete Firestore database record

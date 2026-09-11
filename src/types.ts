@@ -317,7 +317,7 @@ export interface TuitionStats {
 // SMART TOPIC-WISE ASSESSMENT SYSTEM TYPES
 // ----------------------------------------------------
 
-export type AssessmentTestType = "TOPIC" | "CHAPTER" | "SUBJECT" | "topic" | "chapter" | "subject" | "full_chapter";
+export type AssessmentTestType = "TOPIC" | "CHAPTER" | "SUBJECT" | "PYQ" | "topic" | "chapter" | "subject" | "full_chapter" | "pyq";
 
 export interface ComprehensionPassage {
   id: string;
