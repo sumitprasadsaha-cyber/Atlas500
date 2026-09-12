@@ -980,7 +980,7 @@ export async function fetchAllPracticeTests(): Promise<Record<string, TopicPract
           // Non-destructive backup to secondary storage
           syncTestBankToStorage(memoryTestBank).catch(() => {});
           return memoryTestBank;
-        } else if (!snap.empty) {
+        } else if (snap.empty) {
           // If Firestore collection returned 0 docs, empty the memory bank
           memoryTestBank = {};
           saveLocalTestBank(memoryTestBank, { silent: true });

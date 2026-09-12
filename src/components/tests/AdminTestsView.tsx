@@ -28,6 +28,7 @@ import {
 import { TopicPracticeTest, TestAttemptRecord, AssessmentTestType, ClassNote, Student } from "../../types";
 import { 
   fetchAllPracticeTests, 
+  subscribeToPracticeTests,
   deletePracticeTest,
   deleteTopicPracticeTest, 
   deleteChapterPracticeTest, 
@@ -57,6 +58,41 @@ const SCHOOL_CLASSES = [
 const UPSC_PAPERS = [
   "UPSC - GS Paper 1", "UPSC - GS Paper 2", "UPSC - GS Paper 3", "UPSC - GS Paper 4"
 ];
+
+/**
+ * Normalizes test type safely to one of the standard categories
+ */
+function getValidTestType(t: any): "SUBJECT" | "CHAPTER" | "TOPIC" | "PYQ" {
+  if (!t) return "TOPIC";
+  const rawType = String(t.testType || t.test_type || t.managedTestType || "").toUpperCase().trim();
+  if (rawType === "SUBJECT" || rawType === "SUBJECT TEST") return "SUBJECT";
+  if (rawType === "CHAPTER" || rawType === "FULL_CHAPTER" || rawType === "CHAPTER TEST") return "CHAPTER";
+  if (rawType === "PYQ" || rawType === "PYQ TEST" || rawType === "PREVIOUS YEAR QUESTIONS") return "PYQ";
+
+  // Secondary check: ID format conventions if testType was not explicitly saved
+  const idStr = String(t.id || t.testId || "");
+  if (idStr.endsWith("__subject_test")) return "SUBJECT";
+  if (idStr.endsWith("__chapter_test") || (idStr.includes("__chapter_") && idStr.includes("_test"))) return "CHAPTER";
+  if (idStr.includes("__pyq_") || idStr.endsWith("_pyq")) return "PYQ";
+
+  return "TOPIC";
+}
+
+/**
+ * Validates that a test is an active, valid test record:
+ * - Not deleted
+ * - Not a draft
+ * - Has valid ID
+ * - Contains questions
+ */
+function isValidPracticeTest(t: any): boolean {
+  if (!t || typeof t !== "object") return false;
+  if (t.isDeleted === true || t.deleted === true || t.isDraft === true || t.draft === true) return false;
+  if (!t.id && !t.testId) return false;
+  const qCount = Array.isArray(t.questions) ? t.questions.length : (Number(t.questionCount) || Number(t.totalQuestions) || 0);
+  if (qCount <= 0) return false;
+  return true;
+}
 
 export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
   notes = [],
@@ -118,6 +154,10 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
       if (updated) setAttempts(updated);
     });
 
+    const unsubBank = subscribeToPracticeTests((updatedBank) => {
+      if (updatedBank) setTestsBank({ ...updatedBank });
+    });
+
     const handleSync = () => {
       fetchAllPracticeTests().then((bank) => {
         setTestsBank(bank || {});
@@ -127,22 +167,36 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
 
     return () => {
       unsubAttempts();
+      unsubBank();
       window.removeEventListener("practice-tests-updated", handleSync);
     };
   }, []);
 
-  // Compute all available subjects from notes and existing tests
+  // 1. Filter out deleted tests, drafts, or invalid tests from testsBank
+  const validTests = useMemo(() => {
+    return Object.values(testsBank)
+      .filter(isValidPracticeTest)
+      .map((t) => {
+        const computedType = getValidTestType(t);
+        return {
+          ...t,
+          computedType
+        };
+      });
+  }, [testsBank]);
+
+  // Compute all available subjects from notes and valid tests
   const availableSubjects = useMemo(() => {
     const subs = new Set<string>();
     notes.forEach((n) => {
       const s = n.subject || (n as any).subjectName;
       if (s) subs.add(s.trim());
     });
-    Object.values(testsBank).forEach((t) => {
+    validTests.forEach((t) => {
       if (t.subject) subs.add(t.subject.trim());
     });
     return Array.from(subs).sort();
-  }, [notes, testsBank]);
+  }, [notes, validTests]);
 
   // Compute available uploaded chapters for the selected class & subject
   const availableChaptersForNewTest = useMemo(() => {
@@ -158,7 +212,7 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
       }
     });
 
-    Object.values(testsBank).forEach((t) => {
+    validTests.forEach((t) => {
       const testClass = toStableClassId(t.classGrade || "");
       const testSubj = (t.subject || "").trim().toLowerCase();
       if (testClass === selectedClassNorm && testSubj === selectedSubjNorm && t.chapterNo) {
@@ -171,40 +225,11 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
     return Array.from(chMap.entries())
       .map(([chapterNo, chapterName]) => ({ chapterNo, chapterName }))
       .sort((a, b) => a.chapterNo - b.chapterNo);
-  }, [notes, testsBank, newTestClass, newTestSubject]);
+  }, [notes, validTests, newTestClass, newTestSubject]);
 
-  // Transform testsBank into a sorted list
-  const testList = useMemo(() => {
-    const list = Object.values(testsBank).map((t) => {
-      const rawType = (t.testType || (t as any).test_type || "TOPIC").toUpperCase();
-      let normalizedType: "SUBJECT" | "CHAPTER" | "TOPIC" | "PYQ" = "TOPIC";
-      if (rawType === "SUBJECT") normalizedType = "SUBJECT";
-      else if (rawType === "CHAPTER" || rawType === "FULL_CHAPTER") normalizedType = "CHAPTER";
-      else if (rawType === "PYQ") normalizedType = "PYQ";
-
-      // Count submissions for this test
-      const testAttempts = attempts.filter((a) => {
-        if (a.testId && t.id && a.testId === t.id) return true;
-        const matchClass = (a.classGrade || "").toLowerCase().trim() === (t.classGrade || "").toLowerCase().trim();
-        const matchSubj = (a.subject || "").toLowerCase().trim() === (t.subject || "").toLowerCase().trim();
-        if (normalizedType === "SUBJECT") return matchClass && matchSubj && a.testType === "subject";
-        if (normalizedType === "CHAPTER") return matchClass && matchSubj && a.chapterNo === t.chapterNo && (a.testType === "chapter" || a.testType === "full_chapter");
-        return matchClass && matchSubj && a.chapterNo === t.chapterNo && (a.topicName || "").toLowerCase().trim() === (t.topicName || "").toLowerCase().trim();
-      });
-
-      const avgScore = testAttempts.length > 0
-        ? Math.round(testAttempts.reduce((acc, curr) => acc + (curr.percentage || 0), 0) / testAttempts.length)
-        : 0;
-
-      return {
-        ...t,
-        computedType: normalizedType,
-        attemptsCount: testAttempts.length,
-        avgScore
-      };
-    });
-
-    return list.filter((t) => {
+  // 2. Base dataset filtered by active Class, Subject, and Search query (independent of selected tab)
+  const filteredBaseTests = useMemo(() => {
+    return validTests.filter((t) => {
       // Class filter
       if (selectedClass !== "All") {
         const normSelected = toStableClassId(selectedClass);
@@ -217,14 +242,9 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
         if ((t.subject || "").toLowerCase().trim() !== selectedSubject.toLowerCase().trim()) return false;
       }
 
-      // Type filter
-      if (selectedType !== "ALL" && t.computedType !== selectedType) {
-        return false;
-      }
-
       // Search query
       if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+        const q = searchQuery.toLowerCase().trim();
         const titleMatch = (t.title || "").toLowerCase().includes(q);
         const subjMatch = (t.subject || "").toLowerCase().includes(q);
         const chMatch = (t.chapterName || "").toLowerCase().includes(q);
@@ -235,7 +255,55 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
 
       return true;
     });
-  }, [testsBank, attempts, selectedClass, selectedSubject, selectedType, searchQuery]);
+  }, [validTests, selectedClass, selectedSubject, searchQuery]);
+
+  // 3. Tab counts calculated from the exact same filtered and current dataset
+  const tabCounts = useMemo(() => {
+    const counts = {
+      ALL: filteredBaseTests.length,
+      SUBJECT: 0,
+      CHAPTER: 0,
+      PYQ: 0
+    };
+
+    filteredBaseTests.forEach((t) => {
+      if (t.computedType === "SUBJECT") counts.SUBJECT++;
+      else if (t.computedType === "CHAPTER") counts.CHAPTER++;
+      else if (t.computedType === "PYQ") counts.PYQ++;
+    });
+
+    return counts;
+  }, [filteredBaseTests]);
+
+  // 4. Test list to display on page (cards) - exactly matching selected tab type
+  const testList = useMemo(() => {
+    const list = filteredBaseTests.filter((t) => {
+      if (selectedType === "ALL") return true;
+      return t.computedType === selectedType;
+    });
+
+    return list.map((t) => {
+      // Count submissions for this test
+      const testAttempts = attempts.filter((a) => {
+        if (a.testId && t.id && a.testId === t.id) return true;
+        const matchClass = (a.classGrade || "").toLowerCase().trim() === (t.classGrade || "").toLowerCase().trim();
+        const matchSubj = (a.subject || "").toLowerCase().trim() === (t.subject || "").toLowerCase().trim();
+        if (t.computedType === "SUBJECT") return matchClass && matchSubj && a.testType === "subject";
+        if (t.computedType === "CHAPTER") return matchClass && matchSubj && a.chapterNo === t.chapterNo && (a.testType === "chapter" || a.testType === "full_chapter");
+        return matchClass && matchSubj && a.chapterNo === t.chapterNo && (a.topicName || "").toLowerCase().trim() === (t.topicName || "").toLowerCase().trim();
+      });
+
+      const avgScore = testAttempts.length > 0
+        ? Math.round(testAttempts.reduce((acc, curr) => acc + (curr.percentage || 0), 0) / testAttempts.length)
+        : 0;
+
+      return {
+        ...t,
+        attemptsCount: testAttempts.length,
+        avgScore
+      };
+    });
+  }, [filteredBaseTests, selectedType, attempts]);
 
   // Deletion loading state
   const [isDeletingTest, setIsDeletingTest] = useState<boolean>(false);
@@ -347,10 +415,10 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
           {/* Test Type Pills */}
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
             {[
-              { id: "ALL", label: "All Tests", count: Object.keys(testsBank).length },
-              { id: "SUBJECT", label: "Subject Tests", count: Object.values(testsBank).filter(t => (t.testType || (t as any).test_type) === "SUBJECT").length },
-              { id: "CHAPTER", label: "Chapter Tests", count: Object.values(testsBank).filter(t => (t.testType || (t as any).test_type) === "CHAPTER" || (t.testType || (t as any).test_type) === "FULL_CHAPTER").length },
-              { id: "PYQ", label: "PYQs", count: Object.values(testsBank).filter(t => (t.testType || (t as any).test_type) === "PYQ").length },
+              { id: "ALL", label: "All Tests", count: tabCounts.ALL },
+              { id: "SUBJECT", label: "Subject Tests", count: tabCounts.SUBJECT },
+              { id: "CHAPTER", label: "Chapter Tests", count: tabCounts.CHAPTER },
+              { id: "PYQ", label: "PYQs", count: tabCounts.PYQ },
             ].map((tab) => (
               <button
                 key={tab.id}
