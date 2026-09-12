@@ -318,12 +318,23 @@ export function initPracticeTestsRealtimeSync(): void {
             }
           });
 
-          // Non-destructive update: keep valid in-memory entries while merging fresh data
-          if (Object.keys(freshBank).length > 0 || snap.metadata.hasPendingWrites) {
-            memoryTestBank = { ...memoryTestBank, ...freshBank };
-          } else {
-            memoryTestBank = freshBank;
-          }
+          // Handle document removals explicitly from snapshot changes
+          snap.docChanges().forEach((change) => {
+            if (change.type === "removed") {
+              const removedDocId = change.doc.id;
+              delete memoryTestBank[removedDocId];
+              removeLocalTopicCache(removedDocId);
+              Object.keys(memoryTestBank).forEach((k) => {
+                if (k === removedDocId || memoryTestBank[k]?.id === removedDocId || (memoryTestBank[k] as any)?.testId === removedDocId) {
+                  delete memoryTestBank[k];
+                  removeLocalTopicCache(k);
+                }
+              });
+            }
+          });
+
+          // The freshBank represents the authoritative documents currently in Firestore
+          memoryTestBank = freshBank;
 
           saveLocalTestBank(memoryTestBank, { silent: true });
           notifyTestBankSubscribers();
@@ -961,13 +972,19 @@ export async function fetchAllPracticeTests(): Promise<Record<string, TopicPract
         }
 
         if (Object.keys(firestoreBank).length > 0) {
-          // Always update memory bank with authoritative Firestore data
-          memoryTestBank = { ...memoryTestBank, ...firestoreBank };
+          // Authoritative Firestore data replaces memory bank (preventing zombie deleted tests)
+          memoryTestBank = { ...firestoreBank };
           saveLocalTestBank(memoryTestBank, { silent: true });
           notifyTestBankSubscribers();
           
           // Non-destructive backup to secondary storage
           syncTestBankToStorage(memoryTestBank).catch(() => {});
+          return memoryTestBank;
+        } else if (!snap.empty) {
+          // If Firestore collection returned 0 docs, empty the memory bank
+          memoryTestBank = {};
+          saveLocalTestBank(memoryTestBank, { silent: true });
+          notifyTestBankSubscribers();
           return memoryTestBank;
         }
       }
@@ -1853,19 +1870,261 @@ export async function saveTopicPracticeTest(
 
 export const saveAssessmentPracticeTest = saveTopicPracticeTest;
 
+export interface DeleteTestTarget {
+  id?: string;
+  testId?: string;
+  classGrade?: string;
+  subject?: string;
+  chapterNo?: number;
+  chapterName?: string;
+  topicName?: string;
+  testType?: AssessmentTestType | string;
+  computedType?: string;
+  title?: string;
+}
+
+/**
+ * Robust, unified deletion for any practice test (Subject, Chapter, PYQ, Topic).
+ * Performs safe, targeted deletion across Firestore, local caches, and secondary backups.
+ */
+export async function deletePracticeTest(
+  target: DeleteTestTarget | string,
+  maybeSubject?: string,
+  maybeChapterNo?: number,
+  maybeTopicName?: string,
+  maybeType?: string
+): Promise<{ success: boolean; message: string; error?: string }> {
+  // 1. Normalize target input parameters
+  let testObj: DeleteTestTarget = {};
+  if (typeof target === "object" && target !== null) {
+    testObj = { ...target };
+  } else if (typeof target === "string") {
+    if (maybeSubject) {
+      testObj = {
+        classGrade: target,
+        subject: maybeSubject,
+        chapterNo: maybeChapterNo,
+        topicName: maybeTopicName,
+        testType: maybeType as any,
+        computedType: maybeType,
+      };
+    } else {
+      testObj = { id: target, testId: target };
+    }
+  }
+
+  const primaryId = testObj.id || testObj.testId || "";
+  const classGrade = (testObj.classGrade || "").trim();
+  const subject = (testObj.subject || "").trim();
+  const chapterNo = Number(testObj.chapterNo) || 0;
+  const chapterName = (testObj.chapterName || "").trim();
+  const topicName = (testObj.topicName || "").trim();
+  const rawType = String(testObj.computedType || testObj.testType || "").toUpperCase();
+
+  // 2. Identify all possible candidate document IDs for this specific test
+  const candidateIds = new Set<string>();
+  if (primaryId) {
+    candidateIds.add(primaryId);
+  }
+
+  if (classGrade && subject) {
+    if (rawType) {
+      candidateIds.add(buildAssessmentTestId(classGrade, subject, chapterNo, topicName, rawType as any));
+    }
+    candidateIds.add(buildSubjectTestId(classGrade, subject));
+    candidateIds.add(buildTopicTestId(classGrade, subject, 0, `__subject_${subject}_test__`));
+
+    if (chapterNo > 0) {
+      candidateIds.add(buildChapterTestId(classGrade, subject, chapterNo));
+      candidateIds.add(buildTopicTestId(classGrade, subject, chapterNo, `__chapter_${chapterNo}_test__`));
+    }
+
+    if (topicName) {
+      candidateIds.add(buildTopicTestId(classGrade, subject, chapterNo, topicName));
+      candidateIds.add(buildPyqTestId(classGrade, subject, topicName));
+    }
+  }
+
+  // 3. Scan the local bank to find any matching keys and associate their IDs
+  const bank = getLocalTestBank();
+  const keysToRemove: string[] = [];
+
+  Object.entries(bank).forEach(([key, t]) => {
+    if (!t) return;
+    if (
+      candidateIds.has(key) ||
+      (t.id && candidateIds.has(t.id)) ||
+      ((t as any).testId && candidateIds.has((t as any).testId))
+    ) {
+      keysToRemove.push(key);
+      candidateIds.add(key);
+      if (t.id) candidateIds.add(t.id);
+      if ((t as any).testId) candidateIds.add((t as any).testId);
+      return;
+    }
+
+    if (classGrade && subject) {
+      const matchClass = (t.classGrade || "").toLowerCase().trim() === classGrade.toLowerCase();
+      const matchSubj = (t.subject || "").toLowerCase().trim() === subject.toLowerCase();
+
+      if (matchClass && matchSubj) {
+        const tType = String((t as any).computedType || t.testType || (t as any).test_type || "").toUpperCase();
+
+        if (rawType === "SUBJECT" && (tType === "SUBJECT" || Number(t.chapterNo) === 0)) {
+          keysToRemove.push(key);
+          candidateIds.add(key);
+          if (t.id) candidateIds.add(t.id);
+        } else if (
+          rawType === "CHAPTER" &&
+          Number(t.chapterNo) === chapterNo &&
+          (tType === "CHAPTER" || tType === "FULL_CHAPTER" || (t.topicName || "").toLowerCase().includes("chapter test"))
+        ) {
+          keysToRemove.push(key);
+          candidateIds.add(key);
+          if (t.id) candidateIds.add(t.id);
+        } else if (
+          rawType === "PYQ" &&
+          (tType === "PYQ" || (t.topicName || "").toLowerCase().includes("pyq")) &&
+          (t.topicName || "").toLowerCase().trim() === topicName.toLowerCase()
+        ) {
+          keysToRemove.push(key);
+          candidateIds.add(key);
+          if (t.id) candidateIds.add(t.id);
+        } else if (
+          topicName &&
+          Number(t.chapterNo) === chapterNo &&
+          isExactTopicMatch(classGrade, subject, chapterNo, topicName, t.classGrade, t.subject, t.chapterNo, t.topicName)
+        ) {
+          keysToRemove.push(key);
+          candidateIds.add(key);
+          if (t.id) candidateIds.add(t.id);
+        }
+      }
+    }
+  });
+
+  // 4. Delete the document(s) from Firestore topic_practice_tests and practice_tests
+  let firestoreError: any = null;
+  try {
+    const db = await getFirebaseDb();
+    if (db) {
+      for (const docId of Array.from(candidateIds)) {
+        if (!docId) continue;
+        const testDocRef = doc(db, "topic_practice_tests", docId);
+        const aliasDocRef = doc(db, "practice_tests", docId);
+
+        try {
+          await deleteDoc(testDocRef);
+        } catch (delErr: any) {
+          console.warn(`[PracticeTestService] Firestore delete topic_practice_tests/${docId} error:`, delErr);
+          if (delErr?.code === "permission-denied" || delErr?.code === "unauthenticated") {
+            firestoreError = delErr;
+          }
+        }
+
+        try {
+          await deleteDoc(aliasDocRef);
+        } catch (aliasErr: any) {
+          if (aliasErr?.code === "permission-denied" || aliasErr?.code === "unauthenticated") {
+            firestoreError = aliasErr;
+          }
+        }
+      }
+
+      // Safe note unlinking (clearing practice test reference without deleting notes)
+      try {
+        const collectionsToCheck = ["class_notes", "upsc_notes"];
+        for (const colName of collectionsToCheck) {
+          const notesCol = collection(db, colName);
+          const snap = await getDocs(notesCol);
+          for (const docSnap of snap.docs) {
+            const n = docSnap.data() as ClassNote;
+            const pId = n.practiceTestId;
+            if (pId && candidateIds.has(pId)) {
+              await setDoc(
+                docSnap.ref,
+                { hasPracticeTest: false, hasTest: false, practiceTestId: null },
+                { merge: true }
+              ).catch(() => {});
+            }
+          }
+        }
+      } catch (unlinkErr) {
+        console.warn("[PracticeTestService] Note unlinking warning:", unlinkErr);
+      }
+    }
+  } catch (dbErr: any) {
+    console.error("[PracticeTestService] Firestore connection error during deletion:", dbErr);
+    firestoreError = dbErr;
+  }
+
+  // If backend explicitly rejected due to permissions, return failure
+  if (firestoreError) {
+    return {
+      success: false,
+      message: firestoreError?.message || "Permission denied or failed to communicate with Firestore.",
+      error: firestoreError?.message,
+    };
+  }
+
+  // 5. Clean up from memory and local storage
+  for (const docId of Array.from(candidateIds)) {
+    delete bank[docId];
+    delete memoryTestBank[docId];
+    removeLocalTopicCache(docId);
+  }
+  for (const key of keysToRemove) {
+    delete bank[key];
+    delete memoryTestBank[key];
+    removeLocalTopicCache(key);
+  }
+
+  saveLocalTestBank(memoryTestBank);
+  clearAllQuestionCaches();
+  notifyTestBankSubscribers();
+
+  // 6. Synchronize clean state to secondary R2 storage & trigger events
+  await syncTestBankToStorage(memoryTestBank, { allowEmpty: true }).catch(() => {});
+  await notifyPracticeTestRealtimeSync({
+    testId: primaryId || Array.from(candidateIds)[0] || "test",
+    action: "delete_topic",
+  });
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("practice-tests-updated"));
+  }
+
+  return {
+    success: true,
+    message: "Test deleted successfully.",
+  };
+}
+
 export async function deleteChapterPracticeTest(
   classGrade: string,
   subject: string,
   chapterNo: number
-): Promise<{ success: boolean; error?: string }> {
-  return deleteTopicPracticeTest(classGrade, subject, chapterNo, `__chapter_${chapterNo}_test__`);
+): Promise<{ success: boolean; message: string; error?: string }> {
+  return deletePracticeTest({
+    classGrade,
+    subject,
+    chapterNo,
+    testType: "CHAPTER",
+    computedType: "CHAPTER",
+  });
 }
 
 export async function deleteSubjectPracticeTest(
   classGrade: string,
   subject: string
-): Promise<{ success: boolean; error?: string }> {
-  return deleteTopicPracticeTest(classGrade, subject, 0, `__subject_${subject}_test__`);
+): Promise<{ success: boolean; message: string; error?: string }> {
+  return deletePracticeTest({
+    classGrade,
+    subject,
+    chapterNo: 0,
+    testType: "SUBJECT",
+    computedType: "SUBJECT",
+  });
 }
 
 export const saveTopicPracticeTestDirect = saveTopicPracticeTest;
@@ -1875,75 +2134,15 @@ export async function deleteTopicPracticeTest(
   subject: string,
   chapterNo: number,
   topicName: string
-): Promise<{ success: boolean; message: string }> {
-  const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
-  const bank = getLocalTestBank();
-
-  delete bank[testId];
-
-  Object.keys(bank).forEach((k) => {
-    const t = bank[k];
-    if (
-      t &&
-      isExactTopicMatch(
-        classGrade,
-        subject,
-        chapterNo,
-        topicName,
-        t.classGrade,
-        t.subject,
-        t.chapterNo,
-        t.topicName
-      )
-    ) {
-      delete bank[k];
-    }
+): Promise<{ success: boolean; message: string; error?: string }> {
+  return deletePracticeTest({
+    classGrade,
+    subject,
+    chapterNo,
+    topicName,
+    testType: "TOPIC",
+    computedType: "TOPIC",
   });
-
-  removeLocalTopicCache(testId);
-  saveLocalTestBank(bank);
-  clearAllQuestionCaches();
-  notifyTestBankSubscribers();
-
-  // 1. Direct Firestore delete
-  try {
-    const db = await getFirebaseDb();
-    if (db) {
-      const testDocRef = doc(db, "topic_practice_tests", testId);
-      const aliasDocRef = doc(db, "practice_tests", testId);
-      await Promise.all([
-        deleteDoc(testDocRef).catch(() => {}),
-        deleteDoc(aliasDocRef).catch(() => {})
-      ]);
-
-      // Unlink hasPracticeTest on corresponding note documents
-      try {
-        const collectionsToCheck = ["class_notes", "upsc_notes"];
-        for (const colName of collectionsToCheck) {
-          const notesCol = collection(db, colName);
-          const snap = await getDocs(notesCol);
-          for (const docSnap of snap.docs) {
-            const n = docSnap.data() as ClassNote;
-            if (n.practiceTestId === testId || (n as any).hasPracticeTest || (n as any).hasTest) {
-              const nClass = (n as any).className || n.classGrade || "";
-              const nSubj = (n as any).subjectName || n.subject || "";
-              const nCh = (n as any).chapterNumber ?? n.chapterNo ?? 1;
-              const nTopic = (n as any).topicTitle || (n as any).topicName || n.partLabel || "";
-              if (isExactTopicMatch(classGrade, subject, chapterNo, topicName, nClass, nSubj, nCh, nTopic) || n.practiceTestId === testId) {
-                await setDoc(docSnap.ref, { hasPracticeTest: false, hasTest: false, practiceTestId: null }, { merge: true }).catch(() => {});
-              }
-            }
-          }
-        }
-      } catch (unlinkErr) {}
-    }
-  } catch (err) {}
-
-  await deleteTopicAttemptsFromPersistence(classGrade, subject, chapterNo, topicName).catch(() => {});
-  await syncTestBankToStorage(bank).catch(() => {});
-  await notifyPracticeTestRealtimeSync({ testId, action: "delete_topic" });
-
-  return { success: true, message: "Practice Test deleted successfully." };
 }
 
 export async function syncPracticeTestOnNoteRename(params: {

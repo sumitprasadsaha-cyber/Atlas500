@@ -28,6 +28,7 @@ import {
 import { TopicPracticeTest, TestAttemptRecord, AssessmentTestType, ClassNote, Student } from "../../types";
 import { 
   fetchAllPracticeTests, 
+  deletePracticeTest,
   deleteTopicPracticeTest, 
   deleteChapterPracticeTest, 
   deleteSubjectPracticeTest,
@@ -236,23 +237,41 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
     });
   }, [testsBank, attempts, selectedClass, selectedSubject, selectedType, searchQuery]);
 
+  // Deletion loading state
+  const [isDeletingTest, setIsDeletingTest] = useState<boolean>(false);
+
   // Handlers
   const handleDeleteTestConfirm = async () => {
-    if (!testToDelete) return;
+    if (!testToDelete || isDeletingTest) return;
+    setIsDeletingTest(true);
     try {
-      const { classGrade, subject, chapterNo, topicName, computedType } = testToDelete as any;
-      if (computedType === "SUBJECT") {
-        await deleteSubjectPracticeTest(classGrade, subject);
-      } else if (computedType === "CHAPTER") {
-        await deleteChapterPracticeTest(classGrade, subject, chapterNo);
-      } else {
-        await deleteTopicPracticeTest(classGrade, subject, chapterNo, topicName);
+      const result = await deletePracticeTest(testToDelete);
+      if (!result.success) {
+        setToastMessage(`Failed to delete test: ${result.message || "Unknown error"}`);
+        return;
       }
       setToastMessage("Test deleted successfully.");
+      const deletedId = testToDelete.id || (testToDelete as any).testId;
       setTestToDelete(null);
+
+      // Optimistic instant removal from local state
+      setTestsBank((prev) => {
+        const next = { ...prev };
+        if (deletedId) delete next[deletedId];
+        Object.keys(next).forEach((k) => {
+          if (k === deletedId || next[k]?.id === deletedId || (next[k] as any)?.testId === deletedId) {
+            delete next[k];
+          }
+        });
+        return next;
+      });
+
       await loadData();
     } catch (err: any) {
+      console.error("[AdminTestsView] Deletion error:", err);
       setToastMessage(`Failed to delete test: ${err?.message || "Unknown error"}`);
+    } finally {
+      setIsDeletingTest(false);
     }
   };
 
@@ -954,10 +973,15 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
       {testToDelete && (
         <ConfirmDeleteModal
           isOpen={true}
-          onCancel={() => setTestToDelete(null)}
+          onCancel={() => {
+            if (!isDeletingTest) {
+              setTestToDelete(null);
+            }
+          }}
           onConfirm={handleDeleteTestConfirm}
           title="Delete Test"
-          message={`Are you sure you want to delete "${testToDelete.title || testToDelete.topicName || testToDelete.chapterName || "this test"}"? This will permanently remove the test questions from the database.`}
+          message={`Are you sure you want to permanently delete "${testToDelete.title || testToDelete.topicName || testToDelete.chapterName || "this test"}"? This will permanently remove the test questions from the database.`}
+          isDeleting={isDeletingTest}
         />
       )}
 

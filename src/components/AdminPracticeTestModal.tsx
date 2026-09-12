@@ -42,6 +42,7 @@ import {
   deleteAssessmentQuestion,
   updateAssessmentQuestion,
   reorderAssessmentQuestions,
+  deletePracticeTest,
   deleteTopicPracticeTest,
   deleteChapterPracticeTest,
   deleteSubjectPracticeTest,
@@ -480,25 +481,26 @@ export default function AdminPracticeTestModal({
     setDeleteToast(null);
     setIsSaving(true);
 
-    const testInfo = { classGrade, subject, chapterNo: effectiveChapterNo, topicName: effectiveTopicName, testType: effectiveTestType };
+    const testInfo = {
+      id: savedTest?.id,
+      classGrade,
+      subject,
+      chapterNo: effectiveChapterNo,
+      chapterName,
+      topicName: effectiveTopicName,
+      testType: effectiveTestType,
+    };
     console.log(`[AdminPracticeTestModal] Requesting deletion of practice test:`, testInfo);
 
     try {
-      let result;
-      if (effectiveTestType === "SUBJECT") {
-        result = await deleteSubjectPracticeTest(classGrade, subject);
-      } else if (effectiveTestType === "CHAPTER") {
-        result = await deleteChapterPracticeTest(classGrade, subject, effectiveChapterNo);
-      } else {
-        result = await deleteTopicPracticeTest(classGrade, subject, effectiveChapterNo, effectiveTopicName);
-      }
+      const result = await deletePracticeTest(testInfo);
 
       if (!result.success) {
         const errMsg = result.message || "Unable to delete practice test.";
         console.error(`[AdminPracticeTestModal] Deletion failed for test:`, testInfo, errMsg);
         setDeleteToast(errMsg);
         setValidationErrorMsg([errMsg]);
-        setIsDeleteConfirmOpen(false);
+        // Do not close confirm modal on error so the admin can review the error
         return;
       }
 
@@ -524,7 +526,6 @@ export default function AdminPracticeTestModal({
       console.error(`[AdminPracticeTestModal] Exception deleting practice test:`, testInfo, err);
       setDeleteToast(errMsg);
       setValidationErrorMsg([errMsg]);
-      setIsDeleteConfirmOpen(false);
     } finally {
       setIsSaving(false);
     }
