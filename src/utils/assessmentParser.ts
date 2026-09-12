@@ -15,6 +15,8 @@ import {
   parseChapterTest,
   convertToAssessmentQuestions,
   getQuestionTypeDisplayName,
+  identifySectionHeader,
+  extractSectionMarksFormula,
   type ParsedChapterTest,
   type ParsedSection,
   type ParsedQuestion,
@@ -44,7 +46,10 @@ export const getAssessmentQuestionTypeLabel = (type: string, passageIdOrIsChild?
 
 export interface ParsedMetadata {
   chapter?: string;
+  chapterNo?: number;
+  chapterName?: string;
   topic?: string;
+  topicName?: string;
   theme?: string;
   classGrade?: string;
   subject?: string;
@@ -111,19 +116,40 @@ export function buildAssessmentTestId(
  */
 function extractMetadataLine(line: string, metadata: ParsedMetadata): boolean {
   const trimmed = line.trim();
-  const chMatch = trimmed.match(/^Chapter\s*:\s*(.*)$/i);
+  // Match "Chapter: Money and Credit" or "Chapter 3: Money and Credit" or "Chapter 3 - Money and Credit"
+  const chMatch = trimmed.match(/^Chapter(?:\s*(\d+))?[\s\:\-\—\–]+(.*)$/i);
   if (chMatch) {
-    if (chMatch[1].trim()) metadata.chapter = chMatch[1].trim();
+    if (chMatch[1]) metadata.chapterNo = parseInt(chMatch[1], 10);
+    const chName = chMatch[2].trim();
+    if (chName) {
+      metadata.chapter = chName;
+      metadata.chapterName = chName;
+    }
     return true;
   }
-  const topMatch = trimmed.match(/^Topic\s*:\s*(.*)$/i);
+  const topMatch = trimmed.match(/^Topic\s*[\:\-\—\–]\s*(.*)$/i);
   if (topMatch) {
-    if (topMatch[1].trim()) metadata.topic = topMatch[1].trim();
+    if (topMatch[1].trim()) {
+      metadata.topic = topMatch[1].trim();
+      metadata.topicName = topMatch[1].trim();
+    }
     return true;
   }
-  const thMatch = trimmed.match(/^Theme\s*:\s*(.*)$/i);
+  const thMatch = trimmed.match(/^Theme\s*[\:\-\—\–]\s*(.*)$/i);
   if (thMatch) {
     if (thMatch[1].trim()) metadata.theme = thMatch[1].trim();
+    return true;
+  }
+  // Also recognize standalone "Class 10" or "Grade 10"
+  const classMatch = trimmed.match(/^(Class|Grade)\s+(\d+|[IVXLCDM]+)$/i);
+  if (classMatch) {
+    metadata.classGrade = `${classMatch[1]} ${classMatch[2]}`;
+    return true;
+  }
+  // Also recognize "Subject: Economics"
+  const subMatch = trimmed.match(/^Subject\s*[\:\-\—\–]\s*(.*)$/i);
+  if (subMatch) {
+    if (subMatch[1].trim()) metadata.subject = subMatch[1].trim();
     return true;
   }
   // Also recognize "Class 10 — Social Science | Economics"
@@ -236,9 +262,34 @@ export function inferDefaultMarksForType(type: AssessmentQuestionType): { marks:
 /**
  * Helper to recognize section headers across all supported question categories
  */
-function matchSectionHeader(line: string): { type: AssessmentQuestionType; marks?: number; negativeMarks?: number; source?: string } | null {
+function matchSectionHeader(
+  line: string
+): { type: AssessmentQuestionType; marks?: number; negativeMarks?: number; source?: string; title?: string } | null {
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
+
+  // Use robust CBSE-compliant section identification first
+  const identified = identifySectionHeader(trimmed);
+  if (identified && identified.isSection) {
+    let mappedType: AssessmentQuestionType = "mcq";
+    if (identified.type === "assertion_reason" || identified.type === "assertion_reasoning") mappedType = "assertion_reasoning";
+    else if (identified.type === "multiple_select" || identified.type === "msq") mappedType = "multiple_select";
+    else if (identified.type === "true_false") mappedType = "true_false";
+    else if (identified.type === "very_short_answer") mappedType = "very_short_answer";
+    else if (identified.type === "short_answer") mappedType = "short_answer";
+    else if (identified.type === "long_answer") mappedType = "long_answer";
+    else if (identified.type === "case_based") mappedType = "case_based";
+    else if (identified.type === "comprehension") mappedType = "comprehension";
+    else mappedType = "mcq";
+
+    return {
+      type: mappedType,
+      marks: identified.marksInfo?.marks,
+      negativeMarks: identified.marksInfo?.negativeMarks,
+      source: identified.marksInfo?.source,
+      title: identified.sectionTitle
+    };
+  }
 
   const marksInfo = extractMarksInfo(trimmed);
 
@@ -334,7 +385,7 @@ function isSectionHeaderWithLookahead(
   line: string,
   lines: string[],
   currentIndex: number
-): { type: AssessmentQuestionType; marks?: number; negativeMarks?: number; source?: string } | null {
+): { type: AssessmentQuestionType; marks?: number; negativeMarks?: number; source?: string; title?: string } | null {
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
 
@@ -441,6 +492,7 @@ function isIgnoredMarkerOrDivider(line: string): boolean {
   }
   // Ignore "Answer the following questions." or "Directions: ..." lines when matching block boundaries
   if (
+    /^(?:Directions?|Instructions?|General\s+Instructions?)\b/i.test(trimmed) ||
     /^(?:Answer\s+the\s+following\s+questions?[\.\:\-]?|Questions?\s+that\s+follow[\.\:\-]?)$/i.test(trimmed) ||
     /^Directions\s*[\:\-]\s*(?:Select\s+all\s+correct|Read\s+the\s+Assertion|State\s+whether)[\w\s\.,\:\-\(\)]*$/i.test(trimmed)
   ) {
@@ -588,7 +640,7 @@ export function parseAssessmentText(
   // Pre-process inline options if multiple options were pasted on a single line
   const processedText = normalizedText
     .replace(
-      /(?<!\b(?:of|for|is|and|to|with|in|on|from|by|explanation|reason|assertion|both|neither|either|than))\s+([\(]?[B-Eb-e2-5][\.\)\:\-]\s+[^\n]+)/gi,
+      /(?<!\b(?:of|for|is|and|to|with|in|on|from|by|explanation|reason|assertion|both|neither|either|than|chapter|unit|part|section|grade|class|level|page|volume|act|scene))\s+([\(]?[B-Eb-e2-5][\.\)\:\-]\s+[^\n]+)/gi,
       (match, p1) => "\n" + p1.trim()
     )
     .replace(
@@ -599,6 +651,7 @@ export function parseAssessmentText(
   const rawLines = processedText.split("\n");
 
   let currentSection: AssessmentQuestionType = "mcq";
+  let currentSectionTitle: string = "";
   let currentSectionMarks: { marks: number; negativeMarks?: number; source: string; confidence: number } | null = null;
 
   let activePassage: {
@@ -618,6 +671,7 @@ export function parseAssessmentText(
     qNum: number;
     hasExplicitQPrefix?: boolean;
     section: AssessmentQuestionType;
+    sectionTitle?: string;
     passageId?: string;
     caseId?: string;
     sectionMarks?: { marks: number; negativeMarks?: number; source: string; confidence: number } | null;
@@ -687,6 +741,7 @@ export function parseAssessmentText(
       }
 
       currentSection = secInfo.type;
+      currentSectionTitle = secInfo.title || trimmed;
       currentSectionMarks = secInfo.marks ? {
         marks: secInfo.marks,
         negativeMarks: secInfo.negativeMarks,
@@ -727,13 +782,14 @@ export function parseAssessmentText(
     if (qHeader) {
       // If we are currently inside an active question block that has already seen an "Answer:" line:
       // A line starting with a plain number (e.g. "1. Improvement in...", "2. Faster transport...") without an explicit "Q" prefix
-      // is a numbered list item inside the answer, NOT a new question, if the question started with "Q" or if the number <= activeBlock.qNum!
+      // is a numbered list item inside the answer, NOT a new question, only if the question started with "Q" or if the number <= activeBlock.qNum and number > 1!
+      // When numbering restarts at 1, it is ALWAYS a new question!
       const activeHasAnswer = activeBlock && activeBlock.lines.some((l) => /^(?:Correct\s*)?Ans(?:wer)?\s*[\:\-]/i.test(l));
       const isListItemInsideAnswer =
         activeBlock &&
         activeHasAnswer &&
         !qHeader.hasExplicitQPrefix &&
-        (activeBlock.hasExplicitQPrefix || qHeader.qNum <= activeBlock.qNum);
+        (activeBlock.hasExplicitQPrefix || (qHeader.qNum <= activeBlock.qNum && qHeader.qNum > 1));
 
       if (isListItemInsideAnswer) {
         activeBlock.lines.push(trimmed);
@@ -761,6 +817,7 @@ export function parseAssessmentText(
         qNum: qHeader.qNum,
         hasExplicitQPrefix: qHeader.hasExplicitQPrefix,
         section: qSection,
+        sectionTitle: activePassage ? activePassage.title : currentSectionTitle,
         passageId: activePassage && !activePassage.isCase ? activePassage.id : undefined,
         caseId: activePassage && activePassage.isCase ? activePassage.id : undefined,
         sectionMarks: activePassage?.sectionMarks || currentSectionMarks,
@@ -966,6 +1023,10 @@ export function parseAssessmentText(
 
       questions.push({
         id: `q_tf_${block.qNum}_${Math.random().toString(36).substring(2, 7)}`,
+        questionNumber: block.qNum,
+        section: block.sectionTitle || undefined,
+        sectionTitle: block.sectionTitle || undefined,
+        sectionType: block.section,
         classGrade: context.classGrade,
         subject: context.subject,
         chapterNo: context.chapterNo,
@@ -1020,6 +1081,10 @@ export function parseAssessmentText(
 
       questions.push({
         id: `q_${subjectiveType}_${block.qNum}_${Math.random().toString(36).substring(2, 7)}`,
+        questionNumber: block.qNum,
+        section: block.sectionTitle || undefined,
+        sectionTitle: block.sectionTitle || undefined,
+        sectionType: block.section,
         classGrade: context.classGrade,
         subject: context.subject,
         chapterNo: context.chapterNo,
@@ -1184,6 +1249,10 @@ export function parseAssessmentText(
 
     questions.push({
       id: `q_${resolvedType}_${block.qNum}_${Math.random().toString(36).substring(2, 7)}`,
+      questionNumber: block.qNum,
+      section: block.sectionTitle || undefined,
+      sectionTitle: block.sectionTitle || undefined,
+      sectionType: block.section,
       classGrade: context.classGrade,
       subject: context.subject,
       chapterNo: context.chapterNo,

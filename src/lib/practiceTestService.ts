@@ -242,7 +242,7 @@ async function writeSyncQueueToIDB(queue: SyncQueueItem[]): Promise<void> {
 
 const testBankSubscribers = new Set<(bank: Record<string, TopicPracticeTest>) => void>();
 
-function notifyTestBankSubscribers(): void {
+export function notifyTestBankSubscribers(): void {
   testBankSubscribers.forEach((fn) => {
     try {
       fn(memoryTestBank);

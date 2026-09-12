@@ -441,14 +441,12 @@ export default function AdminPracticeTestModal({
         };
         setSavedTest(freshTest);
 
-        const mcqCount = freshTest.questions.filter((q) => q.type === "mcq" && !q.passageId).length;
-        const tfCount = freshTest.questions.filter((q) => q.type === "true_false").length;
-        const compCount = freshTest.questions.filter((q) => !!q.passageId).length;
-
-        const breakdownParts: string[] = [];
-        if (mcqCount > 0) breakdownParts.push(`${mcqCount} MCQs`);
-        if (tfCount > 0) breakdownParts.push(`${tfCount} True/False`);
-        if (compCount > 0) breakdownParts.push(`${compCount} Comprehension`);
+        const typeCounts: Record<string, number> = {};
+        freshTest.questions.forEach((q) => {
+          const label = getQuestionTypeDisplayName(q.type, !!(q.passageId || q.caseId));
+          typeCounts[label] = (typeCounts[label] || 0) + 1;
+        });
+        const breakdownParts = Object.entries(typeCounts).map(([label, cnt]) => `${cnt} ${label}`);
 
         setValidationSuccess(
           `Assessment saved successfully. Total ${freshTest.questions.length} Questions (${breakdownParts.join(", ")}).`
@@ -856,10 +854,10 @@ export default function AdminPracticeTestModal({
                   <HelpCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
                   <div className="text-xs text-slate-700 dark:text-slate-300">
                     <p className="font-bold text-slate-900 dark:text-slate-100 mb-0.5">
-                      Automatic Question Parsing (MCQs, True/False & Comprehension)
+                      Intelligent CBSE & Standard Test Parser
                     </p>
                     <p>
-                      Paste questions text below. Supports 3 question formats: <strong>Multiple Choice Questions (MCQs)</strong> with ✅ marker, <strong>True / False</strong> (<span className="font-bold text-emerald-600">True ✅</span> or <span className="font-bold text-rose-600">False ❌</span>), and <strong>Comprehension passages</strong> with linked MCQs.
+                      Supports Section headers (Section A to H), custom marks formulas (e.g. 2 × 3 = 6 Marks), section instructions, and 9 question types: <strong>MCQs</strong>, <strong>Assertion &amp; Reasoning</strong>, <strong>True/False</strong>, <strong>Very Short Answer</strong>, <strong>Short Answer</strong>, <strong>Long Answer</strong>, <strong>Case-Based</strong>, and <strong>Comprehension</strong>.
                     </p>
                   </div>
                 </div>

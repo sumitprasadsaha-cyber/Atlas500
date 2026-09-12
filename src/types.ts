@@ -317,7 +317,7 @@ export interface TuitionStats {
 // SMART TOPIC-WISE ASSESSMENT SYSTEM TYPES
 // ----------------------------------------------------
 
-export type AssessmentTestType = "TOPIC" | "CHAPTER" | "SUBJECT" | "PYQ" | "topic" | "chapter" | "subject" | "full_chapter" | "pyq";
+export type AssessmentTestType = "TOPIC" | "CHAPTER" | "SUBJECT" | "PYQ" | "topic" | "chapter" | "subject" | "full_chapter" | "pyq" | string;
 
 export type AssessmentQuestionType = 
   | "mcq" 
@@ -354,6 +354,7 @@ export interface ParsedOption {
 
 export interface ParsedAssessmentQuestion {
   id: string;
+  questionNumber?: number | string;
   classGrade: string;
   subject: string;
   chapterNo: number;
@@ -453,9 +454,21 @@ export interface TopicPracticeTest {
   instructions?: string;
   maxAttempts?: number;
 
+  isPublished?: boolean;
   createdAt: string;
   updatedAt: string;
   uploadedBy?: string;
+}
+
+export type ManagedTestType = "Chapter Test" | "Subject Test" | "PYQ Test" | "Custom Test" | string;
+
+export interface ManagedTest extends TopicPracticeTest {
+  managedTestType: ManagedTestType;
+  stream?: "school" | "upsc";
+  classStableId?: string;
+  marksPerQuestion?: number;
+  negativeMarking?: number;
+  isPublished?: boolean;
 }
 
 export interface TestAttemptRecord {
