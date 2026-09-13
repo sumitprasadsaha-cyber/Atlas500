@@ -17,6 +17,9 @@ import {
   getQuestionTypeDisplayName,
   identifySectionHeader,
   extractSectionMarksFormula,
+  extractMarks,
+  stripMarksFromQuestionText,
+  inferDefaultMarks,
   type ParsedChapterTest,
   type ParsedSection,
   type ParsedQuestion,
@@ -167,96 +170,14 @@ function extractMetadataLine(line: string, metadata: ParsedMetadata): boolean {
  */
 export function extractMarksInfo(text: string): { marks: number; negativeMarks?: number; source: string; confidence: number } | null {
   if (!text) return null;
-
-  let negativeMarks: number | undefined;
-  const negMatch = text.match(/(?:negative|minus|deduction)\s*(?:marking|marks?)?[\:\s]+-?(\d+(?:\.\d+)?)/i) ||
-                   text.match(/\[\s*-(?:mark|marks)?\s*(\d+(?:\.\d+)?)\s*\]/i) ||
-                   text.match(/\(\s*-(\d+(?:\.\d+)?)\s*(?:marks?|pts?)?\s*\)/i);
-  if (negMatch) {
-    negativeMarks = parseFloat(negMatch[1]);
-  }
-
-  // 1. Explicit pattern: "(2 marks each)", "[3 marks]", "(1 mark)", "2 marks each", "1 mark each"
-  const eachMatch = text.match(/(?:\(|\{|\[)?\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)\s*(?:each)?\s*(?:\)|\}|\])?/i);
-  if (eachMatch) {
-    const val = parseFloat(eachMatch[1]);
-    if (!isNaN(val) && val > 0 && val <= 100) {
-      return {
-        marks: val,
-        negativeMarks,
-        source: eachMatch[0].toLowerCase().includes("each") ? "section_instruction" : "question_label",
-        confidence: 0.98
-      };
-    }
-  }
-
-  // 2. "Marks: 5", "Mark: 2", "Points: 3"
-  const labelMatch = text.match(/(?:marks?|pts?|points?|score)[\:\s]+(\d+(?:\.\d+)?)/i);
-  if (labelMatch) {
-    const val = parseFloat(labelMatch[1]);
-    if (!isNaN(val) && val > 0 && val <= 100) {
-      return {
-        marks: val,
-        negativeMarks,
-        source: "question_label",
-        confidence: 0.99
-      };
-    }
-  }
-
-  // 3. "carries 2 marks", "carry 1 mark each"
-  const carryMatch = text.match(/(?:carries|carry|worth)\s+(\d+(?:\.\d+)?)\s*(?:marks?|pts?)/i);
-  if (carryMatch) {
-    const val = parseFloat(carryMatch[1]);
-    if (!isNaN(val) && val > 0 && val <= 100) {
-      return {
-        marks: val,
-        negativeMarks,
-        source: "section_instruction",
-        confidence: 0.98
-      };
-    }
-  }
-
-  // 4. Standalone bracketed number like "[2]" or "[5]" at the end of line
-  const bracketMatch = text.match(/(?:^|\s)\[\s*(\d+(?:\.\d+)?)\s*\](?:\s*$)/);
-  if (bracketMatch) {
-    const val = parseFloat(bracketMatch[1]);
-    if (!isNaN(val) && val > 0 && val <= 50) {
-      return {
-        marks: val,
-        negativeMarks,
-        source: "question_label",
-        confidence: 0.95
-      };
-    }
-  }
-
-  return null;
+  return extractMarks(text);
 }
 
 /**
  * Infer default fallback marks by question type when not explicitly provided
  */
 export function inferDefaultMarksForType(type: AssessmentQuestionType): { marks: number; source: string; confidence: number; pending: boolean } {
-  switch (type) {
-    case "mcq":
-    case "true_false":
-    case "assertion_reasoning":
-    case "assertion_reason":
-    case "very_short_answer":
-      return { marks: 1, source: "default_inferred", confidence: 0.50, pending: true };
-    case "multiple_select":
-    case "short_answer":
-      return { marks: 2, source: "default_inferred", confidence: 0.50, pending: true };
-    case "long_answer":
-      return { marks: 5, source: "default_inferred", confidence: 0.50, pending: true };
-    case "case_based":
-    case "comprehension":
-      return { marks: 4, source: "default_inferred", confidence: 0.50, pending: true };
-    default:
-      return { marks: 1, source: "default_inferred", confidence: 0.50, pending: true };
-  }
+  return inferDefaultMarks(type as ChapterTestQuestionType);
 }
 
 /**
@@ -527,6 +448,36 @@ function matchQuestionHeader(line: string): { qNum: number; remainder: string; h
       return {
         qNum: num,
         remainder: plainMatch[2] ? plainMatch[2].trim() : "",
+        hasExplicitQPrefix: false
+      };
+    }
+  }
+
+  // Match parenthesized digits "(1) ", "[1] "
+  const parenMatch = trimmed.match(/^[\(\[](\d+)[\)\]][\.\:\-]?\s+(.*)$/);
+  if (parenMatch) {
+    const num = parseInt(parenMatch[1], 10);
+    if (!isNaN(num)) {
+      return {
+        qNum: num,
+        remainder: parenMatch[2] ? parenMatch[2].trim() : "",
+        hasExplicitQPrefix: false
+      };
+    }
+  }
+
+  // Match Roman numerals "(i) ", "(ii) ", "i. ", "ii) "
+  const romanMatch = trimmed.match(/^(?:\(?([ivxlcdm]+)\)[\.\:\-]?|([ivxlcdm]+)[\.\):])\s+(.*)$/i);
+  if (romanMatch) {
+    const romanStr = (romanMatch[1] || romanMatch[2]).toLowerCase();
+    const romanMap: Record<string, number> = {
+      i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
+    };
+    if (romanMap[romanStr]) {
+      const num = romanMap[romanStr];
+      return {
+        qNum: num,
+        remainder: romanMatch[3] ? romanMatch[3].trim() : "",
         hasExplicitQPrefix: false
       };
     }
@@ -935,16 +886,16 @@ export function parseAssessmentText(
     // Priority: Question-level explicit marks > Group/Section instructions > Type-inferred default
     let questionMarks = 1;
     let questionNegMarks: number | undefined;
-    let marksSource = "default_inferred";
-    let marksConfidence = 0.50;
-    let marksPending = true;
+    let marksSource = "section_default";
+    let marksConfidence = 0.80;
+    let marksPending = false;
 
     // Check Question-level explicit marks
     const qMarks = extractMarksInfo(cleanLines[0]) || extractMarksInfo(fullBlockText);
     if (qMarks) {
       questionMarks = qMarks.marks;
       questionNegMarks = qMarks.negativeMarks;
-      marksSource = "question_label";
+      marksSource = qMarks.source || "question_label";
       marksConfidence = qMarks.confidence;
       marksPending = false;
     } else if (block.sectionMarks) {
@@ -953,6 +904,12 @@ export function parseAssessmentText(
       marksSource = block.sectionMarks.source;
       marksConfidence = block.sectionMarks.confidence;
       marksPending = false;
+    } else {
+      const def = inferDefaultMarksForType(block.section);
+      questionMarks = def.marks;
+      marksSource = def.source;
+      marksConfidence = def.confidence;
+      marksPending = def.pending;
     }
 
     // Determine Question Type
@@ -993,14 +950,14 @@ export function parseAssessmentText(
           !/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False)[\:\.]?$/i.test(l)
       );
 
-      let cleanQuestion = statementLines
+      let cleanQuestion = stripMarksFromQuestionText(statementLines
         .join(" ")
         .replace(/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False)[\:\.\-\s]*/gi, "")
         .replace(/—\s*(True|False)\s*[✅❌]?/gi, "")
         .replace(/-\s*(True|False)\s*[✅❌]?/gi, "")
         .replace(/\b(True|False)\s*[✅❌]?$/gi, "")
         .replace(/[✅❌]/g, "")
-        .trim();
+        .trim());
 
       let resolvedAnswer = "";
       if (hasTFAnswer) {
@@ -1055,12 +1012,12 @@ export function parseAssessmentText(
       } else if (block.section === "long_answer") {
         subjectiveType = "long_answer";
       } else if (block.caseId || block.section === "case_based") {
-        subjectiveType = "short_answer"; // Subjective case-based child question
-      } else if (block.passageId) {
-        subjectiveType = "short_answer"; // Subjective comprehension child question
+        subjectiveType = "case_based"; // Subjective case-based child question
+      } else if (block.passageId || block.section === "comprehension") {
+        subjectiveType = "comprehension"; // Subjective comprehension child question
       }
 
-      const questionText = linesAfterImage
+      const rawQuestionText = linesAfterImage
         .filter((l) => 
           l.toLowerCase() !== "question:" &&
           !/^Options?\s*[\:\-]?$/i.test(l) &&
@@ -1068,6 +1025,7 @@ export function parseAssessmentText(
         )
         .join("\n")
         .trim();
+      const questionText = stripMarksFromQuestionText(rawQuestionText);
 
       if (!questionText) {
         errors.push(`Question #${block.qNum}${blockTypeLabel}: Empty question text.`);
@@ -1120,7 +1078,8 @@ export function parseAssessmentText(
         !/^Options?\s*[\:\-]?$/i.test(l) &&
         !/^(?:Assertion\s*(?:&|and|-)\s*Reason(?:ing)?|Multiple\s+Choice(?:\s+Questions?)?|MCQs?|Multiple\s+Select)[\:\.]?$/i.test(l.trim())
       );
-    const questionText = rawQLines.join("\n").trim();
+    const rawQuestionText = rawQLines.join("\n").trim();
+    const questionText = stripMarksFromQuestionText(rawQuestionText);
 
     if (!questionText) {
       errors.push(`Question #${block.qNum}${blockTypeLabel}: Empty question text.`);

@@ -1084,7 +1084,7 @@ export default function AdminPracticeTestModal({
                           {getAssessmentQuestionTypeLabel(q.type, false)}
                         </span>
                         <span className="text-[10px] font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
-                          {q.marks ?? 1} Marks {q.marksSource ? `(${q.marksSource})` : ""}
+                          {q.marks ?? 1} Marks {q.marksSource && q.marksSource !== "default_inferred" ? `(${q.marksSource.replace("_", " ")})` : ""}
                         </span>
                         {q.negativeMarks ? (
                           <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 px-1.5 py-0.5 rounded">

@@ -422,4 +422,92 @@ test("Parses official 27-question sample paper across all 9 question types with 
   }
 });
 
+test("Phase 1: Detects marks from all formats, cleans question text, and prevents default 1 mark", () => {
+  const testInput = `
+Section A — Very Short Answer Questions — 5 × 1 = 5
+1. What is photosynthesis?
+Answer: The process by which green plants make food.
+
+2. State Ohm's law. (2 Marks)
+Answer: Voltage is directly proportional to current.
+
+Section B — Short Answer Questions — 3 × 3 = 9
+3. Explain Newton's second law of motion.
+Answer: Force equals mass times acceleration.
+
+4. Describe the greenhouse effect. [4 Marks]
+Answer: Warming of Earth due to trapped solar radiation.
+
+5. Explain the functioning of human eye. — 3 marks
+Answer: Light enters through the cornea and forms an inverted real image on the retina.
+
+Section C — Long Answer Questions — 2 × 5 = 10
+6. Explain the human circulatory system in detail. (5)
+Answer: The human heart pumps oxygenated blood through arteries to body tissues.
+
+Section D — Case-Based Questions
+Case Study:
+Renewable energy sources such as solar and wind power are essential for sustainable development.
+
+7. What is solar energy? (1 Mark)
+Answer: Energy obtained from solar radiation.
+
+8. Why is solar power eco-friendly? (2 Marks)
+Answer: It produces zero direct greenhouse gas emissions during operation.
+`;
+
+  const parsed = parseAssessmentText(testInput, mockContext);
+  assert.equal(parsed.success, true);
+  assert.equal(parsed.questions.length, 8);
+
+  // Q1: Inherited from section formula (5 × 1 = 5) => 1 Mark
+  assert.equal(parsed.questions[0].marks, 1);
+  assert.equal(parsed.questions[0].type, "very_short_answer");
+  assert.equal(parsed.questions[0].marksPending, false);
+
+  // Q2: Explicit (2 Marks) beside question
+  assert.equal(parsed.questions[1].marks, 2);
+  assert.equal(parsed.questions[1].marksPending, false);
+  assert.equal(parsed.questions[1].question.includes("(2 Marks)"), false);
+  assert.equal(parsed.questions[1].question, "State Ohm's law.");
+
+  // Q3: Inherited from section formula (3 × 3 = 9) => 3 Marks (NOT 1 mark!)
+  assert.equal(parsed.questions[2].marks, 3);
+  assert.equal(parsed.questions[2].type, "short_answer");
+  assert.equal(parsed.questions[2].marksPending, false);
+
+  // Q4: Explicit [4 Marks]
+  assert.equal(parsed.questions[3].marks, 4);
+  assert.equal(parsed.questions[3].marksPending, false);
+  assert.equal(parsed.questions[3].question.includes("[4 Marks]"), false);
+  assert.equal(parsed.questions[3].question, "Describe the greenhouse effect.");
+
+  // Q5: Explicit — 3 marks
+  assert.equal(parsed.questions[4].marks, 3);
+  assert.equal(parsed.questions[4].marksPending, false);
+  assert.equal(parsed.questions[4].question.includes("— 3 marks"), false);
+  assert.equal(parsed.questions[4].question, "Explain the functioning of human eye.");
+
+  // Q6: Inherited / Explicit (5) => 5 Marks (NOT 1 mark!)
+  assert.equal(parsed.questions[5].marks, 5);
+  assert.equal(parsed.questions[5].type, "long_answer");
+  assert.equal(parsed.questions[5].marksPending, false);
+  assert.equal(parsed.questions[5].question.includes("(5)"), false);
+  assert.equal(parsed.questions[5].question, "Explain the human circulatory system in detail.");
+
+  // Q7 & Q8: Case-study sub-questions with explicit marks (1 Mark & 2 Marks)
+  assert.equal(parsed.questions[6].marks, 1);
+  assert.equal(parsed.questions[6].marksPending, false);
+  assert.equal(parsed.questions[6].question, "What is solar energy?");
+
+  assert.equal(parsed.questions[7].marks, 2);
+  assert.equal(parsed.questions[7].marksPending, false);
+  assert.equal(parsed.questions[7].question, "Why is solar power eco-friendly?");
+
+  // Total marks must be exact sum of question marks (1 + 2 + 3 + 4 + 3 + 5 + 1 + 2 = 21)
+  const total = parsed.questions.reduce((sum, q) => sum + (q.marks || 0), 0);
+  assert.equal(total, 21);
+});
+
+
 

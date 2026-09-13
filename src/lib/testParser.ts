@@ -225,7 +225,7 @@ export function extractMarks(text: string): {
 } | null {
   if (!text) return null;
 
-  // Formula check first: "5 × 1 = 5 Marks"
+  // Formula check first: "5 × 1 = 5 Marks", "5 x 1 = 5", "3 * 3 = 9"
   const formula = extractSectionMarksFormula(text);
   if (formula) {
     return {
@@ -244,52 +244,68 @@ export function extractMarks(text: string): {
     negativeMarks = parseFloat(negMatch[1]);
   }
 
-  // 1. (2 marks each), [3 marks], (1 mark), 2 marks each
+  // 1. Explicit "(2 marks each)", "[3 Marks]", "(1 mark)", "(2 Marks)", "{3 marks}", "2 marks each"
   const eachMatch = text.match(
-    /(?:\(|\{|\[)?\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)\s*(?:each)?\s*(?:\)|\}|\])?/i
+    /(?:\(|\{|\[)\s*(?:mark|marks)?\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)?\s*(?:each)?\s*(?:\)|\}|\])/i
   );
   if (eachMatch) {
     const val = parseFloat(eachMatch[1]);
-    if (!isNaN(val) && val > 0 && val <= 100) {
+    if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
         negativeMarks,
         source: eachMatch[0].toLowerCase().includes("each") ? "section_instruction" : "question_label",
-        confidence: 0.98
-      };
-    }
-  }
-
-  // 2. Marks: 5, Mark: 2, Points: 3
-  const labelMatch = text.match(/(?:marks?|pts?|points?|score)[\:\s]+(\d+(?:\.\d+)?)/i);
-  if (labelMatch) {
-    const val = parseFloat(labelMatch[1]);
-    if (!isNaN(val) && val > 0 && val <= 100) {
-      return {
-        marks: val,
-        negativeMarks,
-        source: "question_label",
         confidence: 0.99
       };
     }
   }
 
-  // 3. carries 2 marks, carry 1 mark each
-  const carryMatch = text.match(/(?:carries|carry|worth)\s+(\d+(?:\.\d+)?)\s*(?:marks?|pts?)/i);
-  if (carryMatch) {
-    const val = parseFloat(carryMatch[1]);
-    if (!isNaN(val) && val > 0 && val <= 100) {
+  // 2. Dash / separator followed by marks: "— 3 marks", "- 2 marks", "– 5 Marks", "— 1 mark each", ", 3 marks"
+  const dashMatch = text.match(
+    /(?:[\—\–\-]|\,\s*)\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)(?:\s+each)?(?:\s*$|\s*[\r\n])/i
+  );
+  if (dashMatch) {
+    const val = parseFloat(dashMatch[1]);
+    if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
         negativeMarks,
-        source: "section_instruction",
+        source: dashMatch[0].toLowerCase().includes("each") ? "section_instruction" : "question_label",
+        confidence: 0.99
+      };
+    }
+  }
+
+  // 3. Marks label: "Marks: 5", "Mark: 2", "Points: 3", "Score: 4", "[Marks: 3]"
+  const labelMatch = text.match(/(?:marks?|pts?|points?|score)[\:\s]+(\d+(?:\.\d+)?)/i);
+  if (labelMatch) {
+    const val = parseFloat(labelMatch[1]);
+    if (!isNaN(val) && val > 0 && val <= 50) {
+      return {
+        marks: val,
+        negativeMarks,
+        source: "question_label",
+        confidence: 1.0
+      };
+    }
+  }
+
+  // 4. "carries 2 marks", "carry 1 mark each", "worth 5 marks"
+  const carryMatch = text.match(/(?:carries|carry|worth)\s+(\d+(?:\.\d+)?)\s*(?:marks?|pts?)/i);
+  if (carryMatch) {
+    const val = parseFloat(carryMatch[1]);
+    if (!isNaN(val) && val > 0 && val <= 50) {
+      return {
+        marks: val,
+        negativeMarks,
+        source: carryMatch[0].toLowerCase().includes("each") ? "section_instruction" : "question_label",
         confidence: 0.98
       };
     }
   }
 
-  // 4. Standalone bracketed number at end of line like [2]
-  const bracketMatch = text.match(/(?:^|\s)\[\s*(\d+(?:\.\d+)?)\s*\](?:\s*$)/);
+  // 5. Standalone bracketed/parenthesized number at end of string e.g. "(5)", "[3]", "(1)", "(2)"
+  const bracketMatch = text.match(/(?:^|\s)[\(\[]\s*(\d+(?:\.\d+)?)\s*[\)\]](?:\s*$|\s*[\r\n])/);
   if (bracketMatch) {
     const val = parseFloat(bracketMatch[1]);
     if (!isNaN(val) && val > 0 && val <= 50) {
@@ -297,7 +313,51 @@ export function extractMarks(text: string): {
         marks: val,
         negativeMarks,
         source: "question_label",
-        confidence: 0.95
+        confidence: 0.96
+      };
+    }
+  }
+
+  // 6. Parenthesized marks right after question number: "1. (2) Explain...", "Q1. (5) Explain...", "(i) (1) What is..."
+  const inlineAfterNumMatch = text.match(
+    /^(?:Q(?:uestion)?\s*\d+|\d+|[ivxlcdm]+|\([ivxlcdm]+\))\s*[\.\)\:\-]?\s*[\(\[]\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?)?\s*[\)\]]/i
+  );
+  if (inlineAfterNumMatch) {
+    const val = parseFloat(inlineAfterNumMatch[1]);
+    if (!isNaN(val) && val > 0 && val <= 50) {
+      return {
+        marks: val,
+        negativeMarks,
+        source: "question_label",
+        confidence: 0.98
+      };
+    }
+  }
+
+  // 7. Dash followed by standalone number at end of line: "Q1. Explain photosynthesis — 3"
+  const dashNumMatch = text.match(/(?:[\—\–\-])\s*(\d+(?:\.\d+)?)\s*$/);
+  if (dashNumMatch) {
+    const val = parseFloat(dashNumMatch[1]);
+    if (!isNaN(val) && val > 0 && val <= 50) {
+      return {
+        marks: val,
+        negativeMarks,
+        source: "question_label",
+        confidence: 0.94
+      };
+    }
+  }
+
+  // 8. General "X marks" or "X marks each"
+  const generalMarksMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)(?:\s+each)?\b/i);
+  if (generalMarksMatch) {
+    const val = parseFloat(generalMarksMatch[1]);
+    if (!isNaN(val) && val > 0 && val <= 50) {
+      return {
+        marks: val,
+        negativeMarks,
+        source: generalMarksMatch[0].toLowerCase().includes("each") ? "section_instruction" : "question_label",
+        confidence: 0.92
       };
     }
   }
@@ -306,7 +366,35 @@ export function extractMarks(text: string): {
 }
 
 /**
- * Inferred fallback marks by question type
+ * Strips marks tags from question text so question labels and prompts display cleanly.
+ * e.g. "Explain photosynthesis. (2 Marks)" -> "Explain photosynthesis."
+ * e.g. "Explain why RBI supervises banks — 3 marks" -> "Explain why RBI supervises banks"
+ * e.g. "What is an MNC? (5)" -> "What is an MNC?"
+ */
+export function stripMarksFromQuestionText(text: string): string {
+  if (!text) return text;
+  let cleaned = text;
+
+  // 1. Trailing dash/separator with marks: " — 3 marks", " - 2 marks", " – 5 Marks", " — 5"
+  cleaned = cleaned.replace(/\s*(?:[\—\–\-]|\,\s*)\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)?\s*$/i, "");
+
+  // 2. Trailing bracketed/parenthesized marks or numbers: " (2 Marks)", " [3 Marks]", " (5)", " [1]"
+  cleaned = cleaned.replace(/\s*[\(\[]\s*(?:mark|marks)?\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)?\s*[\)\]]\s*$/i, "");
+
+  // 3. Leading bracketed marks: "(2 Marks) Explain...", "(1) What is..."
+  cleaned = cleaned.replace(/^[\(\[]\s*(?:mark|marks)?\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)?\s*[\)\]]\s*/i, "");
+
+  // 4. Inline "(2 Marks)"
+  cleaned = cleaned.replace(/\s*[\(\[]\s*(?:mark|marks)?\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)\s*[\)\]]/gi, "");
+
+  // 5. Trailing label format: " Marks: 3", " Score: 5"
+  cleaned = cleaned.replace(/\s*(?:marks?|pts?|score)[\:\s]+\d+(?:\.\d+)?\s*$/i, "");
+
+  return cleaned.trim();
+}
+
+/**
+ * Inferred fallback marks by question type when not explicitly stated
  */
 export function inferDefaultMarks(type: ChapterTestQuestionType): {
   marks: number;
@@ -315,21 +403,25 @@ export function inferDefaultMarks(type: ChapterTestQuestionType): {
   pending: boolean;
 } {
   switch (type) {
+    case "very_short_answer":
+      return { marks: 1, source: "section_default", confidence: 0.90, pending: false };
+    case "short_answer":
+      return { marks: 2, source: "section_default", confidence: 0.85, pending: false };
+    case "long_answer":
+      return { marks: 5, source: "section_default", confidence: 0.90, pending: false };
+    case "case_based":
+    case "comprehension":
+      return { marks: 4, source: "section_default", confidence: 0.85, pending: false };
     case "mcq":
     case "true_false":
     case "assertion_reasoning":
-    case "very_short_answer":
-      return { marks: 1, source: "default_inferred", confidence: 0.5, pending: true };
+    case "assertion_reason":
+      return { marks: 1, source: "section_default", confidence: 0.95, pending: false };
     case "multiple_select":
-    case "short_answer":
-      return { marks: 2, source: "default_inferred", confidence: 0.5, pending: true };
-    case "long_answer":
-      return { marks: 5, source: "default_inferred", confidence: 0.5, pending: true };
-    case "case_based":
-    case "comprehension":
-      return { marks: 4, source: "default_inferred", confidence: 0.5, pending: true };
+    case "msq":
+      return { marks: 2, source: "section_default", confidence: 0.90, pending: false };
     default:
-      return { marks: 1, source: "default_inferred", confidence: 0.5, pending: true };
+      return { marks: 1, source: "needs_review", confidence: 0.40, pending: true };
   }
 }
 
@@ -481,8 +573,12 @@ export function identifySectionHeader(line: string): {
   // Clean candidate title of formulas and bracketed marks for category detection
   const cleanTitle = candidateTitle
     .replace(/(?:\(|\{|\[)?\s*\d+\s*(?:[×\*xX]|times)\s*\d+(?:\.\d+)?\s*=\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)?\s*(?:\)|\}|\])?/gi, "")
-    .replace(/\([\w\s\.\,\-\:]+\)/g, "")
-    .replace(/\[[\w\s\.\,\-\:]+\]/g, "")
+    .replace(/\([^\)]*\)/g, "")
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\{[^\}]*\}/g, "")
+    .replace(/(?:[\s\—\–\-])+\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)(?:\s+each)?/gi, "")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)(?:\s+each)?\b/gi, "")
+    .replace(/^[\s\—\–\-\:\.\,\_\#]+|[\s\—\–\-\:\.\,\_\#]+$/g, "")
     .trim();
 
   // Guard against full sentences
@@ -492,6 +588,25 @@ export function identifySectionHeader(line: string): {
 
   const finalTitle = cleanTitle || candidateTitle;
   const declaredMarks = formula ? formula.declaredSectionMarks : undefined;
+
+  const getResolvedMarks = (secType: ChapterTestQuestionType) => {
+    if (marksInfo) return marksInfo;
+    switch (secType) {
+      case "very_short_answer":
+        return { marks: 1, source: "section_default", confidence: 0.95 };
+      case "short_answer":
+        return { marks: 2, source: "section_default", confidence: 0.90 };
+      case "long_answer":
+        return { marks: 5, source: "section_default", confidence: 0.95 };
+      case "case_based":
+      case "comprehension":
+        return { marks: 4, source: "section_default", confidence: 0.90 };
+      case "multiple_select":
+        return { marks: 2, source: "section_default", confidence: 0.95 };
+      default:
+        return { marks: 1, source: "section_default", confidence: 0.95 };
+    }
+  };
 
   // Test against distinct categories
   const testPhrases = [cleanTitle, candidateTitle];
@@ -509,7 +624,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "multiple_select",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("multiple_select"),
         declaredMarks
       };
     }
@@ -524,7 +639,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "mcq",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("mcq"),
         declaredMarks
       };
     }
@@ -539,7 +654,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "assertion_reason",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("assertion_reason"),
         declaredMarks
       };
     }
@@ -554,7 +669,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "true_false",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("true_false"),
         declaredMarks
       };
     }
@@ -569,7 +684,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "very_short_answer",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("very_short_answer"),
         declaredMarks
       };
     }
@@ -584,7 +699,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "short_answer",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("short_answer"),
         declaredMarks
       };
     }
@@ -599,14 +714,15 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "long_answer",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("long_answer"),
         declaredMarks
       };
     }
 
     // 8. Case-Based Questions
     if (
-      /^(?:Case[\s\-]Based(?:\s+Questions?)?|Case\s+Study(?:\s+Questions?)?)$/i.test(str)
+      /^(?:Case[\s\-]Based(?:\s+Questions?)?|Case\s+Study\s+Questions?)$/i.test(str) ||
+      (secLetterMatch && /^Case\s+Study$/i.test(str))
     ) {
       return {
         isSection: true,
@@ -614,7 +730,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "case_based",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("case_based"),
         declaredMarks
       };
     }
@@ -629,7 +745,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "comprehension",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("comprehension"),
         declaredMarks
       };
     }
@@ -644,7 +760,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "fill_blank",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("fill_blank"),
         declaredMarks
       };
     }
@@ -659,7 +775,7 @@ export function identifySectionHeader(line: string): {
         sectionTitle: finalTitle,
         rawHeading: trimmed,
         type: "match_following",
-        marksInfo: marksInfo || undefined,
+        marksInfo: getResolvedMarks("match_following"),
         declaredMarks
       };
     }
@@ -673,7 +789,7 @@ export function identifySectionHeader(line: string): {
       sectionTitle: finalTitle || `Section ${sectionLetter}`,
       rawHeading: trimmed,
       type: "mcq",
-      marksInfo: marksInfo || undefined,
+      marksInfo: getResolvedMarks("mcq"),
       declaredMarks
     };
   }
@@ -707,6 +823,14 @@ export function detectPassageOrCaseStart(line: string): {
   // "Read the passage carefully."
   // "Read the case carefully."
   // "Study the case given below."
+  // "Case Study:" or "Passage:"
+  if (/^(?:Case\s+Study|Case)(?:\s+\d+)?\s*[\:\.\-]?$/i.test(trimmed)) {
+    return { title: trimmed, isCase: true };
+  }
+  if (/^(?:Passage|Reading\s+Passage)(?:\s+\d+)?\s*[\:\.\-]?$/i.test(trimmed)) {
+    return { title: trimmed, isCase: false };
+  }
+
   if (
     /^(?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|case|case\s+study|information)(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?[\.\:\-]?$/i.test(
       trimmed
@@ -764,6 +888,38 @@ export function matchQuestionNumber(line: string): {
         qNum: num,
         label: `Q${num}`,
         remainder: plainMatch[2] ? plainMatch[2].trim() : "",
+        hasExplicitQPrefix: false
+      };
+    }
+  }
+
+  // "(1) ", "[1] "
+  const parenNumMatch = trimmed.match(/^[\(\[](\d+)[\)\]][\.\:\-]?\s+(.*)$/);
+  if (parenNumMatch) {
+    const num = parseInt(parenNumMatch[1], 10);
+    if (!isNaN(num)) {
+      return {
+        qNum: num,
+        label: `Q${num}`,
+        remainder: parenNumMatch[2] ? parenNumMatch[2].trim() : "",
+        hasExplicitQPrefix: false
+      };
+    }
+  }
+
+  // Roman numeral sub-questions: "(i) ", "(ii) ", "i. ", "ii) ", "(iv) "
+  const romanMatch = trimmed.match(/^(?:\(?([ivxlcdm]+)\)[\.\:\-]?|([ivxlcdm]+)[\.\):])\s+(.*)$/i);
+  if (romanMatch) {
+    const romanStr = (romanMatch[1] || romanMatch[2]).toLowerCase();
+    const romanMap: Record<string, number> = {
+      i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
+    };
+    if (romanMap[romanStr]) {
+      const num = romanMap[romanStr];
+      return {
+        qNum: num,
+        label: `(${romanStr})`,
+        remainder: romanMatch[3] ? romanMatch[3].trim() : "",
         hasExplicitQPrefix: false
       };
     }
@@ -1105,12 +1261,12 @@ export function parseChapterTest(
           textLines: passDetected.inlineText ? [passDetected.inlineText] : [],
           isCase,
           questionIds: [],
-          sectionMarks: currentSectionObj?.marksPerQuestion ? {
+          sectionMarks: currentSectionObj?.marksInfo || (currentSectionObj?.marksPerQuestion ? {
             marks: currentSectionObj.marksPerQuestion,
             negativeMarks: currentSectionObj.negativeMarks,
             source: "section_instruction",
             confidence: 0.98
-          } : undefined
+          } : undefined)
         };
       }
       continue;
@@ -1177,12 +1333,12 @@ export function parseChapterTest(
         sectionId: currentSectionObj.id,
         sectionLetter: currentSectionObj.sectionLetter,
         sectionTitle: currentSectionObj.title,
-        sectionMarks: currentSectionObj.marksPerQuestion ? {
+        sectionMarks: currentSectionObj?.marksInfo || (currentSectionObj.marksPerQuestion ? {
           marks: currentSectionObj.marksPerQuestion,
           negativeMarks: currentSectionObj.negativeMarks,
           source: "section_instruction",
           confidence: 0.98
-        } : undefined,
+        } : undefined),
         passageId: activePassage && !activePassage.isCase ? activePassage.id : undefined,
         caseId: activePassage && activePassage.isCase ? activePassage.id : undefined,
         lines: qMatch.remainder ? [qMatch.remainder] : [],
@@ -1463,8 +1619,18 @@ export function parseChapterTest(
         { letter: "True", text: "True", raw: "True" },
         { letter: "False", text: "False", raw: "False" }
       ];
-    } else if (isSubjectiveType || resolvedType === "short_answer" || resolvedType === "long_answer" || resolvedType === "very_short_answer") {
+    } else if (isSubjectiveType || resolvedType === "short_answer" || resolvedType === "long_answer" || resolvedType === "very_short_answer" || (!hasOptions && resolvedType !== "assertion_reason")) {
       isSubjective = true;
+      if (candidate.caseId || candidate.passageId) {
+        resolvedType = "short_answer";
+      } else if (candidate.sectionType === "case_based") {
+        resolvedType = "short_answer";
+      } else if (candidate.sectionType === "comprehension") {
+        resolvedType = "short_answer";
+      } else if (resolvedType === "mcq") {
+        resolvedType = "short_answer";
+      }
+
       questionText = linesAfterImage
         .filter(
           (l) =>
@@ -1478,7 +1644,7 @@ export function parseChapterTest(
       finalAnswer = explicitAnswer;
       modelAnswerText = explicitAnswer;
 
-      if (!explicitAnswer) {
+      if (!explicitAnswer && candidate.sectionType !== "case_based" && candidate.sectionType !== "comprehension") {
         warnings.push(`Question ${candidate.label} (${getQuestionTypeDisplayName(resolvedType)}): Missing model answer.`);
       }
     } else {
@@ -1571,6 +1737,10 @@ export function parseChapterTest(
           }
         }
       }
+    }
+
+    if (questionText) {
+      questionText = stripMarksFromQuestionText(questionText);
     }
 
     if (!questionText) {
