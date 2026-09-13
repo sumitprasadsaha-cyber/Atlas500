@@ -208,7 +208,9 @@ function matchSectionHeader(
       marks: identified.marksInfo?.marks,
       negativeMarks: identified.marksInfo?.negativeMarks,
       source: identified.marksInfo?.source,
-      title: identified.sectionTitle
+      title: identified.sectionTitle,
+      sectionLetter: identified.sectionLetter,
+      declaredMarks: identified.declaredMarks
     };
   }
 
@@ -306,20 +308,73 @@ function isSectionHeaderWithLookahead(
   line: string,
   lines: string[],
   currentIndex: number
-): { type: AssessmentQuestionType; marks?: number; negativeMarks?: number; source?: string; title?: string } | null {
+): {
+  type: AssessmentQuestionType;
+  marks?: number;
+  negativeMarks?: number;
+  source?: string;
+  title?: string;
+  sectionLetter?: string;
+  declaredMarks?: number;
+} | null {
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
 
+  const enrichSectionLookahead = (sec: {
+    type: AssessmentQuestionType;
+    marks?: number;
+    negativeMarks?: number;
+    source?: string;
+    title?: string;
+    sectionLetter?: string;
+    declaredMarks?: number;
+  }) => {
+    let marks = sec.marks;
+    let negativeMarks = sec.negativeMarks;
+    let source = sec.source;
+    let declaredMarks = sec.declaredMarks;
+
+    // Scan ahead up to 5 non-empty lines for separate formula or marks lines: e.g. "5 × 1 = 5 Marks"
+    for (let j = currentIndex + 1; j < Math.min(lines.length, currentIndex + 6); j++) {
+      const nextL = lines[j].trim();
+      if (!nextL) continue;
+      if (matchQuestionHeader(nextL) || matchSectionHeader(nextL)) break;
+      const formula = extractSectionMarksFormula(nextL);
+      if (formula) {
+        marks = formula.marksPerQuestion;
+        declaredMarks = formula.declaredSectionMarks;
+        source = "section_instruction";
+        break;
+      }
+      const marksFound = extractMarks(nextL);
+      if (marksFound && marksFound.source !== "section_default") {
+        marks = marksFound.marks;
+        negativeMarks = marksFound.negativeMarks;
+        source = marksFound.source;
+        break;
+      }
+    }
+
+    return {
+      ...sec,
+      marks,
+      negativeMarks,
+      source,
+      declaredMarks
+    };
+  };
+
   const hasLeadingDigit = /^\d+[\.\):\-]\s*/.test(trimmed);
   if (!hasLeadingDigit) {
-    return matchSectionHeader(trimmed);
+    const secInfo = matchSectionHeader(trimmed);
+    return secInfo ? enrichSectionLookahead(secInfo) : null;
   }
 
   const secInfo = matchSectionHeader(trimmed);
   if (!secInfo) return null;
 
   if (secInfo.type === "comprehension" || secInfo.type === "case_based") {
-    return secInfo;
+    return enrichSectionLookahead(secInfo);
   }
 
   // If there is significant question text on the same line after the section name, it's a question
@@ -340,14 +395,19 @@ function isSectionHeaderWithLookahead(
     if (!nextLine || isIgnoredMarkerOrDivider(nextLine) || extractMetadataLine(nextLine, {})) {
       continue;
     }
-    // If the next line is a numbered question or directions line or another header
-    if (matchQuestionHeader(nextLine) || /^Directions\s*[\:\-]/i.test(nextLine) || matchSectionHeader(nextLine)) {
-      return secInfo;
+    // If the next line is a numbered question or directions line or another header or marks formula
+    if (
+      matchQuestionHeader(nextLine) ||
+      /^Directions\s*[\:\-]/i.test(nextLine) ||
+      matchSectionHeader(nextLine) ||
+      extractSectionMarksFormula(nextLine)
+    ) {
+      return enrichSectionLookahead(secInfo);
     }
     return null;
   }
 
-  return secInfo;
+  return enrichSectionLookahead(secInfo);
 }
 
 /**
@@ -603,6 +663,7 @@ export function parseAssessmentText(
 
   let currentSection: AssessmentQuestionType = "mcq";
   let currentSectionTitle: string = "";
+  let currentSectionLetter: string | undefined = undefined;
   let currentSectionMarks: { marks: number; negativeMarks?: number; source: string; confidence: number } | null = null;
 
   let activePassage: {
@@ -622,9 +683,11 @@ export function parseAssessmentText(
     qNum: number;
     hasExplicitQPrefix?: boolean;
     section: AssessmentQuestionType;
+    sectionId?: string;
     sectionTitle?: string;
     passageId?: string;
     caseId?: string;
+    isSubQuestion?: boolean;
     sectionMarks?: { marks: number; negativeMarks?: number; source: string; confidence: number } | null;
     lines: string[];
     rawBlockLines: string[];
@@ -654,6 +717,28 @@ export function parseAssessmentText(
       continue;
     }
 
+    // Check for marks formula lines: e.g. "5 × 1 = 5 Marks", "5 x 1 = 5", "4 × 1 = 4 Marks"
+    const formulaLine = extractSectionMarksFormula(trimmed);
+    if (formulaLine) {
+      currentSectionMarks = {
+        marks: formulaLine.marksPerQuestion,
+        source: "section_instruction",
+        confidence: 1.0
+      };
+      if (activePassage && activePassage.questionCount === 0) {
+        activePassage.sectionMarks = currentSectionMarks;
+      }
+      continue;
+    }
+
+    // Check for section question-count or structural directive lines: e.g. "5 questions", "(5 questions)", "1 passage followed by 4 sub-questions"
+    if (
+      /^\(?\s*\d+\s*(?:questions?|sub-questions?)\s*\)?$/i.test(trimmed) ||
+      /^\(?\s*\d+\s*passage\s+followed\s+by\s+\d+\s*sub-questions?\s*\)?$/i.test(trimmed)
+    ) {
+      continue;
+    }
+
     // 2. Check for comprehension / case start heading
     const compMatch = detectComprehensionStart(trimmed);
     if (compMatch) {
@@ -661,11 +746,8 @@ export function parseAssessmentText(
         rawBlocks.push(activeBlock);
         activeBlock = null;
       }
-      // If we already have an activePassage with no questions and no text yet, update it instead of creating a second one
-      if (activePassage && activePassage.questionCount === 0 && activePassage.textLines.length === 0) {
-        if (!/^(?:Passage|Reading\s+Passage|Case)[\:\.]?$/i.test(compMatch.title)) {
-          activePassage.title = compMatch.title || activePassage.title;
-        }
+      // If we already have an activePassage with no questions, update it instead of creating an orphaned passage
+      if (activePassage && activePassage.questionCount === 0) {
         if (compMatch.isCase) {
           activePassage.isCase = true;
         }
@@ -678,7 +760,7 @@ export function parseAssessmentText(
       const pId = isCase ? `case_${caseCounter++}` : `passage_${passageCounter++}`;
       activePassage = {
         id: pId,
-        title: compMatch.title,
+        title: compMatch.title || (isCase ? "Case Study" : "Comprehension Passage"),
         textLines: compMatch.firstLine ? [compMatch.firstLine] : [],
         questionCount: 0,
         isCase,
@@ -688,7 +770,7 @@ export function parseAssessmentText(
       continue;
     }
 
-    // 3. Check for section headers (e.g. "1. MCQs (2 marks each)", "2. Multiple Select Questions", "5. True and False", "6. Very Short Answer Questions")
+    // 3. Check for section headers (e.g. "Section A — Multiple Choice Questions", "Section G — Case-Based Question")
     const secInfo = isSectionHeaderWithLookahead(trimmed, rawLines, i);
     if (secInfo) {
       if (activeBlock) {
@@ -697,6 +779,7 @@ export function parseAssessmentText(
       }
 
       currentSection = secInfo.type;
+      currentSectionLetter = secInfo.sectionLetter;
       currentSectionTitle = secInfo.title || trimmed;
       currentSectionMarks = secInfo.marks ? {
         marks: secInfo.marks,
@@ -706,8 +789,8 @@ export function parseAssessmentText(
       } : null;
 
       if (secInfo.type === "comprehension" || secInfo.type === "case_based") {
-        if (activePassage && activePassage.questionCount === 0 && activePassage.textLines.length === 0) {
-          activePassage.title = trimmed;
+        if (activePassage && activePassage.questionCount === 0) {
+          activePassage.title = secInfo.title || trimmed;
           activePassage.sectionMarks = currentSectionMarks;
           continue;
         }
@@ -715,7 +798,7 @@ export function parseAssessmentText(
         const pId = isCase ? `case_${caseCounter++}` : `passage_${passageCounter++}`;
         activePassage = {
           id: pId,
-          title: trimmed,
+          title: secInfo.title || trimmed,
           textLines: [],
           questionCount: 0,
           isCase,
@@ -731,10 +814,6 @@ export function parseAssessmentText(
     // 4. Check if line starts a new numbered question
     const qHeader = matchQuestionHeader(trimmed);
     if (qHeader) {
-      // If we are currently inside an active question block that has already seen an "Answer:" line:
-      // A line starting with a plain number (e.g. "1. Improvement in...", "2. Faster transport...") without an explicit "Q" prefix
-      // is a numbered list item inside the answer, NOT a new question, only if the question started with "Q" or if the number <= activeBlock.qNum and number > 1!
-      // When numbering restarts at 1, it is ALWAYS a new question!
       const activeHasAnswer = activeBlock && activeBlock.lines.some((l) => /^(?:Correct\s*)?Ans(?:wer)?\s*[\:\-]/i.test(l));
       const isListItemInsideAnswer =
         activeBlock &&
@@ -768,9 +847,11 @@ export function parseAssessmentText(
         qNum: qHeader.qNum,
         hasExplicitQPrefix: qHeader.hasExplicitQPrefix,
         section: qSection,
-        sectionTitle: activePassage ? activePassage.title : currentSectionTitle,
+        sectionId: currentSectionLetter,
+        sectionTitle: currentSectionTitle || (activePassage ? activePassage.title : undefined),
         passageId: activePassage && !activePassage.isCase ? activePassage.id : undefined,
         caseId: activePassage && activePassage.isCase ? activePassage.id : undefined,
+        isSubQuestion: Boolean(activePassage),
         sectionMarks: activePassage?.sectionMarks || currentSectionMarks,
         lines: qHeader.remainder ? [qHeader.remainder] : [],
         rawBlockLines: [rawLine]
@@ -989,6 +1070,9 @@ export function parseAssessmentText(
       questions.push({
         id: `q_tf_${block.qNum}_${Math.random().toString(36).substring(2, 7)}`,
         questionNumber: block.qNum,
+        displayNumber: `Q${block.qNum}`,
+        orderIndex: questions.length + 1,
+        sectionId: block.sectionId,
         section: block.sectionTitle || undefined,
         sectionTitle: block.sectionTitle || undefined,
         sectionType: block.section,
@@ -998,6 +1082,7 @@ export function parseAssessmentText(
         chapterName: context.chapterName,
         topicName: context.topicName,
         type: "true_false",
+        questionType: "true_false",
         question: cleanQuestion,
         options: ["True", "False"],
         correctAnswer: resolvedAnswer,
@@ -1006,6 +1091,7 @@ export function parseAssessmentText(
         marksSource,
         marksConfidence,
         marksPending,
+        isSubQuestion: false,
         imageLabel: extractedImageLabel || undefined,
         rawText: block.rawBlockLines.join("\n")
       });
@@ -1045,14 +1131,20 @@ export function parseAssessmentText(
         return;
       }
 
-      const linkedPassageId = block.caseId || block.passageId;
-      const linkedPassageObj = (block.caseId ? casesResult[block.caseId] : undefined) ||
-                               (block.passageId ? passagesResult[block.passageId] : undefined);
+      const isSubQ = Boolean(block.isSubQuestion || block.caseId || block.passageId);
+      const linkedPassageId = isSubQ ? (block.caseId || block.passageId) : undefined;
+      const linkedPassageObj = isSubQ
+        ? ((block.caseId ? casesResult[block.caseId] : undefined) ||
+           (block.passageId ? passagesResult[block.passageId] : undefined))
+        : undefined;
       const isCase = Boolean(block.caseId || (block.section && block.section.includes("case")));
 
       questions.push({
         id: `q_${subjectiveType}_${block.qNum}_${Math.random().toString(36).substring(2, 7)}`,
         questionNumber: block.qNum,
+        displayNumber: `Q${block.qNum}`,
+        orderIndex: questions.length + 1,
+        sectionId: block.sectionId,
         section: block.sectionTitle || undefined,
         sectionTitle: block.sectionTitle || undefined,
         sectionType: block.section,
@@ -1062,6 +1154,7 @@ export function parseAssessmentText(
         chapterName: context.chapterName,
         topicName: context.topicName,
         type: subjectiveType,
+        questionType: subjectiveType,
         question: questionText,
         options: [],
         correctAnswer: explicitCorrectAnswer,
@@ -1072,16 +1165,17 @@ export function parseAssessmentText(
         marksSource,
         marksConfidence,
         marksPending,
-        passageId: block.passageId,
-        parentPassageId: block.passageId,
-        caseId: block.caseId,
-        parentCaseId: block.caseId,
-        groupId: linkedPassageId,
-        groupType: isCase ? "case_based" : block.passageId ? "comprehension" : undefined,
-        groupTitle: linkedPassageObj?.title,
-        groupContent: linkedPassageObj?.text,
-        passage: linkedPassageObj?.text,
-        caseStudy: isCase ? linkedPassageObj?.text : undefined,
+        isSubQuestion: isSubQ,
+        passageId: isSubQ ? (block.passageId || block.caseId) : undefined,
+        parentPassageId: isSubQ ? (block.passageId || block.caseId) : undefined,
+        caseId: isSubQ ? block.caseId : undefined,
+        parentCaseId: isSubQ ? block.caseId : undefined,
+        groupId: isSubQ ? linkedPassageId : undefined,
+        groupType: isSubQ ? (isCase ? "case_based" : "comprehension") : undefined,
+        groupTitle: isSubQ ? linkedPassageObj?.title : undefined,
+        groupContent: isSubQ ? linkedPassageObj?.text : undefined,
+        passage: isSubQ ? linkedPassageObj?.text : undefined,
+        caseStudy: isSubQ && isCase ? linkedPassageObj?.text : undefined,
         imageLabel: extractedImageLabel || undefined,
         rawText: block.rawBlockLines.join("\n")
       });
@@ -1225,14 +1319,20 @@ export function parseAssessmentText(
       }
     }
 
-    const linkedPassageId = block.caseId || block.passageId;
-    const linkedPassageObj = (block.caseId ? casesResult[block.caseId] : undefined) ||
-                             (block.passageId ? passagesResult[block.passageId] : undefined);
+    const isSubQ = Boolean(block.isSubQuestion || block.caseId || block.passageId);
+    const linkedPassageId = isSubQ ? (block.caseId || block.passageId) : undefined;
+    const linkedPassageObj = isSubQ
+      ? ((block.caseId ? casesResult[block.caseId] : undefined) ||
+         (block.passageId ? passagesResult[block.passageId] : undefined))
+      : undefined;
     const isCase = Boolean(block.caseId || (block.section && block.section.includes("case")));
 
     questions.push({
       id: `q_${resolvedType}_${block.qNum}_${Math.random().toString(36).substring(2, 7)}`,
       questionNumber: block.qNum,
+      displayNumber: `Q${block.qNum}`,
+      orderIndex: questions.length + 1,
+      sectionId: block.sectionId,
       section: block.sectionTitle || undefined,
       sectionTitle: block.sectionTitle || undefined,
       sectionType: block.section,
@@ -1242,6 +1342,7 @@ export function parseAssessmentText(
       chapterName: context.chapterName,
       topicName: context.topicName,
       type: resolvedType,
+      questionType: resolvedType,
       question: questionText,
       options: parsedOptions,
       correctAnswer: resolvedAnswer,
@@ -1251,16 +1352,17 @@ export function parseAssessmentText(
       marksSource,
       marksConfidence,
       marksPending,
-      passageId: block.passageId,
-      parentPassageId: block.passageId,
-      caseId: block.caseId,
-      parentCaseId: block.caseId,
-      groupId: linkedPassageId,
-      groupType: isCase ? "case_based" : block.passageId ? "comprehension" : undefined,
-      groupTitle: linkedPassageObj?.title,
-      groupContent: linkedPassageObj?.text,
-      passage: linkedPassageObj?.text,
-      caseStudy: isCase ? linkedPassageObj?.text : undefined,
+      isSubQuestion: isSubQ,
+      passageId: isSubQ ? (block.passageId || block.caseId) : undefined,
+      parentPassageId: isSubQ ? (block.passageId || block.caseId) : undefined,
+      caseId: isSubQ ? block.caseId : undefined,
+      parentCaseId: isSubQ ? block.caseId : undefined,
+      groupId: isSubQ ? linkedPassageId : undefined,
+      groupType: isSubQ ? (isCase ? "case_based" : "comprehension") : undefined,
+      groupTitle: isSubQ ? linkedPassageObj?.title : undefined,
+      groupContent: isSubQ ? linkedPassageObj?.text : undefined,
+      passage: isSubQ ? linkedPassageObj?.text : undefined,
+      caseStudy: isSubQ && isCase ? linkedPassageObj?.text : undefined,
       imageLabel: extractedImageLabel || undefined,
       rawText: block.rawBlockLines.join("\n")
     });

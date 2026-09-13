@@ -54,7 +54,23 @@ export function resolveQuestionPassage(
     qGrpTitle.includes("case")
   );
 
-  const defaultTitle = isCaseStudy ? "Case Study" : "Comprehension Passage";
+  const isComprehension = Boolean(
+    question.passageId ||
+    question.parentPassageId ||
+    (typeof question.passage === "string" && question.passage.trim() !== "") ||
+    qType.includes("comprehension") ||
+    qSecType.includes("comprehension") ||
+    qGrpType.includes("comprehension") ||
+    qSecTitle.includes("comprehension") ||
+    qGrpTitle.includes("comprehension")
+  );
+
+  const targetId =
+    question.caseId ||
+    question.parentCaseId ||
+    question.passageId ||
+    question.parentPassageId ||
+    question.groupId;
 
   // 1. Direct text on question
   const directText = (
@@ -64,13 +80,21 @@ export function resolveQuestionPassage(
     (typeof question.rawPassage === "string" ? question.rawPassage : "")
   ).trim();
 
-  // 2. Lookup via keys in testContext
-  const targetId =
-    question.caseId ||
-    question.parentCaseId ||
-    question.passageId ||
-    question.parentPassageId ||
-    question.groupId;
+  // Strict boundary: Questions without direct passage text, target IDs, or explicit case/comprehension
+  // metadata MUST NEVER be associated with any passage or labelled as a sub-question.
+  const isEligibleForPassage = Boolean(
+    directText ||
+    targetId ||
+    isCaseStudy ||
+    isComprehension ||
+    question.isSubQuestion === true
+  );
+
+  if (!isEligibleForPassage) {
+    return null;
+  }
+
+  const defaultTitle = isCaseStudy ? "Case Study" : "Comprehension Passage";
 
   let lookupText = "";
   let lookupTitle = "";
@@ -122,7 +146,7 @@ export function resolveQuestionPassage(
     }
   }
 
-  // 3. If still no text, check if testContext has exactly one case or passage and the question is case-based
+  // 3. Fallback: ONLY if the question is explicitly a case or comprehension sub-question without an ID
   if (!directText && !lookupText && testContext) {
     if (isCaseStudy && testContext.cases) {
       const caseKeys = Object.keys(testContext.cases);
@@ -133,7 +157,7 @@ export function resolveQuestionPassage(
           lookupTitle = (singleCase.title || "").trim();
         }
       }
-    } else if (!isCaseStudy && testContext.passages) {
+    } else if (isComprehension && testContext.passages) {
       const passageKeys = Object.keys(testContext.passages);
       if (passageKeys.length === 1) {
         const singlePassage = testContext.passages[passageKeys[0]];

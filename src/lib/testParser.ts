@@ -60,6 +60,7 @@ export interface ParsedQuestion {
   parentPassageId?: string;
   caseId?: string;
   parentCaseId?: string;
+  isSubQuestion?: boolean;
   passage?: string;
   caseStudy?: string;
   groupId?: string;
@@ -1625,13 +1626,15 @@ export function parseChapterTest(
       ];
     } else if (isSubjectiveType || resolvedType === "short_answer" || resolvedType === "long_answer" || resolvedType === "very_short_answer" || (!hasOptions && resolvedType !== "assertion_reason")) {
       isSubjective = true;
-      if (candidate.caseId || candidate.passageId) {
-        resolvedType = "short_answer";
-      } else if (candidate.sectionType === "case_based") {
-        resolvedType = "short_answer";
-      } else if (candidate.sectionType === "comprehension") {
-        resolvedType = "short_answer";
-      } else if (resolvedType === "mcq") {
+      if (candidate.caseId || candidate.sectionType === "case_based") {
+        resolvedType = "case_based";
+      } else if (candidate.passageId || candidate.sectionType === "comprehension") {
+        resolvedType = "comprehension";
+      } else if (candidate.sectionType === "very_short_answer") {
+        resolvedType = "very_short_answer";
+      } else if (candidate.sectionType === "long_answer") {
+        resolvedType = "long_answer";
+      } else if (candidate.sectionType === "short_answer" || resolvedType === "mcq") {
         resolvedType = "short_answer";
       }
 
@@ -1783,8 +1786,9 @@ export function parseChapterTest(
       marksSource,
       marksConfidence,
       marksPending,
-      passageId: candidate.passageId,
-      parentPassageId: candidate.passageId,
+      isSubQuestion: Boolean(candidate.caseId || candidate.passageId),
+      passageId: candidate.caseId || candidate.passageId,
+      parentPassageId: candidate.caseId || candidate.passageId,
       caseId: candidate.caseId,
       parentCaseId: candidate.caseId,
       passage: groupContent,
@@ -1889,49 +1893,63 @@ export function convertToAssessmentQuestions(
     cases[c.id] = { id: c.id, title: c.title, text: c.text };
   });
 
-  const questions: ParsedAssessmentQuestion[] = chapterTest.questions.map((q, idx) => ({
-    id: q.id,
-    classGrade: chapterTest.metadata.classGrade || context.classGrade || "Class 10",
-    subject: chapterTest.metadata.subject || context.subject || "General",
-    chapterNo: chapterTest.metadata.chapterNo || context.chapterNo || 1,
-    chapterName: chapterTest.metadata.chapterName || context.chapterName || "Chapter",
-    topicName: chapterTest.metadata.topicName || context.topicName || "Full Chapter Test",
-    type: q.type as AssessmentQuestionType,
-    sectionId: q.sectionId,
-    sectionTitle: q.sectionTitle,
-    sectionType: q.sectionType,
-    section: q.sectionTitle,
-    displayNumber: q.displayNumber,
-    declaredSectionMarks: q.declaredSectionMarks,
-    calculatedSectionMarks: q.calculatedSectionMarks,
-    groupId: q.groupId,
-    groupType: q.groupType,
-    groupTitle: q.groupTitle,
-    groupContent: q.groupContent,
-    question: q.question,
-    assertion: q.assertion,
-    reason: q.reason,
-    assertionText: q.assertionText,
-    reasonText: q.reasonText,
-    options: q.options,
-    parsedOptions: q.parsedOptions?.map(po => ({ label: po.letter, text: po.text })),
-    correctAnswer: q.correctAnswer,
-    modelAnswer: q.modelAnswer,
-    explanation: q.explanation,
-    isSubjective: q.isSubjective,
-    marks: q.marks,
-    negativeMarks: q.negativeMarks,
-    marksSource: q.marksSource,
-    marksConfidence: q.marksConfidence,
-    marksPending: q.marksPending,
-    passageId: q.passageId,
-    parentPassageId: q.passageId,
-    caseId: q.caseId,
-    parentCaseId: q.caseId,
-    imageLabel: q.imageLabel,
-    orderIndex: idx,
-    rawText: q.rawText
-  }));
+  const questions: ParsedAssessmentQuestion[] = chapterTest.questions.map((q, idx) => {
+    const isSubQ = Boolean(q.isSubQuestion || q.caseId || (q.passageId && q.passageId !== ""));
+    const cleanSectionId = q.sectionLetter || (q.sectionId ? q.sectionId.replace(/^section-/i, "").toUpperCase() : undefined);
+    const resolvedType = isSubQ
+      ? (q.caseId || q.sectionType === "case_based" || cleanSectionId === "G" ? "case_based" : "comprehension")
+      : (q.type as AssessmentQuestionType);
+    const num = typeof q.questionNumber === "number" ? q.questionNumber : parseInt(String(q.questionNumber), 10) || (idx + 1);
+
+    return {
+      id: q.id,
+      classGrade: chapterTest.metadata.classGrade || context.classGrade || "Class 10",
+      subject: chapterTest.metadata.subject || context.subject || "General",
+      chapterNo: chapterTest.metadata.chapterNo || context.chapterNo || 1,
+      chapterName: chapterTest.metadata.chapterName || context.chapterName || "Chapter",
+      topicName: chapterTest.metadata.topicName || context.topicName || "Full Chapter Test",
+      type: resolvedType,
+      questionType: resolvedType,
+      sectionId: cleanSectionId,
+      sectionTitle: q.sectionTitle,
+      sectionType: q.sectionType,
+      section: q.sectionTitle,
+      questionNumber: num,
+      displayNumber: q.displayNumber || `Q${num}`,
+      declaredSectionMarks: q.declaredSectionMarks,
+      calculatedSectionMarks: q.calculatedSectionMarks,
+      groupId: isSubQ ? (q.groupId || q.caseId || q.passageId) : undefined,
+      groupType: isSubQ ? (q.groupType || (q.caseId ? "case_based" : "comprehension")) : undefined,
+      groupTitle: isSubQ ? q.groupTitle : undefined,
+      groupContent: isSubQ ? q.groupContent : undefined,
+      passage: isSubQ ? q.passage : undefined,
+      caseStudy: isSubQ ? q.caseStudy : undefined,
+      question: q.question,
+      assertion: q.assertion,
+      reason: q.reason,
+      assertionText: q.assertionText,
+      reasonText: q.reasonText,
+      options: q.options,
+      parsedOptions: q.parsedOptions?.map(po => ({ label: po.letter, text: po.text })),
+      correctAnswer: q.correctAnswer,
+      modelAnswer: q.modelAnswer,
+      explanation: q.explanation,
+      isSubjective: q.isSubjective,
+      marks: q.marks,
+      negativeMarks: q.negativeMarks,
+      marksSource: q.marksSource,
+      marksConfidence: q.marksConfidence,
+      marksPending: q.marksPending,
+      isSubQuestion: isSubQ,
+      passageId: isSubQ ? (q.passageId || q.caseId) : undefined,
+      parentPassageId: isSubQ ? (q.parentPassageId || q.passageId || q.caseId) : undefined,
+      caseId: isSubQ ? q.caseId : undefined,
+      parentCaseId: isSubQ ? (q.parentCaseId || q.caseId) : undefined,
+      imageLabel: q.imageLabel,
+      orderIndex: idx + 1,
+      rawText: q.rawText
+    };
+  });
 
   return { questions, passages, cases };
 }
