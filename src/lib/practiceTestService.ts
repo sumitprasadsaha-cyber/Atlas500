@@ -1,9 +1,15 @@
-import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote, ChapterNote, ComprehensionPassage, CaseStudy, AssessmentTestType, AssessmentQuestionType } from "../types";
+import { ParsedAssessmentQuestion, TopicPracticeTest, TestAttemptRecord, ClassNote, ChapterNote, ComprehensionPassage, CaseStudy, AssessmentTestType, AssessmentQuestionType, Student } from "../types";
 import { getResolvedViewUrl } from "./storageService";
 import { uploadToR2, downloadFromR2, getR2BucketName } from "./r2Client";
-import { doc, setDoc, onSnapshot, collection, deleteDoc, getDoc, getDocs, Unsubscribe } from "firebase/firestore";
+import { doc, setDoc, onSnapshot, collection, deleteDoc, getDoc, getDocs, query, where, Unsubscribe } from "firebase/firestore";
 import { getFirebaseDb } from "./firebase";
 import { normalizeQuestionOptions } from "../utils/assessmentParser";
+import {
+  toStableClassId,
+  getSubjectAccessConfig,
+  isClassAllowedForSubject,
+  getAccessibleClassesGrantedToClass,
+} from "./curriculumAccessService";
 
 import { safeLocalStorageSetItem, safeLocalStorageGetItem, safeLocalStorageRemoveItem } from "./safeStorage";
 import {
@@ -133,6 +139,197 @@ export function buildAssessmentTestId(
   if (t === "CHAPTER" || t === "FULL_CHAPTER") return buildChapterTestId(classGrade, subject, chapterNo);
   if (t === "PYQ") return buildPyqTestId(classGrade, subject, topicName);
   return buildTopicTestId(classGrade, subject, chapterNo, topicName);
+}
+
+/**
+ * Accurately normalizes any test object or record into one of the canonical categories:
+ * - "SUBJECT": Full subject tests
+ * - "CHAPTER": Full chapter tests
+ * - "PYQ": Previous years questions
+ * - "TOPIC": Specific topic assessment tests
+ */
+export function normalizeTestCategory(t: any): "SUBJECT" | "CHAPTER" | "TOPIC" | "PYQ" {
+  if (!t || typeof t !== "object") return "TOPIC";
+
+  const rawType = String(
+    t.testType ||
+    t.test_type ||
+    t.managedTestType ||
+    t.computedType ||
+    t.category ||
+    t.type ||
+    ""
+  ).toUpperCase().trim();
+
+  if (
+    rawType === "PYQ" ||
+    rawType === "PYQ TEST" ||
+    rawType === "PYQ_TEST" ||
+    rawType === "PYQTEST" ||
+    rawType === "PREVIOUS_YEAR" ||
+    rawType === "PREVIOUS YEAR" ||
+    rawType === "PREVIOUS YEAR QUESTIONS"
+  ) {
+    return "PYQ";
+  }
+
+  if (
+    rawType === "SUBJECT" ||
+    rawType === "SUBJECT TEST" ||
+    rawType === "SUBJECT_TEST" ||
+    rawType === "SUBJECTTEST" ||
+    rawType === "FULL_SUBJECT" ||
+    rawType === "FULL SUBJECT" ||
+    rawType === "SUBJECT MOCK"
+  ) {
+    return "SUBJECT";
+  }
+
+  if (
+    rawType === "CHAPTER" ||
+    rawType === "CHAPTER TEST" ||
+    rawType === "CHAPTER_TEST" ||
+    rawType === "CHAPTERTEST" ||
+    rawType === "FULL_CHAPTER" ||
+    rawType === "FULL CHAPTER" ||
+    rawType === "FULL CHAPTER TEST"
+  ) {
+    return "CHAPTER";
+  }
+
+  if (
+    rawType === "TOPIC" ||
+    rawType === "TOPIC TEST" ||
+    rawType === "TOPIC_TEST" ||
+    rawType === "TOPICTEST"
+  ) {
+    return "TOPIC";
+  }
+
+  // Canonical ID naming conventions when testType was not explicitly saved
+  const idStr = String(t.id || t.testId || "").toLowerCase();
+  if (idStr.endsWith("__subject_test")) {
+    return "SUBJECT";
+  }
+  if (idStr.endsWith("__chapter_test") || idStr.includes("__chapter_test")) {
+    return "CHAPTER";
+  }
+  if (idStr.includes("__pyq_") || idStr.endsWith("_pyq")) {
+    return "PYQ";
+  }
+
+  // Title / topic name inspection
+  const topicName = String(t.topicName || "").toLowerCase().trim();
+  const title = String(t.title || "").toLowerCase().trim();
+
+  if (
+    topicName.startsWith("pyq") ||
+    title.startsWith("pyq") ||
+    topicName.includes("previous year") ||
+    title.includes("previous year")
+  ) {
+    return "PYQ";
+  }
+  if (
+    topicName.includes("subject test") ||
+    title.includes("subject test") ||
+    topicName.includes("subject mock") ||
+    title.includes("subject mock")
+  ) {
+    return "SUBJECT";
+  }
+  if (
+    topicName.endsWith("chapter test") ||
+    title.endsWith("chapter test") ||
+    topicName.includes("full chapter test") ||
+    title.includes("full chapter test")
+  ) {
+    return "CHAPTER";
+  }
+
+  return "TOPIC";
+}
+
+/**
+ * Validates that a test record is active, valid, and not deleted or draft:
+ */
+export function isValidPracticeTest(t: any): boolean {
+  if (!t || typeof t !== "object") return false;
+  if (t.isDeleted === true || t.deleted === true) return false;
+  if (t.isDraft === true || t.draft === true) return false;
+  if (!t.id && !t.testId) return false;
+  const qCount = Array.isArray(t.questions)
+    ? t.questions.length
+    : Number(t.questionCount) || Number(t.totalQuestions) || 0;
+  if (qCount <= 0) return false;
+  return true;
+}
+
+/**
+ * Determines whether a student has full permission and access to a practice test.
+ * Enforces class/stream matching, published status, and curriculum sharing rules.
+ */
+export function isStudentPermittedToAccessTest(
+  student: Student,
+  test: TopicPracticeTest
+): boolean {
+  if (!student || !test) return false;
+
+  // 1. Must be a valid active test
+  if (!isValidPracticeTest(test)) return false;
+
+  // 2. Must be published
+  if (test.isPublished === false || (test as any).published === false) return false;
+
+  // 3. Class and curriculum matching
+  const studentClass = student.classGrade || "";
+  const studentClassNorm = toStableClassId(studentClass);
+  const isStudentUpsc = studentClassNorm === "upsc" || studentClass.toLowerCase().includes("upsc");
+
+  const testClass = test.classGrade || (test as any).className || "";
+  const testClassNorm = toStableClassId(testClass);
+  const isTestUpsc = testClassNorm === "upsc" || testClass.toLowerCase().includes("upsc");
+
+  if (isStudentUpsc) {
+    if (!isTestUpsc) return false;
+  } else if (isTestUpsc) {
+    return false;
+  } else {
+    // School student
+    if (testClassNorm === studentClassNorm) {
+      // Exact class match
+    } else {
+      // Check granted access permissions
+      const allowedClasses = getAccessibleClassesGrantedToClass(studentClass);
+      const allowedNorms = new Set(allowedClasses.map((c) => toStableClassId(c.ownerClass)));
+      allowedNorms.add(studentClassNorm);
+
+      const isDirectOrGrantedMatch = allowedNorms.has(testClassNorm);
+      let isSharedMatch = false;
+      if (!isDirectOrGrantedMatch && test.subject && studentClass) {
+        const accessConfig = getSubjectAccessConfig(test.subject, testClass || studentClass);
+        isSharedMatch = isClassAllowedForSubject(accessConfig, studentClass);
+      }
+
+      if (!isDirectOrGrantedMatch && !isSharedMatch) {
+        return false;
+      }
+    }
+  }
+
+  // 4. Check student enrolled subjects restriction if present
+  if (student.enrolledSubjects && Array.isArray(student.enrolledSubjects) && student.enrolledSubjects.length > 0) {
+    const testSubj = (test.subject || "").toLowerCase().trim();
+    const enrolledMatch = student.enrolledSubjects.some((s) => {
+      const cleanS = s.toLowerCase().trim();
+      return cleanS === testSubj || isSubjectCompatible(cleanS, testSubj);
+    });
+    if (!enrolledMatch) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -951,8 +1148,17 @@ export async function fetchAllPracticeTests(): Promise<Record<string, TopicPract
         snap.docs.forEach((docSnap) => {
           const test = docSnap.data() as TopicPracticeTest;
           if (test) {
-            const testId = test.id || docSnap.id;
-            firestoreBank[testId] = { ...test, id: testId };
+            if (test.isDeleted === true || (test as any).deleted === true) {
+              return;
+            }
+            const testId = docSnap.id || test.id;
+            const canonicalId = test.id || docSnap.id;
+            firestoreBank[canonicalId] = {
+              ...test,
+              id: canonicalId,
+              testId: test.testId || canonicalId,
+              docId: docSnap.id,
+            };
           }
         });
 
@@ -964,8 +1170,17 @@ export async function fetchAllPracticeTests(): Promise<Record<string, TopicPract
             aliasSnap.docs.forEach((docSnap) => {
               const test = docSnap.data() as TopicPracticeTest;
               if (test) {
-                const testId = test.id || docSnap.id;
-                firestoreBank[testId] = { ...test, id: testId };
+                if (test.isDeleted === true || (test as any).deleted === true) {
+                  return;
+                }
+                const testId = docSnap.id || test.id;
+                const canonicalId = test.id || docSnap.id;
+                firestoreBank[canonicalId] = {
+                  ...test,
+                  id: canonicalId,
+                  testId: test.testId || canonicalId,
+                  docId: docSnap.id,
+                };
               }
             });
           } catch {}
@@ -1679,6 +1894,8 @@ export async function saveTopicPracticeTest(
     }>;
     declaredTotalMarks?: number;
     calculatedTotalMarks?: number;
+    isPublished?: boolean;
+    published?: boolean;
   },
   questions: ParsedAssessmentQuestion[]
 ): Promise<SaveTopicResult> {
@@ -1760,6 +1977,12 @@ export async function saveTopicPracticeTest(
     sections: context.sections && context.sections.length > 0 ? context.sections : undefined,
     declaredTotalMarks: context.declaredTotalMarks !== undefined ? Number(context.declaredTotalMarks) : undefined,
     calculatedTotalMarks: sumOfQuestionMarks,
+    isPublished: context.isPublished !== false && context.published !== false,
+    published: context.isPublished !== false && context.published !== false,
+    isDeleted: false,
+    deleted: false,
+    isDraft: false,
+    draft: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     uploadedBy: "Admin",
@@ -1913,7 +2136,7 @@ export async function deletePracticeTest(
     }
   }
 
-  const primaryId = testObj.id || testObj.testId || "";
+  const primaryId = testObj.id || testObj.testId || (testObj as any).docId || "";
   const classGrade = (testObj.classGrade || "").trim();
   const subject = (testObj.subject || "").trim();
   const chapterNo = Number(testObj.chapterNo) || 0;
@@ -1926,6 +2149,10 @@ export async function deletePracticeTest(
   if (primaryId) {
     candidateIds.add(primaryId);
   }
+  if (testObj.id) candidateIds.add(testObj.id);
+  if (testObj.testId) candidateIds.add(testObj.testId);
+  if ((testObj as any).docId) candidateIds.add((testObj as any).docId);
+  if ((testObj as any).firestoreDocId) candidateIds.add((testObj as any).firestoreDocId);
 
   if (classGrade && subject) {
     if (rawType) {
@@ -2031,6 +2258,23 @@ export async function deletePracticeTest(
         }
       }
 
+      // Query by id and testId to find and delete any docs with custom document IDs
+      if (primaryId) {
+        try {
+          const colRef = collection(db, "topic_practice_tests");
+          const qSnap1 = await getDocs(query(colRef, where("id", "==", primaryId)));
+          for (const d of qSnap1.docs) {
+            candidateIds.add(d.id);
+            await deleteDoc(d.ref).catch(() => {});
+          }
+          const qSnap2 = await getDocs(query(colRef, where("testId", "==", primaryId)));
+          for (const d of qSnap2.docs) {
+            candidateIds.add(d.id);
+            await deleteDoc(d.ref).catch(() => {});
+          }
+        } catch (_) {}
+      }
+
       // Safe note unlinking (clearing practice test reference without deleting notes)
       try {
         const collectionsToCheck = ["class_notes", "upsc_notes"];
@@ -2079,6 +2323,9 @@ export async function deletePracticeTest(
     removeLocalTopicCache(key);
   }
 
+  // Invalidate any active fetch promise so future fetches are fresh from Firestore
+  activeFetchPromise = null;
+
   saveLocalTestBank(memoryTestBank);
   clearAllQuestionCaches();
   notifyTestBankSubscribers();
@@ -2092,6 +2339,11 @@ export async function deletePracticeTest(
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("practice-tests-updated"));
+    window.dispatchEvent(
+      new CustomEvent("managed-tests-updated", {
+        detail: { testId: primaryId, deleted: true },
+      })
+    );
   }
 
   return {

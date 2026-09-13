@@ -6,7 +6,10 @@ import { isClassAllowedForSubject, getSubjectAccessConfig } from "./curriculumAc
 import { 
   fetchAllPracticeTests, 
   notifyTestBankSubscribers, 
-  subscribeToPracticeTests 
+  subscribeToPracticeTests,
+  normalizeTestCategory,
+  isValidPracticeTest,
+  isStudentPermittedToAccessTest,
 } from "./practiceTestService";
 import { safeLocalStorageSetItem, safeLocalStorageGetItem, safeLocalStorageRemoveItem } from "./safeStorage";
 
@@ -200,57 +203,36 @@ export function getAllManagedTests(
   const result: ManagedTest[] = [];
 
   for (const [id, test] of Object.entries(testBank)) {
-    if (!test || !Array.isArray(test.questions) || test.questions.length === 0) {
+    if (!isValidPracticeTest(test)) {
       continue;
     }
 
-    // Check if it's explicitly a ManagedTest
     const mTest = test as ManagedTest;
-    if (mTest.managedTestType) {
-      result.push({
-        ...mTest,
-        id: mTest.id || id,
-        classStableId: mTest.classStableId || toStableClassId(mTest.classGrade),
-        stream: mTest.stream || (mTest.classGrade?.toLowerCase().includes("upsc") ? "upsc" : "school"),
-        durationMinutes: mTest.durationMinutes || mTest.duration_minutes || 30,
-        marksPerQuestion: mTest.marksPerQuestion || 1,
-        negativeMarking: mTest.negativeMarking || 0,
-        isPublished: mTest.isPublished !== false,
-      });
-      continue;
-    }
+    const cat = normalizeTestCategory(test);
+    const managedTypeLabel =
+      cat === "SUBJECT"
+        ? "Subject Test"
+        : cat === "CHAPTER"
+          ? "Chapter Test"
+          : cat === "PYQ"
+            ? "PYQ Test"
+            : "Topic Test";
 
-    // Adapt legacy Chapter / Subject tests so they are accessible in the new Tests tab
-    const normType = String(test.testType || test.test_type || "").toUpperCase();
-    if (normType === "CHAPTER" || normType === "FULL_CHAPTER") {
-      result.push({
-        ...test,
-        id: test.id || id,
-        managedTestType: "Chapter Test",
-        stream: test.classGrade?.toLowerCase().includes("upsc") ? "upsc" : "school",
-        classStableId: toStableClassId(test.classGrade),
-        title: test.title || `${test.subject || "Subject"} - Chapter ${test.chapterNo || 1} Test`,
-        durationMinutes: test.durationMinutes || test.duration_minutes || 30,
-        marksPerQuestion: 1,
-        negativeMarking: 0,
-        isPublished: test.isPublished !== false,
-        questions: test.questions,
-      });
-    } else if (normType === "SUBJECT") {
-      result.push({
-        ...test,
-        id: test.id || id,
-        managedTestType: "Subject Test",
-        stream: test.classGrade?.toLowerCase().includes("upsc") ? "upsc" : "school",
-        classStableId: toStableClassId(test.classGrade),
-        title: test.title || `${test.subject || "Subject"} Full Test`,
-        durationMinutes: test.durationMinutes || test.duration_minutes || 45,
-        marksPerQuestion: 1,
-        negativeMarking: 0,
-        isPublished: test.isPublished !== false,
-        questions: test.questions,
-      });
-    }
+    const isPub = test.isPublished !== false && (test as any).published !== false;
+
+    result.push({
+      ...test,
+      id: test.id || id,
+      managedTestType: mTest.managedTestType || managedTypeLabel,
+      stream: mTest.stream || (test.classGrade?.toLowerCase().includes("upsc") ? "upsc" : "school"),
+      classStableId: mTest.classStableId || toStableClassId(test.classGrade),
+      title: test.title || test.topicName || `${test.subject || "Subject"} ${managedTypeLabel}`,
+      durationMinutes: test.durationMinutes || (test as any).duration_minutes || (cat === "SUBJECT" ? 45 : 30),
+      marksPerQuestion: mTest.marksPerQuestion || 1,
+      negativeMarking: mTest.negativeMarking || 0,
+      isPublished: isPub,
+      questions: test.questions,
+    });
   }
 
   // Sort by updatedAt descending
@@ -270,33 +252,8 @@ export function getStudentAccessibleManagedTests(
 ): ManagedTest[] {
   if (!student || !Array.isArray(allTests)) return [];
 
-  const studentClassStableId = toStableClassId(student.classGrade);
-  const isStudentUpsc = studentClassStableId === "upsc" || (student.classGrade || "").toLowerCase().includes("upsc");
-
   return allTests.filter((test) => {
-    // 1. Must be published
-    if (test.isPublished === false) return false;
-
-    // 2. Stream matching
-    if (test.stream === "upsc") {
-      return isStudentUpsc;
-    }
-
-    // 3. School stream matching:
-    // If student is enrolled in the exact owner/target class
-    if (test.classStableId === studentClassStableId) {
-      return true;
-    }
-
-    // Check if the subject is shared with the student's class via curriculum sharing rules
-    if (test.subject && student.classGrade) {
-      const accessConfig = getSubjectAccessConfig(test.subject, test.classGrade);
-      if (isClassAllowedForSubject(accessConfig, student.classGrade)) {
-        return true;
-      }
-    }
-
-    return false;
+    return isStudentPermittedToAccessTest(student, test as any);
   });
 }
 

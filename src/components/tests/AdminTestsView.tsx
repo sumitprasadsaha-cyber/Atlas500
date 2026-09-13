@@ -36,7 +36,9 @@ import {
   buildTopicTestId,
   buildChapterTestId,
   buildSubjectTestId,
-  buildPyqTestId
+  buildPyqTestId,
+  normalizeTestCategory,
+  isValidPracticeTest,
 } from "../../lib/practiceTestService";
 import { getAllTestAttempts, subscribeToTestAttempts } from "../../utils/assessmentParser";
 import { toStableClassId } from "../../lib/curriculumAccessService";
@@ -59,41 +61,6 @@ const UPSC_PAPERS = [
   "UPSC - GS Paper 1", "UPSC - GS Paper 2", "UPSC - GS Paper 3", "UPSC - GS Paper 4"
 ];
 
-/**
- * Normalizes test type safely to one of the standard categories
- */
-function getValidTestType(t: any): "SUBJECT" | "CHAPTER" | "TOPIC" | "PYQ" {
-  if (!t) return "TOPIC";
-  const rawType = String(t.testType || t.test_type || t.managedTestType || "").toUpperCase().trim();
-  if (rawType === "SUBJECT" || rawType === "SUBJECT TEST") return "SUBJECT";
-  if (rawType === "CHAPTER" || rawType === "FULL_CHAPTER" || rawType === "CHAPTER TEST") return "CHAPTER";
-  if (rawType === "PYQ" || rawType === "PYQ TEST" || rawType === "PREVIOUS YEAR QUESTIONS") return "PYQ";
-
-  // Secondary check: ID format conventions if testType was not explicitly saved
-  const idStr = String(t.id || t.testId || "");
-  if (idStr.endsWith("__subject_test")) return "SUBJECT";
-  if (idStr.endsWith("__chapter_test") || (idStr.includes("__chapter_") && idStr.includes("_test"))) return "CHAPTER";
-  if (idStr.includes("__pyq_") || idStr.endsWith("_pyq")) return "PYQ";
-
-  return "TOPIC";
-}
-
-/**
- * Validates that a test is an active, valid test record:
- * - Not deleted
- * - Not a draft
- * - Has valid ID
- * - Contains questions
- */
-function isValidPracticeTest(t: any): boolean {
-  if (!t || typeof t !== "object") return false;
-  if (t.isDeleted === true || t.deleted === true || t.isDraft === true || t.draft === true) return false;
-  if (!t.id && !t.testId) return false;
-  const qCount = Array.isArray(t.questions) ? t.questions.length : (Number(t.questionCount) || Number(t.totalQuestions) || 0);
-  if (qCount <= 0) return false;
-  return true;
-}
-
 export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
   notes = [],
   students = [],
@@ -105,7 +72,7 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [selectedClass, setSelectedClass] = useState<string>("All");
   const [selectedSubject, setSelectedSubject] = useState<string>("All");
-  const [selectedType, setSelectedType] = useState<"ALL" | "SUBJECT" | "CHAPTER" | "PYQ">("ALL");
+  const [selectedType, setSelectedType] = useState<"ALL" | "SUBJECT" | "CHAPTER" | "TOPIC" | "PYQ">("ALL");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Modal states
@@ -177,7 +144,7 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
     return Object.values(testsBank)
       .filter(isValidPracticeTest)
       .map((t) => {
-        const computedType = getValidTestType(t);
+        const computedType = normalizeTestCategory(t);
         return {
           ...t,
           computedType
@@ -261,15 +228,31 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
   const tabCounts = useMemo(() => {
     const counts = {
       ALL: filteredBaseTests.length,
-      SUBJECT: 0,
       CHAPTER: 0,
-      PYQ: 0
+      SUBJECT: 0,
+      TOPIC: 0,
+      PYQ: 0,
+      all: filteredBaseTests.length,
+      chapter: 0,
+      subject: 0,
+      topic: 0,
+      pyq: 0,
     };
 
     filteredBaseTests.forEach((t) => {
-      if (t.computedType === "SUBJECT") counts.SUBJECT++;
-      else if (t.computedType === "CHAPTER") counts.CHAPTER++;
-      else if (t.computedType === "PYQ") counts.PYQ++;
+      if (t.computedType === "SUBJECT") {
+        counts.SUBJECT++;
+        counts.subject++;
+      } else if (t.computedType === "CHAPTER") {
+        counts.CHAPTER++;
+        counts.chapter++;
+      } else if (t.computedType === "TOPIC") {
+        counts.TOPIC++;
+        counts.topic++;
+      } else if (t.computedType === "PYQ") {
+        counts.PYQ++;
+        counts.pyq++;
+      }
     });
 
     return counts;
@@ -319,7 +302,7 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
         return;
       }
       setToastMessage("Test deleted successfully.");
-      const deletedId = testToDelete.id || (testToDelete as any).testId;
+      const deletedId = testToDelete.id || (testToDelete as any).testId || (testToDelete as any).docId;
       setTestToDelete(null);
 
       // Optimistic instant removal from local state
@@ -327,7 +310,12 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
         const next = { ...prev };
         if (deletedId) delete next[deletedId];
         Object.keys(next).forEach((k) => {
-          if (k === deletedId || next[k]?.id === deletedId || (next[k] as any)?.testId === deletedId) {
+          if (
+            k === deletedId ||
+            next[k]?.id === deletedId ||
+            (next[k] as any)?.testId === deletedId ||
+            (next[k] as any)?.docId === deletedId
+          ) {
             delete next[k];
           }
         });
@@ -335,6 +323,7 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
       });
 
       await loadData();
+      if (onRefresh) onRefresh();
     } catch (err: any) {
       console.error("[AdminTestsView] Deletion error:", err);
       setToastMessage(`Failed to delete test: ${err?.message || "Unknown error"}`);
@@ -416,8 +405,9 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
             {[
               { id: "ALL", label: "All Tests", count: tabCounts.ALL },
-              { id: "SUBJECT", label: "Subject Tests", count: tabCounts.SUBJECT },
               { id: "CHAPTER", label: "Chapter Tests", count: tabCounts.CHAPTER },
+              { id: "SUBJECT", label: "Subject Tests", count: tabCounts.SUBJECT },
+              { id: "TOPIC", label: "Topic Tests", count: tabCounts.TOPIC },
               { id: "PYQ", label: "PYQs", count: tabCounts.PYQ },
             ].map((tab) => (
               <button
@@ -709,10 +699,11 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                   Test Type
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
                     { id: "CHAPTER", label: "Chapter Test" },
                     { id: "SUBJECT", label: "Subject Test" },
+                    { id: "TOPIC", label: "Topic Test" },
                     { id: "PYQ", label: "PYQ Exam" },
                   ].map((t) => (
                     <button

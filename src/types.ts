@@ -460,6 +460,12 @@ export interface TopicPracticeTest {
   maxAttempts?: number;
 
   isPublished?: boolean;
+  published?: boolean;
+  isDeleted?: boolean;
+  deleted?: boolean;
+  isDraft?: boolean;
+  draft?: boolean;
+  docId?: string;
   createdAt: string;
   updatedAt: string;
   uploadedBy?: string;
