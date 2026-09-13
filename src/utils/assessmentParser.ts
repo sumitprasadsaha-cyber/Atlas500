@@ -357,18 +357,18 @@ export function detectComprehensionStart(line: string): { title: string; firstLi
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
 
-  const isCase = /case/i.test(trimmed);
+  const isCase = /\b(?:case|case[- ]based)\b/i.test(trimmed);
 
   const stripped = trimmed
     .replace(/^(?:(?:Part|Section)\s+[A-Za-z0-9]+[\s\:\-]+|\d+[\.\):\-]\s*)/i, "")
     .replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "")
     .trim();
 
-  // Standalone comprehension headers
+  // Standalone comprehension / case headers
   for (const candidate of [trimmed, stripped]) {
     if (!candidate) continue;
     if (
-      /^(?:(?:Section\s+[A-Za-z0-9]+[\s\:\-]+)?(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section|Questions?))?(?:\s*\d+)?|Passage(?:\s*\d+)?|Case\s+Study(?:\s*\d+)?)[\:\.]?$/i.test(
+      /^(?:(?:Section\s+[A-Za-z0-9]+[\s\:\-]+)?(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section|Questions?))?(?:\s*\d+)?|Passage(?:\s*\d+)?|Case(?:\s*-\s*Based|\s+Based)?\s*(?:Study|Questions?|Passage|Section)?(?:\s*\d+)?)[\:\.]?$/i.test(
         candidate
       )
     ) {
@@ -383,9 +383,9 @@ export function detectComprehensionStart(line: string): { title: string; firstLi
     }
   }
 
-  // Heading with inline passage text on the same line
+  // Heading with inline passage text on the same line (e.g. "Case Study: A farmer wants to cultivate..." or "Passage: A farmer...")
   const inlineMatch = trimmed.match(
-    /^(?:(?:Section\s+[A-Za-z0-9]+[\s\:\-]+)?(?:Directions?\s*[\:\-]\s*)?)?((?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|story|poem|paragraph|case|information)?(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|and\s+choose|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?[\.\:\-])\s+(.+)$/i
+    /^(?:(?:Section\s+[A-Za-z0-9]+[\s\:\-]+)?(?:Directions?\s*[\:\-]\s*)?)?((?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|story|poem|paragraph|case|information)?(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|and\s+choose|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?|(?:Case(?:\s*-\s*Based)?\s*(?:Study|Questions?)?|Passage|Comprehension)(?:\s*\d+)?)\s*[\.\:\-]\s+(.+)$/i
   );
 
   if (inlineMatch) {
@@ -663,7 +663,12 @@ export function parseAssessmentText(
       }
       // If we already have an activePassage with no questions and no text yet, update it instead of creating a second one
       if (activePassage && activePassage.questionCount === 0 && activePassage.textLines.length === 0) {
-        activePassage.title = compMatch.title || activePassage.title;
+        if (!/^(?:Passage|Reading\s+Passage|Case)[\:\.]?$/i.test(compMatch.title)) {
+          activePassage.title = compMatch.title || activePassage.title;
+        }
+        if (compMatch.isCase) {
+          activePassage.isCase = true;
+        }
         if (compMatch.firstLine) {
           activePassage.textLines.push(compMatch.firstLine);
         }
@@ -723,12 +728,7 @@ export function parseAssessmentText(
       continue;
     }
 
-    // 4. Check for divider or other parser markers
-    if (isIgnoredMarkerOrDivider(trimmed)) {
-      continue;
-    }
-
-    // 5. Check if line starts a new numbered question
+    // 4. Check if line starts a new numbered question
     const qHeader = matchQuestionHeader(trimmed);
     if (qHeader) {
       // If we are currently inside an active question block that has already seen an "Answer:" line:
@@ -778,9 +778,17 @@ export function parseAssessmentText(
       continue;
     }
 
-    // 6. If currently reading passage/case body before the first question
+    // 5. If currently reading passage/case body before the first question
     if (activePassage && activePassage.questionCount === 0) {
+      if (activePassage.textLines.length === 0 && /^(?:Passage|Case\s+Study)[\:\.]?$/i.test(trimmed)) {
+        continue;
+      }
       activePassage.textLines.push(trimmed);
+      continue;
+    }
+
+    // 6. Check for divider or other parser markers
+    if (isIgnoredMarkerOrDivider(trimmed)) {
       continue;
     }
 
@@ -1037,6 +1045,11 @@ export function parseAssessmentText(
         return;
       }
 
+      const linkedPassageId = block.caseId || block.passageId;
+      const linkedPassageObj = (block.caseId ? casesResult[block.caseId] : undefined) ||
+                               (block.passageId ? passagesResult[block.passageId] : undefined);
+      const isCase = Boolean(block.caseId || (block.section && block.section.includes("case")));
+
       questions.push({
         id: `q_${subjectiveType}_${block.qNum}_${Math.random().toString(36).substring(2, 7)}`,
         questionNumber: block.qNum,
@@ -1063,6 +1076,12 @@ export function parseAssessmentText(
         parentPassageId: block.passageId,
         caseId: block.caseId,
         parentCaseId: block.caseId,
+        groupId: linkedPassageId,
+        groupType: isCase ? "case_based" : block.passageId ? "comprehension" : undefined,
+        groupTitle: linkedPassageObj?.title,
+        groupContent: linkedPassageObj?.text,
+        passage: linkedPassageObj?.text,
+        caseStudy: isCase ? linkedPassageObj?.text : undefined,
         imageLabel: extractedImageLabel || undefined,
         rawText: block.rawBlockLines.join("\n")
       });
@@ -1206,6 +1225,11 @@ export function parseAssessmentText(
       }
     }
 
+    const linkedPassageId = block.caseId || block.passageId;
+    const linkedPassageObj = (block.caseId ? casesResult[block.caseId] : undefined) ||
+                             (block.passageId ? passagesResult[block.passageId] : undefined);
+    const isCase = Boolean(block.caseId || (block.section && block.section.includes("case")));
+
     questions.push({
       id: `q_${resolvedType}_${block.qNum}_${Math.random().toString(36).substring(2, 7)}`,
       questionNumber: block.qNum,
@@ -1231,6 +1255,12 @@ export function parseAssessmentText(
       parentPassageId: block.passageId,
       caseId: block.caseId,
       parentCaseId: block.caseId,
+      groupId: linkedPassageId,
+      groupType: isCase ? "case_based" : block.passageId ? "comprehension" : undefined,
+      groupTitle: linkedPassageObj?.title,
+      groupContent: linkedPassageObj?.text,
+      passage: linkedPassageObj?.text,
+      caseStudy: isCase ? linkedPassageObj?.text : undefined,
       imageLabel: extractedImageLabel || undefined,
       rawText: block.rawBlockLines.join("\n")
     });

@@ -392,6 +392,11 @@ export interface ParsedAssessmentQuestion {
   parentPassageId?: string; // Alias reference to parent ComprehensionPassage ID
   caseId?: string; // Reference to parent CaseStudy ID
   parentCaseId?: string; // Alias reference to parent CaseStudy ID
+  passage?: string; // Complete case-study or comprehension passage text
+  caseStudy?: string; // Case study passage text alias
+  groupContent?: string; // Reading content associated with group
+  questionType?: string; // Legacy alias for type
+  children?: any[]; // Legacy parent container children support
 
   // Assertion and Reason distinct fields
   assertion?: string;

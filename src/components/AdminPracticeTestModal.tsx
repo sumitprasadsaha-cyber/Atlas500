@@ -57,6 +57,7 @@ import {
 import { uploadQuestionImageToStorage } from "../lib/storageService";
 import { createPracticeTestChangeHandler } from "../utils/practiceTestState";
 import { deduplicateAttempts, getCachedAttemptsFromMemory } from "../lib/testScorePersistence";
+import { resolveQuestionPassage } from "../utils/passageHelper";
 
 interface AdminPracticeTestModalProps {
   isOpen: boolean;
@@ -404,7 +405,10 @@ export default function AdminPracticeTestModal({
           passingMarks: passingMarks !== "" ? Number(passingMarks) : undefined,
           instructions: instructions.trim() || undefined,
           maxAttempts: maxAttempts !== "" ? Number(maxAttempts) : undefined,
-          passages: parseRes.passages
+          passages: parseRes.passages,
+          cases: (parseRes as any).cases,
+          groups: (parseRes as any).groups,
+          sections: (parseRes as any).sections
         },
         parseRes.questions
       );
@@ -646,6 +650,10 @@ export default function AdminPracticeTestModal({
             chapterName: savedTest.chapterName || `Chapter ${chapterNo}`,
             topicName,
             rawText: savedTest.rawText || "",
+            passages: savedTest.passages,
+            cases: savedTest.cases,
+            groups: (savedTest as any).groups,
+            sections: (savedTest as any).sections,
           },
           updatedQuestions
         );
@@ -677,6 +685,10 @@ export default function AdminPracticeTestModal({
         chapterName: savedTest.chapterName || `Chapter ${chapterNo}`,
         topicName,
         rawText: savedTest.rawText || "",
+        passages: savedTest.passages,
+        cases: savedTest.cases,
+        groups: (savedTest as any).groups,
+        sections: (savedTest as any).sections,
       },
       updatedQuestions
     );
@@ -705,6 +717,10 @@ export default function AdminPracticeTestModal({
         chapterName: savedTest.chapterName || `Chapter ${chapterNo}`,
         topicName,
         rawText: savedTest.rawText || "",
+        passages: savedTest.passages,
+        cases: savedTest.cases,
+        groups: (savedTest as any).groups,
+        sections: (savedTest as any).sections,
       },
       updatedQuestions
     );
@@ -1056,125 +1072,200 @@ export default function AdminPracticeTestModal({
               </div>
 
               <div className="space-y-3">
-                {savedTest.questions.map((q, idx) => (
-                  <div
-                    key={q.id}
-                    className={`p-4 rounded-xl border space-y-2 transition-all ${
-                      q.published === false
-                        ? "bg-amber-50/40 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/50 opacity-80"
-                        : "bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-black text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950 px-2 py-0.5 rounded">
-                          Q{idx + 1}
-                        </span>
-                        {q.sectionTitle && (
-                          <span className="text-[10px] font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/80 px-2 py-0.5 rounded border border-teal-200 dark:border-teal-800">
-                            {q.sectionTitle}
-                          </span>
-                        )}
-                        {(q.groupTitle || (q.caseId ? "Case Study" : q.passageId ? "Comprehension Passage" : null)) && (
-                          <span className="text-[10px] font-semibold text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/80 px-2 py-0.5 rounded border border-purple-200 dark:border-purple-800">
-                            {q.groupTitle || (q.caseId ? "Case Study" : "Comprehension Passage")}
-                          </span>
-                        )}
-                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded">
-                          {getAssessmentQuestionTypeLabel(q.type, false)}
-                        </span>
-                        <span className="text-[10px] font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
-                          {q.marks ?? 1} Marks {q.marksSource && q.marksSource !== "default_inferred" ? `(${q.marksSource.replace("_", " ")})` : ""}
-                        </span>
-                        {q.negativeMarks ? (
-                          <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 px-1.5 py-0.5 rounded">
-                            -{q.negativeMarks} Neg
-                          </span>
-                        ) : null}
-                        {q.marksPending && (
-                          <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded flex items-center gap-1">
-                            <AlertTriangle className="w-3 h-3 text-amber-600" /> Pending Marks
-                          </span>
-                        )}
-                        {q.published === false && (
-                          <span className="text-[10px] font-bold text-amber-600 bg-amber-100 dark:bg-amber-950 px-2 py-0.5 rounded flex items-center gap-1">
-                            <Lock className="w-3 h-3" /> Unpublished
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-1">
-                        {/* Reorder Up / Down */}
-                        <button
-                          disabled={idx === 0}
-                          onClick={() => handleMoveQuestion(idx, "up")}
-                          className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-20 cursor-pointer"
-                          title="Move Up"
-                        >
-                          <ArrowUp className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          disabled={idx === savedTest.questions.length - 1}
-                          onClick={() => handleMoveQuestion(idx, "down")}
-                          className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-20 cursor-pointer"
-                          title="Move Down"
-                        >
-                          <ArrowDown className="w-3.5 h-3.5" />
-                        </button>
-
-                        {/* Toggle Publish */}
-                        <button
-                          onClick={() => handleTogglePublished(q)}
-                          className={`px-2 py-1 text-[10px] font-bold rounded-lg cursor-pointer flex items-center gap-1 ${
-                            q.published === false
-                              ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                              : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-                          }`}
-                          title="Toggle Published State"
-                        >
-                          {q.published === false ? (
-                            <>
-                              <Lock className="w-3 h-3" /> Publish
-                            </>
-                          ) : (
-                            <>
-                              <Globe className="w-3 h-3" /> Published
-                            </>
-                          )}
-                        </button>
-
-                        {/* Edit Question */}
-                        <button
-                          onClick={() => handleOpenEditQuestion(q)}
-                          className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400 rounded-lg transition-all cursor-pointer"
-                          title="Edit Question"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-
-                        {/* Delete Question */}
-                        <button
-                          onClick={() => handleDeleteSingleQuestion(q.id)}
-                          className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 dark:bg-rose-950 dark:text-rose-400 rounded-lg transition-all cursor-pointer"
-                          title="Delete Question"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Comprehension Parent Passage Excerpt if linked */}
-                    {q.passageId && savedTest.passages && savedTest.passages[q.passageId] && (
-                      <div className="p-3 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-xs my-2 space-y-1">
-                        <div className="flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300 font-bold text-[11px] uppercase tracking-wider">
-                          <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                          <span>{savedTest.passages[q.passageId].title || "Comprehension Passage"}</span>
+                {/* Orphan Passages fallback if no question matched directly */}
+                {(() => {
+                  const hasMatchedAny = savedTest.questions.some((q) => !!resolveQuestionPassage(q, savedTest));
+                  if (hasMatchedAny) return null;
+                  const orphanPassages = [
+                    ...Object.values(savedTest.cases || {}),
+                    ...Object.values(savedTest.passages || {})
+                  ];
+                  if (orphanPassages.length === 0) return null;
+                  return (
+                    <div className="space-y-3 mb-4">
+                      {orphanPassages.map((p, pIdx) => (
+                        <div key={p.id || pIdx} className="p-5 rounded-2xl bg-gradient-to-br from-indigo-50/90 via-blue-50/50 to-slate-50 dark:from-indigo-950/60 dark:via-slate-900 dark:to-slate-900 border-2 border-indigo-200/90 dark:border-indigo-800 shadow-sm space-y-3">
+                          <div className="flex items-center justify-between gap-2 border-b border-indigo-100 dark:border-indigo-900/60 pb-2.5">
+                            <div className="flex items-center gap-2">
+                              <div className="p-1.5 rounded-lg bg-indigo-600 text-white shadow-xs">
+                                <BookOpen className="w-4 h-4" />
+                              </div>
+                              <span className="text-xs font-black uppercase tracking-widest text-indigo-700 dark:text-indigo-300">
+                                {p.title || "READING PASSAGE / CASE STUDY"}
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                              Reading Passage
+                            </span>
+                          </div>
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                              Passage:
+                            </p>
+                            <div className="text-xs sm:text-sm leading-relaxed text-slate-800 dark:text-slate-200 whitespace-pre-line bg-white/90 dark:bg-slate-900/80 p-4 rounded-xl border border-indigo-100 dark:border-indigo-900/50 font-normal shadow-2xs">
+                              {p.text}
+                            </div>
+                          </div>
                         </div>
-                        <p className="text-slate-700 dark:text-slate-300 text-[11px] line-clamp-2 leading-relaxed italic bg-white/60 dark:bg-slate-900/60 p-2 rounded border border-indigo-100 dark:border-indigo-900/40 font-normal">
-                          "{savedTest.passages[q.passageId].text}"
-                        </p>
-                      </div>
-                    )}
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {savedTest.questions.map((q, idx) => {
+                  const qPassage = resolveQuestionPassage(q, savedTest);
+                  const prevQ = idx > 0 ? savedTest.questions[idx - 1] : null;
+                  const prevPassage = prevQ ? resolveQuestionPassage(prevQ, savedTest) : null;
+                  const isPassageStart = qPassage && (!prevPassage || prevPassage.id !== qPassage.id || prevPassage.text !== qPassage.text);
+
+                  return (
+                    <React.Fragment key={q.id}>
+                      {isPassageStart && (
+                        <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-50/90 via-blue-50/50 to-slate-50 dark:from-indigo-950/60 dark:via-slate-900 dark:to-slate-900 border-2 border-indigo-200/90 dark:border-indigo-800 shadow-sm space-y-3 mt-4 mb-2">
+                          <div className="flex items-center justify-between gap-2 border-b border-indigo-100 dark:border-indigo-900/60 pb-2.5">
+                            <div className="flex items-center gap-2">
+                              <div className="p-1.5 rounded-lg bg-indigo-600 text-white shadow-xs">
+                                <BookOpen className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <span className="text-xs font-black uppercase tracking-widest text-indigo-700 dark:text-indigo-300">
+                                  {qPassage.isCaseStudy ? "CASE STUDY" : "COMPREHENSION PASSAGE"}
+                                </span>
+                                {qPassage.title && !/^(?:case\s+study|comprehension(?:\s+passage)?)$/i.test(qPassage.title) && (
+                                  <p className="text-xs font-bold text-slate-700 dark:text-slate-300 mt-0.5">
+                                    {qPassage.title}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-[10px] font-black uppercase px-2.5 py-1 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                              Reading Passage
+                            </span>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                              Passage:
+                            </p>
+                            <div className="text-xs sm:text-sm leading-relaxed text-slate-800 dark:text-slate-200 whitespace-pre-line bg-white/90 dark:bg-slate-900/80 p-4 rounded-xl border border-indigo-100 dark:border-indigo-900/50 font-normal shadow-2xs">
+                              {qPassage.text}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      <div
+                        className={`p-4 rounded-xl border space-y-2 transition-all ${
+                          q.published === false
+                            ? "bg-amber-50/40 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/50 opacity-80"
+                            : "bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-black text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950 px-2 py-0.5 rounded">
+                              Q{idx + 1}
+                            </span>
+                            {q.sectionTitle && (
+                              <span className="text-[10px] font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/80 px-2 py-0.5 rounded border border-teal-200 dark:border-teal-800">
+                                {q.sectionTitle}
+                              </span>
+                            )}
+                            {(q.groupTitle || (qPassage ? (qPassage.isCaseStudy ? "Case Study" : "Comprehension Passage") : null)) && (
+                              <span className="text-[10px] font-semibold text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/80 px-2 py-0.5 rounded border border-purple-200 dark:border-purple-800">
+                                {q.groupTitle || (qPassage ? (qPassage.isCaseStudy ? "Case Study Sub-Question" : "Comprehension Sub-Question") : null)}
+                              </span>
+                            )}
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded">
+                              {getAssessmentQuestionTypeLabel(q.type, false)}
+                            </span>
+                            <span className="text-[10px] font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
+                              {q.marks ?? 1} Marks {q.marksSource && q.marksSource !== "default_inferred" ? `(${q.marksSource.replace("_", " ")})` : ""}
+                            </span>
+                            {q.negativeMarks ? (
+                              <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 px-1.5 py-0.5 rounded">
+                                -{q.negativeMarks} Neg
+                              </span>
+                            ) : null}
+                            {q.marksPending && (
+                              <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded flex items-center gap-1">
+                                <AlertTriangle className="w-3 h-3 text-amber-600" /> Pending Marks
+                              </span>
+                            )}
+                            {q.published === false && (
+                              <span className="text-[10px] font-bold text-amber-600 bg-amber-100 dark:bg-amber-950 px-2 py-0.5 rounded flex items-center gap-1">
+                                <Lock className="w-3 h-3" /> Unpublished
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            {/* Reorder Up / Down */}
+                            <button
+                              disabled={idx === 0}
+                              onClick={() => handleMoveQuestion(idx, "up")}
+                              className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-20 cursor-pointer"
+                              title="Move Up"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              disabled={idx === savedTest.questions.length - 1}
+                              onClick={() => handleMoveQuestion(idx, "down")}
+                              className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-20 cursor-pointer"
+                              title="Move Down"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Toggle Publish */}
+                            <button
+                              onClick={() => handleTogglePublished(q)}
+                              className={`px-2 py-1 text-[10px] font-bold rounded-lg cursor-pointer flex items-center gap-1 ${
+                                q.published === false
+                                  ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                  : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                              }`}
+                              title="Toggle Published State"
+                            >
+                              {q.published === false ? (
+                                <>
+                                  <Lock className="w-3 h-3" /> Publish
+                                </>
+                              ) : (
+                                <>
+                                  <Globe className="w-3 h-3" /> Published
+                                </>
+                              )}
+                            </button>
+
+                            {/* Edit Question */}
+                            <button
+                              onClick={() => handleOpenEditQuestion(q)}
+                              className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400 rounded-lg transition-all cursor-pointer"
+                              title="Edit Question"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Delete Question */}
+                            <button
+                              onClick={() => handleDeleteSingleQuestion(q.id)}
+                              className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 dark:bg-rose-950 dark:text-rose-400 rounded-lg transition-all cursor-pointer"
+                              title="Delete Question"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Passage Reference Label */}
+                        {qPassage && (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-[11px] text-indigo-700 dark:text-indigo-300 font-semibold my-1">
+                            <BookOpen className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            <span>Related to {qPassage.isCaseStudy ? "Case Study" : "Comprehension Passage"}: {qPassage.title}</span>
+                          </div>
+                        )}
 
                     {/* Image / Diagram Banner or Upload */}
                     {q.imageUrl ? (
@@ -1342,10 +1433,12 @@ export default function AdminPracticeTestModal({
                       </div>
                     )}
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
           {/* TAB 3: Student Attempts */}
           {activeTab === "attempts" && (
@@ -1514,6 +1607,24 @@ export default function AdminPracticeTestModal({
             </div>
 
             <div className="space-y-3 text-xs max-h-[70vh] overflow-y-auto pr-1">
+              {/* Associated Passage/Case Study Context */}
+              {(() => {
+                if (!savedTest) return null;
+                const editingPassage = resolveQuestionPassage(editingQuestion, savedTest);
+                if (!editingPassage) return null;
+                return (
+                  <div className="p-3.5 rounded-xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/70 space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300 font-bold text-[11px] uppercase tracking-wider">
+                      <BookOpen className="w-3.5 h-3.5" />
+                      <span>{editingPassage.isCaseStudy ? "Case Study" : "Comprehension Passage"}: {editingPassage.title}</span>
+                    </div>
+                    <div className="text-xs text-slate-700 dark:text-slate-300 max-h-36 overflow-y-auto whitespace-pre-line p-2.5 bg-white/80 dark:bg-slate-900/80 rounded-lg border border-indigo-100 dark:border-indigo-900/40 leading-relaxed font-normal">
+                      {editingPassage.text}
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Question Type:</label>

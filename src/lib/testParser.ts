@@ -57,7 +57,11 @@ export interface ParsedQuestion {
   marksConfidence: number;
   marksPending: boolean;
   passageId?: string;
+  parentPassageId?: string;
   caseId?: string;
+  parentCaseId?: string;
+  passage?: string;
+  caseStudy?: string;
   groupId?: string;
   groupType?: string;
   groupTitle?: string;
@@ -1780,7 +1784,11 @@ export function parseChapterTest(
       marksConfidence,
       marksPending,
       passageId: candidate.passageId,
+      parentPassageId: candidate.passageId,
       caseId: candidate.caseId,
+      parentCaseId: candidate.caseId,
+      passage: groupContent,
+      caseStudy: candidate.caseId ? groupContent : undefined,
       imageLabel: extractedImageLabel || undefined,
       rawText: candidate.rawBlockLines.join("\n")
     };

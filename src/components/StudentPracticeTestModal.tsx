@@ -22,7 +22,8 @@ import {
   Square
 } from "lucide-react";
 import ImageZoomModal from "./ImageZoomModal";
-import { ParsedAssessmentQuestion, TestAttemptRecord, ComprehensionPassage, AssessmentTestType, TopicPracticeTest } from "../types";
+import { ParsedAssessmentQuestion, TestAttemptRecord, ComprehensionPassage, CaseStudy, AssessmentTestType, TopicPracticeTest } from "../types";
+import { resolveQuestionPassage } from "../utils/passageHelper";
 import { 
   saveTestAttempt, 
   getStudentNextAttemptNumber,
@@ -174,6 +175,9 @@ export default function StudentPracticeTestModal({
   const [passages, setPassages] = useState<Record<string, ComprehensionPassage>>(() => {
     return testMeta?.passages || getPassagesForTopicSync(classGrade, subject, resolvedChapterNo, resolvedTopicName);
   });
+  const [cases, setCases] = useState<Record<string, CaseStudy>>(() => {
+    return testMeta?.cases || {};
+  });
   
   // Timer State - decoupled from parent modal rendering to prevent 1-second full-page rerenders
   const [initialElapsedSeconds, setInitialElapsedSeconds] = useState(0);
@@ -214,12 +218,14 @@ export default function StudentPracticeTestModal({
     if (syncMeta) {
       setTestMeta(syncMeta);
       if (syncMeta.passages) setPassages(syncMeta.passages);
+      if (syncMeta.cases) setCases(syncMeta.cases);
     } else {
       getAssessmentPracticeTest(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType)
         .then((m) => {
           if (isMounted && m) {
             setTestMeta(m);
             if (m.passages) setPassages(m.passages);
+            if (m.cases) setCases(m.cases);
           }
         })
         .catch(() => {});
@@ -313,6 +319,15 @@ export default function StudentPracticeTestModal({
           if (!isMounted) return;
           if (Array.isArray(qList) && qList.length > 0) {
             applyQuestionsAndRestore(qList);
+            getAssessmentPracticeTest(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType)
+              .then((m) => {
+                if (isMounted && m) {
+                  setTestMeta(m);
+                  if (m.passages) setPassages(m.passages);
+                  if (m.cases) setCases(m.cases);
+                }
+              })
+              .catch(() => {});
           } else {
             setQuestions([]);
             setFetchError("No assessment questions found for this test yet.");
@@ -796,24 +811,40 @@ export default function StudentPracticeTestModal({
                 </div>
               )}
 
-              {/* Comprehension Reading Passage (Linked once and rendered for all connected questions) */}
-              {currentQuestion.passageId && (
-                <div className="p-4 sm:p-5 rounded-xl bg-indigo-50/90 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800/80 text-slate-800 dark:text-slate-200 space-y-2.5 shadow-2xs">
-                  <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs uppercase tracking-wider">
-                    <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                    <span>{passages[currentQuestion.passageId]?.title || "Reading Passage"}</span>
+              {/* Case-Study / Comprehension Reading Passage */}
+              {(() => {
+                const currentPassage = resolveQuestionPassage(currentQuestion, { passages, cases });
+                if (!currentPassage) return null;
+                return (
+                  <div className="p-4 sm:p-5 rounded-xl bg-gradient-to-br from-indigo-50/90 via-blue-50/40 to-slate-50 dark:from-indigo-950/60 dark:via-slate-900 dark:to-slate-900 border-2 border-indigo-200/90 dark:border-indigo-800 text-slate-800 dark:text-slate-200 space-y-2.5 shadow-2xs">
+                    <div className="flex items-center justify-between gap-2 border-b border-indigo-100 dark:border-indigo-900/60 pb-2">
+                      <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs uppercase tracking-wider">
+                        <div className="p-1 rounded-md bg-indigo-600 text-white shadow-xs">
+                          <BookOpen className="w-3.5 h-3.5" />
+                        </div>
+                        <span>{currentPassage.isCaseStudy ? "CASE STUDY" : "READING COMPREHENSION"}</span>
+                        {currentPassage.title && !/^(?:case\s+study|reading\s+comprehension|comprehension(?:\s+passage)?)$/i.test(currentPassage.title) && (
+                          <span className="text-slate-700 dark:text-slate-300 font-semibold normal-case">
+                            — {currentPassage.title}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
+                        Reading Passage
+                      </span>
+                    </div>
+                    {currentPassage.text ? (
+                      <div className="text-xs sm:text-sm leading-relaxed text-slate-800 dark:text-slate-200 whitespace-pre-line bg-white/90 dark:bg-slate-900/80 p-3.5 sm:p-4 rounded-lg border border-indigo-100 dark:border-indigo-900/60 font-normal shadow-2xs max-h-72 sm:max-h-96 overflow-y-auto">
+                        {currentPassage.text}
+                      </div>
+                    ) : (
+                      <div className="text-xs italic text-indigo-600 dark:text-indigo-400">
+                        Reading passage reference linked to this question.
+                      </div>
+                    )}
                   </div>
-                  {passages[currentQuestion.passageId]?.text ? (
-                    <div className="text-xs sm:text-sm leading-relaxed text-slate-800 dark:text-slate-200 whitespace-pre-line bg-white/80 dark:bg-slate-900/70 p-3.5 sm:p-4 rounded-lg border border-indigo-100 dark:border-indigo-900/60 font-normal shadow-2xs">
-                      {passages[currentQuestion.passageId].text}
-                    </div>
-                  ) : (
-                    <div className="text-xs italic text-indigo-600 dark:text-indigo-400">
-                      Reading passage reference linked to this question.
-                    </div>
-                  )}
-                </div>
-              )}
+                );
+              })()}
 
               {/* Question Card - Clear & Balanced Typography */}
               <div className="p-4 sm:p-5 rounded-xl bg-slate-50/90 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 my-2 shadow-2xs space-y-3">
@@ -1260,6 +1291,11 @@ export default function StudentPracticeTestModal({
 
                 <div className="space-y-3">
                   {questions.map((q, idx) => {
+                    const qPassage = resolveQuestionPassage(q, { passages, cases });
+                    const prevQ = idx > 0 ? questions[idx - 1] : null;
+                    const prevPassage = prevQ ? resolveQuestionPassage(prevQ, { passages, cases }) : null;
+                    const isPassageStart = qPassage && (!prevPassage || prevPassage.id !== qPassage.id || prevPassage.text !== qPassage.text);
+
                     const userAns = userAnswers[q.id];
                     const isAttempted = !!(userAns && userAns.trim());
                     const qScore = lastAttemptRecord.questionScores?.[q.id];
@@ -1270,18 +1306,41 @@ export default function StudentPracticeTestModal({
                       ["very_short_answer", "short_answer", "long_answer"].includes(q.type);
 
                     return (
-                      <div
-                        key={q.id}
-                        className={`p-4 rounded-xl border space-y-2.5 transition-all ${
-                          !isAttempted
-                            ? "bg-amber-50/40 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/60"
-                            : isCorrect
-                            ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60"
-                            : marksAwarded > 0
-                            ? "bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800/60"
-                            : "bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/60"
-                        }`}
-                      >
+                      <React.Fragment key={q.id}>
+                        {isPassageStart && (
+                          <div className="p-4 sm:p-5 rounded-xl bg-gradient-to-br from-indigo-50/90 via-blue-50/40 to-slate-50 dark:from-indigo-950/60 dark:via-slate-900 dark:to-slate-900 border-2 border-indigo-200/90 dark:border-indigo-800 text-slate-800 dark:text-slate-200 space-y-2.5 shadow-2xs mt-3 mb-2">
+                            <div className="flex items-center justify-between gap-2 border-b border-indigo-100 dark:border-indigo-900/60 pb-2">
+                              <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs uppercase tracking-wider">
+                                <div className="p-1 rounded-md bg-indigo-600 text-white shadow-xs">
+                                  <BookOpen className="w-3.5 h-3.5" />
+                                </div>
+                                <span>{qPassage.isCaseStudy ? "CASE STUDY" : "READING COMPREHENSION"}</span>
+                                {qPassage.title && !/^(?:case\s+study|reading\s+comprehension|comprehension(?:\s+passage)?)$/i.test(qPassage.title) && (
+                                  <span className="text-slate-700 dark:text-slate-300 font-semibold normal-case">
+                                    — {qPassage.title}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
+                                Reading Passage
+                              </span>
+                            </div>
+                            <div className="text-xs sm:text-sm leading-relaxed text-slate-800 dark:text-slate-200 whitespace-pre-line bg-white/90 dark:bg-slate-900/80 p-3.5 sm:p-4 rounded-lg border border-indigo-100 dark:border-indigo-900/60 font-normal shadow-2xs max-h-72 overflow-y-auto">
+                              {qPassage.text}
+                            </div>
+                          </div>
+                        )}
+                        <div
+                          className={`p-4 rounded-xl border space-y-2.5 transition-all ${
+                            !isAttempted
+                              ? "bg-amber-50/40 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/60"
+                              : isCorrect
+                              ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60"
+                              : marksAwarded > 0
+                              ? "bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800/60"
+                              : "bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/60"
+                          }`}
+                        >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 space-y-1">
                             <div className="flex flex-wrap items-center gap-1.5">
@@ -1362,8 +1421,9 @@ export default function StudentPracticeTestModal({
                           )}
                         </div>
                       </div>
-                    );
-                  })}
+                    </React.Fragment>
+                  );
+                })}
                 </div>
               </div>
 
