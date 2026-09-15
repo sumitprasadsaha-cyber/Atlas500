@@ -18,6 +18,7 @@ import {
   normalizeClassGrade,
   isSubjectMatching
 } from "./classNoteHelper";
+import { isUPSCClass } from "./upscHierarchyHelper";
 import {
   parseNotePartInfo,
   getFormattedTopicLabel
@@ -222,6 +223,7 @@ export function getStudentEnrolledSchoolSubjects(
 
     if (Array.isArray(allClassNotes)) {
       allClassNotes.forEach((cn) => {
+        if (isUPSCClass(cn.classGrade) || (cn as any).type === "upsc") return;
         if (cn.subject && cn.subject.trim() && (isClassGradeMatching(cn.classGrade, student.classGrade) || isNoteAccessibleInClass(cn, studentClass))) {
           if (!removed.includes(cn.subject.trim().toLowerCase())) {
             subjectsSet.add(cn.subject.trim());
@@ -327,6 +329,7 @@ export function buildSingleSchoolSubject(
   // 2. Gather notes belonging to targetClass and subjectName
   if (Array.isArray(allClassNotes)) {
     allClassNotes.forEach((cn) => {
+      if (isUPSCClass(cn.classGrade) || (cn as any).type === "upsc") return;
       // Must match subject
       if (!isSubjectMatching(cn.subject, subjectName)) return;
 
@@ -493,6 +496,7 @@ export function buildCompleteStudentSchoolHierarchy(
   // From notes belonging directly to student's own class
   if (Array.isArray(allClassNotes)) {
     allClassNotes.forEach((cn) => {
+      if (isUPSCClass(cn.classGrade) || (cn as any).type === "upsc") return;
       if (isClassGradeMatching(cn.classGrade, studentClass)) {
         if (cn.subject && cn.subject.trim()) {
           nativeSubjectsSet.add(cn.subject.trim());

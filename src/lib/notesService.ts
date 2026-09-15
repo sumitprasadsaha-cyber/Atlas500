@@ -70,6 +70,10 @@ export interface NoteUploadParams {
   topicNumber?: string | number;
   topicTitle?: string;
   partLabel?: string;
+  partNumber?: string | number;
+  partNo?: string | number;
+  partName?: string;
+  totalParts?: string | number;
   visibility?: "all" | "selected" | "hidden";
   allowedStudentIds?: string[];
   allowedClasses?: string[];
@@ -88,7 +92,13 @@ export interface NoteRenameParams {
   noteId: string;
   currentNote: ClassNote;
   newTopicTitle?: string;
+  newTopicName?: string;
   newTopicNumber?: number | string;
+  newPartNumber?: number | string;
+  newPartNo?: number | string;
+  newPartName?: string;
+  newTotalParts?: number | string;
+  newPartLabel?: string;
   newChapterTitle?: string;
 }
 
@@ -253,9 +263,14 @@ export async function uploadNotePipeline(params: NoteUploadParams): Promise<Clas
     chapterName: params.chapterName ?? params.chapterTitle,
     moduleNumber: params.moduleNumber ?? params.moduleNo,
     moduleName: params.moduleName ?? params.moduleTitle,
-    topicNumber: params.topicNumber ?? params.topicNo ?? params.partLabel,
+    topicNumber: params.topicNumber ?? params.topicNo,
     topicName: params.topicName ?? params.topicTitle,
+    topicTitle: params.topicTitle,
     partLabel: params.partLabel,
+    partNumber: params.partNumber,
+    partNo: params.partNo ?? params.partNumber,
+    partName: params.partName,
+    totalParts: params.totalParts,
     fileName: canonicalFileName,
     originalFilename: file.name,
     fileSize: file.size,
@@ -329,6 +344,12 @@ export async function uploadNotePipeline(params: NoteUploadParams): Promise<Clas
       chapterName: chapterName || "Chapter 1",
       topicNo: canonicalMetadata.topicNumber,
       topicName: canonicalMetadata.topicName || "Topic Note",
+      topicTitle: canonicalMetadata.topicTitle || (canonicalMetadata as any).topicName,
+      partLabel: canonicalMetadata.partLabel,
+      partNumber: (canonicalMetadata as any).partNumber,
+      partNo: (canonicalMetadata as any).partNo,
+      partName: (canonicalMetadata as any).partName,
+      totalParts: (canonicalMetadata as any).totalParts,
       fileName: canonicalFileName,
       originalFilename: file.name,
       pdfFileName: canonicalFileName,
@@ -559,20 +580,38 @@ export async function replaceNotePipeline(params: NoteReplaceParams): Promise<Cl
  * In-place renaming for topic title, topic number, or chapter/module name
  */
 export async function renameNotePipeline(params: NoteRenameParams): Promise<ClassNote> {
-  const { noteId, currentNote, newTopicTitle, newTopicNumber, newChapterTitle } = params;
+  const {
+    noteId,
+    currentNote,
+    newTopicTitle,
+    newTopicName,
+    newTopicNumber,
+    newPartNumber,
+    newPartNo,
+    newPartName,
+    newTotalParts,
+    newPartLabel,
+    newChapterTitle,
+  } = params;
 
   notesLogger.info("RENAME_START", {
     noteId,
-    extra: { newTopicTitle, newTopicNumber, newChapterTitle },
+    extra: { newTopicTitle, newTopicName, newTopicNumber, newPartNumber, newTotalParts, newChapterTitle },
   });
 
   try {
+    const finalPartNumber = newPartNumber !== undefined ? newPartNumber : newPartNo;
     const updatedNote: ClassNote = {
       ...currentNote,
       topicTitle: newTopicTitle !== undefined ? newTopicTitle : (currentNote as any).topicTitle,
-      topicName: newTopicTitle !== undefined ? newTopicTitle : (currentNote as any).topicName,
+      topicName: newTopicName !== undefined ? newTopicName : (newTopicTitle !== undefined ? newTopicTitle : (currentNote as any).topicName),
       topicNumber: newTopicNumber !== undefined ? newTopicNumber : (currentNote as any).topicNumber,
       topicNo: newTopicNumber !== undefined ? String(newTopicNumber) : (currentNote as any).topicNo,
+      partNumber: finalPartNumber !== undefined ? (finalPartNumber ? (isNaN(Number(finalPartNumber)) ? finalPartNumber : Number(finalPartNumber)) : undefined) : (currentNote as any).partNumber,
+      partNo: finalPartNumber !== undefined ? (finalPartNumber ? (isNaN(Number(finalPartNumber)) ? finalPartNumber : Number(finalPartNumber)) : undefined) : (currentNote as any).partNo,
+      partName: newPartName !== undefined ? newPartName : (currentNote as any).partName,
+      totalParts: newTotalParts !== undefined ? (newTotalParts ? (isNaN(Number(newTotalParts)) ? newTotalParts : Number(newTotalParts)) : undefined) : (currentNote as any).totalParts,
+      partLabel: newPartLabel !== undefined ? newPartLabel : (newTopicTitle !== undefined ? newTopicTitle : (currentNote as any).partLabel),
       chapterName: newChapterTitle !== undefined ? newChapterTitle : currentNote.chapterName,
       chapterTitle: newChapterTitle !== undefined ? newChapterTitle : (currentNote as any).chapterTitle,
       moduleName: newChapterTitle !== undefined ? newChapterTitle : (currentNote as any).moduleName,

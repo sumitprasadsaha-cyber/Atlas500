@@ -16,6 +16,51 @@ export interface ChapterGroup {
 }
 
 /**
+ * Format topic display name with optional Part / Total Parts:
+ * - If Part is provided without total parts: "Topic Name (Part 1)"
+ * - If Part is provided with total parts: "Topic Name (Part 1/5)"
+ * - If Part is not provided: "Topic Name"
+ */
+export function formatTopicDisplayName(
+  topicName: string,
+  partNumber?: number | string | null,
+  totalParts?: number | string | null
+): string {
+  const cleanName = (topicName || "").trim();
+  if (!cleanName) return "";
+
+  if (partNumber === undefined || partNumber === null || String(partNumber).trim() === "") {
+    return cleanName;
+  }
+
+  const rawPart = String(partNumber).trim();
+  if (!rawPart) return cleanName;
+
+  // Check if cleanName already has the part suffix (e.g. "... (Part 1)")
+  if (
+    cleanName.toLowerCase().includes(`(part ${rawPart.toLowerCase()}`) ||
+    cleanName.toLowerCase().endsWith(`(${rawPart.toLowerCase()})`)
+  ) {
+    return cleanName;
+  }
+
+  const rawTotal = totalParts !== undefined && totalParts !== null ? String(totalParts).trim() : "";
+
+  let partStr = rawPart;
+  if (/^\d+$/.test(rawPart)) {
+    partStr = `Part ${rawPart}`;
+  } else if (!/^part\b/i.test(rawPart)) {
+    partStr = `Part ${rawPart}`;
+  }
+
+  if (rawTotal && !partStr.includes("/")) {
+    partStr = `${partStr}/${rawTotal}`;
+  }
+
+  return `${cleanName} (${partStr})`;
+}
+
+/**
  * Strips topic/part indicators like "(Topic 1)", "Topic 1", "(Part 1)", "Part 1", "- Topic 1", Pt. 1
  * from chapter titles to get the clean umbrella chapter name.
  * Ensures whole-word matching so words like "Participation" or "Particular" are never truncated.

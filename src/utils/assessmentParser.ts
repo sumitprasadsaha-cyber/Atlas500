@@ -185,7 +185,7 @@ export function inferDefaultMarksForType(type: AssessmentQuestionType): { marks:
  */
 function matchSectionHeader(
   line: string
-): { type: AssessmentQuestionType; marks?: number; negativeMarks?: number; source?: string; title?: string } | null {
+): { type: AssessmentQuestionType; marks?: number; negativeMarks?: number; source?: string; title?: string; sectionLetter?: string; declaredMarks?: number } | null {
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
 

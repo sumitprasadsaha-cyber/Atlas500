@@ -98,6 +98,12 @@ export default function TopicCard({
 
   const rawTopicName = topicTitle ?? (note as any).topicTitle ?? (note as any).topicName ?? note.partLabel ?? "";
   const displayTitle = rawTopicName || `Topic ${paddedNo}`;
+  const partNumber = (note as any).partNumber ?? (note as any).partNo;
+  const totalParts = (note as any).totalParts;
+  const hasPartInTitle = /\(Part\s*\d+/i.test(displayTitle);
+  const partBadge = !hasPartInTitle && partNumber !== undefined && partNumber !== null && String(partNumber).trim() !== ""
+    ? (totalParts ? `Part ${partNumber}/${totalParts}` : `Part ${partNumber}`)
+    : null;
   const fileSizeStr = formatBytes((note as any).fileSize || (note as any).file_size);
   const dateStr = formatDate((note as any).createdAt || (note as any).uploadedAt);
   const fileExt = (rawFilename.split(".").pop() || (isImg ? "IMG" : "PDF")).toUpperCase();
@@ -132,6 +138,12 @@ export default function TopicCard({
             <h4 className="text-xs sm:text-[13px] font-bold text-slate-800 dark:text-slate-200 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors break-words whitespace-normal leading-snug">
               {displayTitle}
             </h4>
+
+            {partBadge && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/70 shrink-0">
+                {partBadge}
+              </span>
+            )}
 
             {activeDownloading && (
               <TopicDownloadProgressBar

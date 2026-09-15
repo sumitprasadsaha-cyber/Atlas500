@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { 
   X, 
   Upload, 
@@ -10,7 +10,8 @@ import {
   GraduationCap
 } from "lucide-react";
 import { ClassNote } from "../../types";
-import { uploadNotePipeline } from "../../lib/notesService";
+import { uploadNotePipeline, validateNoteFile } from "../../lib/notesService";
+import { formatTopicDisplayName } from "../../utils/chapterNotesHelper";
 import NotesUploadProgressModal, { UploadProgressState } from "./NotesUploadProgressModal";
 
 export interface ParentContext {
@@ -42,6 +43,8 @@ export default function QuickAddTopicModal({
 }: QuickAddTopicModalProps) {
   const [topicNumber, setTopicNumber] = useState<number | "">(1);
   const [topicName, setTopicName] = useState("");
+  const [partNumber, setPartNumber] = useState<string>("");
+  const [totalParts, setTotalParts] = useState<string>("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -61,12 +64,24 @@ export default function QuickAddTopicModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadStartTimeRef = useRef<number>(0);
 
+  // Live Topic Display Name Preview
+  const formattedPreviewTitle = useMemo(() => {
+    if (!topicName.trim()) return "";
+    return formatTopicDisplayName(
+      topicName.trim(),
+      partNumber.trim() || undefined,
+      totalParts.trim() || undefined
+    );
+  }, [topicName, partNumber, totalParts]);
+
   // Initialize defaults when modal opens
   useEffect(() => {
     if (isOpen && parentContext) {
       setErrorMsg("");
       setDuplicateWarning(null);
       setSelectedFile(initialFile);
+      setPartNumber("");
+      setTotalParts("");
 
       // Auto-suggest next topic number
       const numbers = (parentContext.existingTopics || [])
@@ -89,6 +104,7 @@ export default function QuickAddTopicModal({
 
     const num = typeof topicNumber === "number" ? topicNumber : parseInt(String(topicNumber), 10);
     const cleanName = topicName.trim().toLowerCase();
+    const cleanPart = partNumber.trim();
 
     if (!num && !cleanName) {
       setDuplicateWarning(null);
@@ -98,11 +114,17 @@ export default function QuickAddTopicModal({
     const dup = (parentContext.existingTopics || []).find((t) => {
       const tNum = (t as any).topicNumber ?? t.topicNo;
       const tName = ((t as any).topicTitle || (t as any).topicName || t.partLabel || "").trim().toLowerCase();
+      const tPart = String((t as any).partNumber ?? (t as any).partNo ?? "").trim();
 
-      if (num && tNum !== undefined && Number(tNum) === num) {
+      // If both have different part numbers, treat as distinct parts
+      if (cleanPart && tPart && cleanPart !== tPart) {
+        return false;
+      }
+
+      if (num && tNum !== undefined && Number(tNum) === num && (!cleanPart || !tPart || cleanPart === tPart)) {
         return true;
       }
-      if (cleanName && tName && tName === cleanName) {
+      if (cleanName && tName && tName === cleanName && (!cleanPart || !tPart || cleanPart === tPart)) {
         return true;
       }
       return false;
@@ -115,7 +137,7 @@ export default function QuickAddTopicModal({
     } else {
       setDuplicateWarning(null);
     }
-  }, [topicNumber, topicName, parentContext, isOpen]);
+  }, [topicNumber, topicName, partNumber, parentContext, isOpen]);
 
   if (!isOpen || !parentContext) return null;
 
@@ -126,6 +148,12 @@ export default function QuickAddTopicModal({
     setIsDragOver(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
+      const validationError = validateNoteFile(file);
+      if (validationError) {
+        setErrorMsg(validationError);
+        return;
+      }
+      setErrorMsg("");
       setSelectedFile(file);
       if (!topicName) {
         const baseName = file.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
@@ -137,6 +165,12 @@ export default function QuickAddTopicModal({
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      const validationError = validateNoteFile(file);
+      if (validationError) {
+        setErrorMsg(validationError);
+        return;
+      }
+      setErrorMsg("");
       setSelectedFile(file);
       if (!topicName) {
         const baseName = file.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
@@ -148,6 +182,12 @@ export default function QuickAddTopicModal({
   const handleSaveTopic = async (overrideDuplicate = false) => {
     if (!selectedFile) {
       setErrorMsg("Please choose a PDF or image document to upload.");
+      return;
+    }
+
+    const validationError = validateNoteFile(selectedFile);
+    if (validationError) {
+      setErrorMsg(validationError);
       return;
     }
 
@@ -181,6 +221,18 @@ export default function QuickAddTopicModal({
 
     try {
       const isUPSC = parentContext.type === "upsc";
+      const cleanName = topicName.trim();
+      const cleanPart = partNumber.trim();
+      const cleanTotal = totalParts.trim();
+      const formattedTitle = formatTopicDisplayName(
+        cleanName,
+        cleanPart || undefined,
+        cleanTotal || undefined
+      );
+
+      const parsedPart = cleanPart ? (isNaN(Number(cleanPart)) ? cleanPart : Number(cleanPart)) : undefined;
+      const parsedTotal = cleanTotal ? (isNaN(Number(cleanTotal)) ? cleanTotal : Number(cleanTotal)) : undefined;
+
       const result = await uploadNotePipeline({
         file: selectedFile,
         classGrade: isUPSC ? "UPSC" : (parentContext.className || ""),
@@ -197,9 +249,13 @@ export default function QuickAddTopicModal({
         moduleTitle: parentContext.moduleName,
         topicNo: typeof topicNumber === "number" ? topicNumber : parseInt(String(topicNumber), 10) || 1,
         topicNumber: typeof topicNumber === "number" ? topicNumber : parseInt(String(topicNumber), 10) || 1,
-        topicName: topicName.trim(),
-        topicTitle: topicName.trim(),
-        partLabel: topicName.trim(),
+        topicName: cleanName,
+        topicTitle: formattedTitle,
+        partLabel: formattedTitle,
+        partNumber: parsedPart,
+        partNo: parsedPart,
+        partName: cleanPart ? `Part ${cleanPart}` : undefined,
+        totalParts: parsedTotal,
         onProgress: (pct) => {
           const now = Date.now();
           const elapsedSec = (now - uploadStartTimeRef.current) / 1000;
@@ -346,6 +402,61 @@ export default function QuickAddTopicModal({
                 id="topic-name-input"
               />
             </div>
+          </div>
+
+          {/* Optional Part Configuration */}
+          <div className="p-3.5 bg-slate-50 dark:bg-slate-850/60 rounded-xl border border-slate-200/80 dark:border-slate-800 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                <span>Part (Optional)</span>
+                <span className="text-[10px] font-normal text-slate-400">e.g. For multi-part topic notes</span>
+              </label>
+              {formattedPreviewTitle && (partNumber || totalParts) && (
+                <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/80 px-2 py-0.5 rounded-full border border-indigo-200/60 dark:border-indigo-800/40">
+                  Part Enabled
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                  Part Number / Label
+                </label>
+                <input
+                  type="text"
+                  value={partNumber}
+                  onChange={(e) => setPartNumber(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-hidden focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  placeholder="e.g. 1"
+                  id="part-number-input"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                  Total Parts (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={totalParts}
+                  onChange={(e) => setTotalParts(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-hidden focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  placeholder="e.g. 5"
+                  id="total-parts-input"
+                />
+              </div>
+            </div>
+
+            {/* Live Topic Name Preview */}
+            {topicName.trim() && (
+              <div className="pt-1 text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <span className="font-bold text-slate-600 dark:text-slate-300 shrink-0">Preview:</span>
+                <span className="font-semibold text-blue-600 dark:text-blue-400 truncate">
+                  Topic {topicNumber || 1}: {formattedPreviewTitle}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Duplicate Warning Alert */}

@@ -16,6 +16,10 @@ export interface StudentUPSCTopicNote {
   topicNo: number | string;
   topicName: string;
   topicLabel: string;
+  partNumber?: number | string;
+  totalParts?: number | string;
+  partLabel?: string;
+  cleanBaseName?: string;
   note: ClassNote | ChapterNote;
   isCompleted: boolean;
   fileSize?: number;
@@ -376,6 +380,10 @@ export function buildStudentUPSCHierarchy(
         topicNo: details.topicNo,
         topicName: details.topicName,
         topicLabel: details.topicLabel,
+        partNumber: details.partNumber,
+        totalParts: details.totalParts,
+        partLabel: details.partLabel,
+        cleanBaseName: details.cleanBaseName,
         note,
         isCompleted,
         fileSize,

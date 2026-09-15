@@ -92,10 +92,7 @@ export function canonicalGSPaperName(rawPaper?: string, subject?: string): strin
   return clean;
 }
 
-/**
- * Extract complete normalized UPSC hierarchy metadata from any note.
- */
-export function extractUPSCDetails(note: any): {
+export interface UPSCDetails {
   gsPaper: string;
   subject: string;
   moduleNo: number;
@@ -107,7 +104,18 @@ export function extractUPSCDetails(note: any): {
   topicNo: number | string;
   topicName: string;
   topicLabel: string;
-} {
+  partNumber?: number | string;
+  partNo?: number | string;
+  totalParts?: number | string;
+  partName?: string;
+  partLabel?: string;
+  cleanBaseName?: string;
+}
+
+/**
+ * Extract complete normalized UPSC hierarchy metadata from any note.
+ */
+export function extractUPSCDetails(note: any): UPSCDetails {
   const explicitTeach = note.teachMode ?? note.teach_mode ?? note.isTeachMode;
   const subInfo = normalizeSubjectAndTeachMode(note.subject, explicitTeach);
   const subject = subInfo.displaySubject || "General Studies";
@@ -180,9 +188,35 @@ export function extractUPSCDetails(note: any): {
 
   // 4. Topic
   const partInfo = parseNotePartInfo(note, 0);
-  const topicNo = partInfo.topicNo || 1;
-  const topicName = cleanEntityName(partInfo.topicName, "topic");
+  const topicNo = note.topicNumber ?? note.topicNo ?? partInfo.topicNo ?? 1;
+  const rawTopicName = note.topicTitle || note.topicName || partInfo.topicName || "";
+  const topicName = cleanEntityName(rawTopicName, "topic");
   const topicLabel = topicName ? `Topic ${topicNo} – ${topicName}` : `Topic ${topicNo}`;
+
+  // 5. Part Details
+  let partNumber = note.partNumber ?? note.partNo ?? note.part_number;
+  let totalParts = note.totalParts ?? note.total_parts;
+  let partName = note.partName ?? note.part_name;
+  let partLabel = note.partLabel;
+
+  // Extract from title or filename if not explicitly stored
+  const titleToCheck = `${note.topicTitle || ""} ${note.topicName || ""} ${note.fileName || ""} ${note.pdfFileName || ""}`;
+  const partMatch = titleToCheck.match(/\s*\(Part\s*(\d+)(?:\s*(?:\/|of)\s*(\d+))?\)/i);
+  if (partMatch) {
+    if (partNumber === undefined || partNumber === null || partNumber === "") {
+      partNumber = parseInt(partMatch[1], 10);
+    }
+    if ((totalParts === undefined || totalParts === null || totalParts === "") && partMatch[2]) {
+      totalParts = parseInt(partMatch[2], 10);
+    }
+  }
+
+  let cleanBaseName = cleanEntityName(topicName, "topic").replace(/\s*\(Part\s*\d+(?:\s*(?:\/|of)\s*\d+)?\)/gi, "").trim();
+  if (!cleanBaseName) cleanBaseName = topicName;
+
+  if (!partLabel && partNumber !== undefined && partNumber !== null && partNumber !== "") {
+    partLabel = totalParts ? `Part ${partNumber}/${totalParts}` : `Part ${partNumber}`;
+  }
 
   return {
     gsPaper,
@@ -196,6 +230,12 @@ export function extractUPSCDetails(note: any): {
     topicNo,
     topicName,
     topicLabel,
+    partNumber,
+    partNo: partNumber,
+    totalParts,
+    partName,
+    partLabel,
+    cleanBaseName,
   };
 }
 

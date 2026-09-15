@@ -8,7 +8,8 @@ import {
   Search, 
   X, 
   FlaskConical,
-  AlertCircle 
+  AlertCircle,
+  Eye
 } from "lucide-react";
 import { Student, ClassNote, ChapterNote } from "../types";
 import { StudentUPSCGSPaper, StudentUPSCSubject, StudentUPSCModule } from "../utils/studentUPSCHierarchyHelper";
@@ -420,6 +421,11 @@ export default function StudentUPSCTree({
                               }
                             };
 
+                            const rawFileName = topic.fileName || topic.note?.fileName || (topic.note as any)?.pdfFileName || "";
+                            const fileExt = (rawFileName.split(".").pop() || (topic.fileType === "image" ? "IMG" : "PDF")).toUpperCase();
+                            const partBadge = topic.partLabel || (topic.partNumber !== undefined && topic.partNumber !== null && topic.partNumber !== "" ? `Part ${topic.partNumber}` : null);
+                            const displayName = topic.cleanBaseName || topic.topicName;
+
                             return (
                               <div
                                 key={`upsc-topic-${topic.id}`}
@@ -433,8 +439,8 @@ export default function StudentUPSCTree({
                                 title={isDownloading ? "Downloading note..." : hasError ? "Failed to load. Tap to try again" : "Tap to open note in browser"}
                               >
                                 {/* Main Topic Content Row */}
-                                <div className="flex items-start sm:items-center justify-between gap-2.5 px-3 py-2">
-                                  {/* Left: Icon, Full Topic Name, and Downloading / Try Again Indicator */}
+                                <div className="flex items-start sm:items-center justify-between gap-2.5 px-3 py-2.5">
+                                  {/* Left: Icon, Topic #, Name, Part, Format, and Progress */}
                                   <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
                                     <span className="mt-0.5 sm:mt-0 shrink-0">
                                       {topic.fileType === "image" ? (
@@ -444,9 +450,31 @@ export default function StudentUPSCTree({
                                       )}
                                     </span>
 
-                                    <div className="min-w-0 flex-1 flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+                                    <div className="min-w-0 flex-1 flex flex-wrap items-center gap-1.5 sm:gap-2">
+                                      {/* Topic Number Badge */}
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-tight bg-blue-50 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-800/70 shrink-0">
+                                        Topic {topic.topicNo}
+                                      </span>
+
+                                      {/* Topic Name */}
                                       <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors break-words whitespace-normal leading-relaxed">
-                                        {topic.topicName}
+                                        {displayName}
+                                      </span>
+
+                                      {/* Part Badge (if part exists) */}
+                                      {partBadge && (
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/70 shrink-0">
+                                          {partBadge}
+                                        </span>
+                                      )}
+
+                                      {/* File format tag */}
+                                      <span className={`px-1 py-0.2 rounded text-[9px] font-black uppercase tracking-wider shrink-0 ${
+                                        topic.fileType === "image"
+                                          ? "bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300"
+                                          : "bg-red-50 dark:bg-red-950/80 text-red-700 dark:text-red-300 border border-red-200/60 dark:border-red-900/60"
+                                      }`}>
+                                        {fileExt}
                                       </span>
 
                                       {isDownloading && (
@@ -464,29 +492,45 @@ export default function StudentUPSCTree({
                                     </div>
                                   </div>
 
-                                  {/* Right: Attached Test Button / Obtained Score */}
-                                  {hasTest && (
-                                    <div className="shrink-0 self-start sm:self-center">
-                                      <StudentTestScoreButton
-                                        stats={stats}
-                                        hasTest={hasTest}
-                                        topicName={topic.topicName}
-                                        onPreload={() => {
-                                          getTopicPracticeTest(targetClass, targetSubj, mod.moduleNo, topic.topicName);
-                                        }}
-                                        onOpenTest={() => {
-                                          onOpenPracticeTest?.({
-                                            classGrade: targetClass,
-                                            subject: targetSubj,
-                                            chapterNo: mod.moduleNo,
-                                            chapterName: mod.moduleName,
-                                            topicName: topic.topicName,
-                                            testType: "topic",
-                                          });
-                                        }}
-                                      />
-                                    </div>
-                                  )}
+                                  {/* Right: Attached Document View Button and Attached Test */}
+                                  <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleTopicClick();
+                                      }}
+                                      disabled={isDownloading}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-blue-50 dark:bg-slate-800 dark:hover:bg-blue-950/60 text-slate-700 hover:text-blue-600 dark:text-slate-300 dark:hover:text-blue-400 border border-slate-200/90 dark:border-slate-700 hover:border-blue-200 dark:hover:border-blue-800 transition-colors shadow-2xs"
+                                      title="View/Open this note"
+                                    >
+                                      <Eye className="w-3 h-3 text-blue-500" />
+                                      <span className="hidden xs:inline">View Note</span>
+                                    </button>
+
+                                    {hasTest && (
+                                      <div className="shrink-0">
+                                        <StudentTestScoreButton
+                                          stats={stats}
+                                          hasTest={hasTest}
+                                          topicName={topic.topicName}
+                                          onPreload={() => {
+                                            getTopicPracticeTest(targetClass, targetSubj, mod.moduleNo, topic.topicName);
+                                          }}
+                                          onOpenTest={() => {
+                                            onOpenPracticeTest?.({
+                                              classGrade: targetClass,
+                                              subject: targetSubj,
+                                              chapterNo: mod.moduleNo,
+                                              chapterName: mod.moduleName,
+                                              topicName: topic.topicName,
+                                              testType: "topic",
+                                            });
+                                          }}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
 
                                 {/* Inline Error Message */}

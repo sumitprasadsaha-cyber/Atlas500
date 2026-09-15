@@ -4,6 +4,7 @@ import {
   inferMimeFromExtension,
   sanitizeCanonicalStorageKey,
 } from "../../utils/canonicalFilename";
+import { formatTopicDisplayName } from "../../utils/chapterNotesHelper";
 import {
   buildCanonicalStorageKey,
   getCanonicalFileName,
@@ -73,6 +74,12 @@ export interface SchoolNote {
   topicNumber?: number; // e.g. 2 (optional)
   topicName?: string; // e.g. "Examples" (optional)
   topicFolder?: string; // e.g. "Topic_02_Examples" (optional)
+  topicTitle?: string;
+  partLabel?: string;
+  partNumber?: number | string;
+  partNo?: number | string;
+  partName?: string;
+  totalParts?: number | string;
   hasTopic: boolean;
   folderPath: string; // Directory containing the note
   storagePath: string; // Full R2 object key: class_notes/Class_10/Mathematics/Chapter_01_Real_Numbers/Topic_02_Examples/note.pdf
@@ -129,6 +136,12 @@ export interface UPSCNote {
   topicNumber?: number; // e.g. 1 (optional)
   topicName?: string; // e.g. "Basics" (optional)
   topicFolder?: string; // e.g. "Topic_01_Basics" (optional)
+  topicTitle?: string;
+  partLabel?: string;
+  partNumber?: number | string;
+  partNo?: number | string;
+  partName?: string;
+  totalParts?: number | string;
   hasTopic: boolean;
   folderPath: string; // Directory containing the note
   storagePath: string; // Full R2 object key: upsc/GS2/Polity/Module_03_Fundamental_Rights/Topic_01_Basics/note.pdf
@@ -207,6 +220,10 @@ export interface NoteFormInput {
   topicTitle?: string;
   topic_name?: string;
   partLabel?: string;
+  partNumber?: number | string;
+  partNo?: number | string;
+  partName?: string;
+  totalParts?: number | string;
 
   // File metadata
   fileName?: string;
@@ -555,6 +572,14 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
   const topicFolder = formatTopicFolder(parsedTopicNumber, parsedTopicName);
   const hasTopic = Boolean(topicFolder);
 
+  const rawPartNumber = input.partNumber ?? input.partNo;
+  const rawTotalParts = input.totalParts;
+  const formattedTopicTitle = formatTopicDisplayName(
+    parsedTopicName || "",
+    rawPartNumber,
+    rawTotalParts
+  );
+
   const nowIso = new Date().toISOString();
   const createdAt = input.createdAt || input.uploadedAt || nowIso;
   const updatedAt = input.updatedAt || nowIso;
@@ -609,6 +634,12 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
       topicNumber: parsedTopicNumber,
       topicName: parsedTopicName,
       topicFolder,
+      topicTitle: formattedTopicTitle || parsedTopicName,
+      partLabel: formattedTopicTitle || input.partLabel,
+      partNumber: rawPartNumber !== undefined && rawPartNumber !== "" ? (isNaN(Number(rawPartNumber)) ? rawPartNumber : Number(rawPartNumber)) : undefined,
+      partNo: rawPartNumber !== undefined && rawPartNumber !== "" ? (isNaN(Number(rawPartNumber)) ? rawPartNumber : Number(rawPartNumber)) : undefined,
+      partName: input.partName,
+      totalParts: rawTotalParts !== undefined && rawTotalParts !== "" ? (isNaN(Number(rawTotalParts)) ? rawTotalParts : Number(rawTotalParts)) : undefined,
       hasTopic,
       folderPath: paths.folderPath,
       storagePath: immutableKey,
@@ -690,6 +721,12 @@ export function buildCanonicalNoteMetadata(input: NoteFormInput): NoteMetadata {
       topicNumber: parsedTopicNumber,
       topicName: parsedTopicName,
       topicFolder,
+      topicTitle: formattedTopicTitle || parsedTopicName,
+      partLabel: formattedTopicTitle || input.partLabel,
+      partNumber: rawPartNumber !== undefined && rawPartNumber !== "" ? (isNaN(Number(rawPartNumber)) ? rawPartNumber : Number(rawPartNumber)) : undefined,
+      partNo: rawPartNumber !== undefined && rawPartNumber !== "" ? (isNaN(Number(rawPartNumber)) ? rawPartNumber : Number(rawPartNumber)) : undefined,
+      partName: input.partName,
+      totalParts: rawTotalParts !== undefined && rawTotalParts !== "" ? (isNaN(Number(rawTotalParts)) ? rawTotalParts : Number(rawTotalParts)) : undefined,
       hasTopic,
       folderPath: paths.folderPath,
       storagePath: immutableKey,

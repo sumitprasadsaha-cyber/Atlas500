@@ -72,6 +72,10 @@ export interface ClassNote {
   generalStudiesPaper?: string; // e.g. "General Studies Paper I", "General Studies Paper II", "General Studies Paper III", "General Studies Paper IV", "Essay", "CSAT" (UPSC only)
   gs_paper?: string; // exact UPSC metadata specification
   partLabel?: string; // e.g. "Topic 1", "Topic 2", or legacy part label
+  partNumber?: number | string; // e.g. 1 or "1" or "Part 1"
+  partNo?: number | string;
+  partName?: string; // e.g. "Part 1"
+  totalParts?: number | string; // e.g. 5 (for Part 1/5)
   teachMode?: string | boolean;
   teach_mode?: string | boolean;
   isTeachMode?: boolean;
