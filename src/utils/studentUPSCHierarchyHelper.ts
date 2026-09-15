@@ -85,7 +85,7 @@ export function isStudentTopicCompleted(
 
 /**
  * Returns the list of enrolled/assigned General Studies Papers for a student.
- * Single source of truth: Admin's `getUpscHierarchy()` + `allClassNotes` + student's `enrolledSubjects`.
+ * Derived strictly from actual visible/published topic notes.
  */
 export function getStudentEnrolledGSPapers(
   student: Student,
@@ -93,97 +93,32 @@ export function getStudentEnrolledGSPapers(
 ): string[] {
   if (!student) return [];
 
-  const upscHierarchy = getUpscHierarchy();
   const rawEnrolled = (student.enrolledSubjects || []).filter(
     (s) => typeof s === "string" && s.trim().length > 0
   );
 
   const paperSet = new Set<string>();
 
-  if (rawEnrolled.length > 0) {
-    rawEnrolled.forEach((enrolled) => {
-      const clean = enrolled.trim();
-      const norm = clean.toLowerCase();
+  if (Array.isArray(allClassNotes)) {
+    allClassNotes.forEach((cn) => {
+      if (!isUPSCClass(cn.classGrade)) return;
+      if (!isNoteAccessibleToStudent(cn, student.id, false)) return;
 
-      // Check if it's directly a GS Paper name or matching an admin-created paper
-      const adminPaperMatch = upscHierarchy.papers.find(
-        (p) => p.toLowerCase().trim() === norm || isSubjectMatching(p, clean)
-      );
+      const details = extractUPSCDetails(cn);
+      if (rawEnrolled.length > 0) {
+        const matches = rawEnrolled.some((enrolled) =>
+          isSubjectMatching(enrolled, details.subject) ||
+          isSubjectMatching(enrolled, details.gsPaper) ||
+          isSubjectMatching(enrolled, cn.subject) ||
+          (details.moduleName && isSubjectMatching(enrolled, details.moduleName))
+        );
+        if (!matches) return;
+      }
 
-      if (adminPaperMatch) {
-        paperSet.add(adminPaperMatch);
-      } else if (norm.includes("paper") || norm.includes("general studies") || norm.includes("gs") || norm === "essay" || norm === "csat") {
-        if (norm.includes("paper i") && !norm.includes("paper ii") && !norm.includes("paper iii") && !norm.includes("paper iv")) {
-          paperSet.add("General Studies Paper I");
-        } else if (norm.includes("paper ii") && !norm.includes("paper iii")) {
-          paperSet.add("General Studies Paper II");
-        } else if (norm.includes("paper iii")) {
-          paperSet.add("General Studies Paper III");
-        } else if (norm.includes("paper iv")) {
-          paperSet.add("General Studies Paper IV");
-        } else if (norm === "essay") {
-          paperSet.add("Essay");
-        } else if (norm === "csat") {
-          paperSet.add("CSAT");
-        } else {
-          paperSet.add(clean);
-        }
-      } else {
-        // Infer GS Paper from subject name
-        const inferred = inferGSPaperFromSubject(clean);
-        if (inferred) {
-          paperSet.add(inferred);
-        }
-
-        // Check if this subject is under any admin-defined paper
-        Object.entries(upscHierarchy.subjects).forEach(([pName, sList]) => {
-          if (Array.isArray(sList) && sList.some((s) => isSubjectMatching(s, clean))) {
-            paperSet.add(pName);
-          }
-        });
+      if (details.gsPaper) {
+        paperSet.add(details.gsPaper);
       }
     });
-
-    // Also check all available notes that match the enrolled items
-    if (Array.isArray(allClassNotes)) {
-      allClassNotes.forEach((cn) => {
-        if (isUPSCClass(cn.classGrade)) {
-          const details = extractUPSCDetails(cn);
-          const matchesEnrolled = rawEnrolled.some((e) => 
-            isSubjectMatching(e, details.subject) || 
-            isSubjectMatching(e, details.gsPaper) ||
-            isSubjectMatching(e, cn.subject)
-          );
-          if (matchesEnrolled && details.gsPaper) {
-            paperSet.add(details.gsPaper);
-          }
-        }
-      });
-    }
-  } else {
-    // If no explicit enrolled subjects, include all papers configured by Admin
-    if (upscHierarchy.papers && upscHierarchy.papers.length > 0) {
-      upscHierarchy.papers.forEach((p) => paperSet.add(p));
-    }
-
-    if (Array.isArray(allClassNotes)) {
-      allClassNotes.forEach((cn) => {
-        if (isUPSCClass(cn.classGrade)) {
-          const details = extractUPSCDetails(cn);
-          if (details.gsPaper) {
-            paperSet.add(details.gsPaper);
-          }
-        }
-      });
-    }
-  }
-
-  // If still empty, provide canonical GS Papers
-  if (paperSet.size === 0) {
-    paperSet.add("General Studies Paper I");
-    paperSet.add("General Studies Paper II");
-    paperSet.add("General Studies Paper III");
-    paperSet.add("General Studies Paper IV");
   }
 
   return Array.from(paperSet).sort((a, b) => {
@@ -198,10 +133,10 @@ export function getStudentEnrolledGSPapers(
  * Builds the complete 4-tier hierarchy for UPSC:
  * General Studies Paper -> Subject -> Module -> Topic Note
  * 
- * Derives progress bottom-up strictly from Topic Notes:
+ * Derives progress bottom-up strictly from published Topic Notes:
  * Topic Completion -> Module Progress -> Subject Progress -> GS Paper Progress
  * 
- * Single source of truth: Admin's `getUpscHierarchy()` + `allClassNotes`.
+ * Empty modules, subjects, or GS papers with zero published notes are excluded.
  */
 export function buildStudentUPSCHierarchy(
   student: Student,
@@ -221,7 +156,7 @@ export function buildStudentUPSCHierarchy(
   if (Array.isArray(allClassNotes)) {
     allClassNotes.forEach((cn) => {
       if (!isUPSCClass(cn.classGrade)) return;
-      if (!isNoteAccessibleToStudent(cn, student.id, false)) return;
+      if (!isNoteAccessibleToStudent(cn, student?.id, false)) return;
 
       const details = extractUPSCDetails(cn);
       const removedForPaper = upscHierarchy.removedSubjects?.[details.gsPaper] || [];
@@ -238,11 +173,32 @@ export function buildStudentUPSCHierarchy(
         if (!matches) return;
       }
 
+      if (enrolledPapersFilter && enrolledPapersFilter.length > 0) {
+        const matchesFilter = enrolledPapersFilter.some((p) =>
+          p.toLowerCase().trim() === details.gsPaper.toLowerCase().trim()
+        );
+        if (!matchesFilter) return;
+      }
+
       accessibleNotes.push(cn);
     });
   }
 
-  // 2. Map structure: gsPaper -> subjectKey -> moduleKey -> topics[]
+  // If no accessible topic notes exist, return empty hierarchy
+  if (accessibleNotes.length === 0) {
+    return [];
+  }
+
+  // Admin modules map for looking up canonical module titles if configured
+  const adminModulesMap: Record<string, ChapterInfo[]> = {};
+  Object.entries(upscHierarchy.modules || {}).forEach(([pKey, sMap]) => {
+    Object.entries(sMap || {}).forEach(([sKey, modList]) => {
+      const combinedKey = `${pKey.toLowerCase().trim()}:::${sKey.toLowerCase().trim()}`;
+      adminModulesMap[combinedKey] = modList || [];
+    });
+  });
+
+  // 2. Map structure populated strictly from live accessible topic notes
   const paperMap = new Map<
     string,
     Map<
@@ -262,78 +218,6 @@ export function buildStudentUPSCHierarchy(
     >
   >();
 
-  // Determine papers to ensure exist
-  const papersToInclude = enrolledPapersFilter || getStudentEnrolledGSPapers(student, allClassNotes);
-  papersToInclude.forEach((p) => {
-    if (!paperMap.has(p)) {
-      paperMap.set(p, new Map());
-    }
-  });
-
-  // Pre-populate Subjects & Modules from Admin UPSC Hierarchy
-  papersToInclude.forEach((p) => {
-    const subjMap = paperMap.get(p)!;
-    
-    const adminSubjs = Object.entries(upscHierarchy.subjects || {}).flatMap(([pKey, list]) => {
-      if (pKey.toLowerCase().trim() === p.toLowerCase().trim()) {
-        return list || [];
-      }
-      return [];
-    });
-
-    const removedSubjs = Object.entries(upscHierarchy.removedSubjects || {}).flatMap(([pKey, list]) => {
-      if (pKey.toLowerCase().trim() === p.toLowerCase().trim()) {
-        return (list || []).map((s) => s.toLowerCase().trim());
-      }
-      return [];
-    });
-
-    const adminModulesMap: Record<string, ChapterInfo[]> = {};
-    Object.entries(upscHierarchy.modules || {}).forEach(([pKey, sMap]) => {
-      if (pKey.toLowerCase().trim() === p.toLowerCase().trim()) {
-        Object.entries(sMap || {}).forEach(([sKey, modList]) => {
-          adminModulesMap[sKey.toLowerCase().trim()] = modList || [];
-        });
-      }
-    });
-
-    adminSubjs.forEach((sName) => {
-      if (removedSubjs.includes(sName.toLowerCase().trim())) return;
-
-      if (rawEnrolled.length > 0) {
-        const matches = rawEnrolled.some(
-          (enrolled) => isSubjectMatching(enrolled, sName) || isSubjectMatching(enrolled, p)
-        );
-        if (!matches) return;
-      }
-
-      const sKey = sName.toLowerCase().trim();
-      if (!subjMap.has(sKey)) {
-        subjMap.set(sKey, {
-          subjectName: sName,
-          moduleMap: new Map(),
-        });
-      }
-
-      const subjEntry = subjMap.get(sKey)!;
-      const adminModules = adminModulesMap[sKey] || [];
-      adminModules.forEach((m) => {
-        const mKey = `mod_${m.number}`;
-        if (!subjEntry.moduleMap.has(mKey)) {
-          subjEntry.moduleMap.set(mKey, {
-            moduleNo: m.number,
-            moduleName: m.name,
-            moduleTitle: m.name.toLowerCase().startsWith("module") || m.name.toLowerCase().startsWith("chapter")
-              ? m.name
-              : `Module ${m.number}: ${m.name}`,
-            topics: [],
-          });
-        }
-      });
-    });
-  });
-
-  // Populate map with live topic notes
   accessibleNotes.forEach((note) => {
     const details = extractUPSCDetails(note);
     const gsPaper = details.gsPaper;
@@ -354,10 +238,22 @@ export function buildStudentUPSCHierarchy(
 
     const mKey = `mod_${details.moduleNo}`;
     if (!subjEntry.moduleMap.has(mKey)) {
+      // Find module title from curriculum if defined by admin
+      const combinedKey = `${gsPaper.toLowerCase().trim()}:::${subjKey}`;
+      const adminMods = adminModulesMap[combinedKey] || [];
+      const adminMod = adminMods.find((m) => m.number === details.moduleNo);
+
+      const modName = adminMod ? adminMod.name : details.moduleName;
+      const modTitle = adminMod
+        ? (adminMod.name.toLowerCase().startsWith("module") || adminMod.name.toLowerCase().startsWith("chapter")
+            ? adminMod.name
+            : `Module ${adminMod.number}: ${adminMod.name}`)
+        : details.moduleTitle;
+
       subjEntry.moduleMap.set(mKey, {
         moduleNo: details.moduleNo,
-        moduleName: details.moduleName,
-        moduleTitle: details.moduleTitle,
+        moduleName: modName,
+        moduleTitle: modTitle,
         topics: [],
       });
     }
@@ -432,6 +328,10 @@ export function buildStudentUPSCHierarchy(
       for (const mKey of sortedModKeys) {
         const mEntry = sEntry.moduleMap.get(mKey)!;
 
+        // CRITICAL DATA-VISIBILITY RULE:
+        // Exclude empty modules from student-facing hierarchy
+        if (mEntry.topics.length === 0) continue;
+
         // Sort topics numerically
         mEntry.topics.sort((t1, t2) => {
           const num1 = typeof t1.topicNo === "number" ? t1.topicNo : parseInt(String(t1.topicNo), 10);
@@ -459,6 +359,10 @@ export function buildStudentUPSCHierarchy(
         });
       }
 
+      // CRITICAL DATA-VISIBILITY RULE:
+      // Exclude empty subjects from student-facing hierarchy
+      if (modules.length === 0) continue;
+
       const subjTotalModules = modules.length;
       const subjProgress = subjTotalTopics > 0 ? Math.round((subjCompletedTopics / subjTotalTopics) * 100) : 0;
 
@@ -476,6 +380,10 @@ export function buildStudentUPSCHierarchy(
         progressPercent: subjProgress,
       });
     }
+
+    // CRITICAL DATA-VISIBILITY RULE:
+    // Exclude empty GS Papers from student-facing hierarchy
+    if (subjects.length === 0) continue;
 
     const paperTotalSubjects = subjects.length;
     const paperProgress = paperTotalTopics > 0 ? Math.round((paperCompletedTopics / paperTotalTopics) * 100) : 0;

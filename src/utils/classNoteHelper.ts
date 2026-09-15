@@ -1,7 +1,8 @@
 import { ClassNote, Student, ChapterNote } from "../types";
-import { groupUPSCNotesHierarchy, GroupedUPSCGSPaperItem } from "./upscHierarchyHelper";
+import { groupUPSCNotesHierarchy, GroupedUPSCGSPaperItem, extractUPSCDetails, isUPSCClass } from "./upscHierarchyHelper";
 import { getSchoolHierarchy, getUpscHierarchy } from "../lib/curriculumService";
 import { isNoteAccessibleInClass, getAccessibleSubjectsForClass } from "../lib/curriculumAccessService";
+import { isNoteAccessibleToStudent } from "./noteAccessHelper";
 
 export function normalizeClassGrade(grade?: string): string {
   if (!grade) return "";
@@ -346,56 +347,29 @@ export function getStudentSubjects(student: Student, allClassNotes: ClassNote[] 
   if (isUpsc) {
     const upscHierarchy = getUpscHierarchy();
 
-    if (rawEnrolled.length > 0) {
-      rawEnrolled.forEach((sub) => {
-        const clean = sub.trim();
-        const norm = clean.toLowerCase();
+    if (Array.isArray(allClassNotes)) {
+      allClassNotes.forEach((cn) => {
+        if (!isUPSCClass(cn.classGrade)) return;
+        if (!isNoteAccessibleToStudent(cn, student.id, false)) return;
 
-        // Check if enrolled item is a GS Paper
-        const isPaper = norm.includes("paper") || norm.includes("general studies") || norm.includes("gs") || norm === "essay" || norm === "csat";
-        if (isPaper) {
-          // Find matching paper in upscHierarchy
-          const matchingPaper = upscHierarchy.papers.find(
-            (p) => p.toLowerCase().trim() === norm || isSubjectMatching(p, clean)
-          ) || clean;
+        const details = extractUPSCDetails(cn);
+        const removed = upscHierarchy.removedSubjects?.[details.gsPaper] || [];
+        if (removed.includes(details.subject)) return;
 
-          const removed = upscHierarchy.removedSubjects?.[matchingPaper] || [];
-          const adminSubjs = (upscHierarchy.subjects?.[matchingPaper] || []).filter((s) => !removed.includes(s));
-          adminSubjs.forEach((s) => subjectsSet.add(s));
+        if (rawEnrolled.length > 0) {
+          const matches = rawEnrolled.some((enrolled) =>
+            isSubjectMatching(enrolled, details.subject) ||
+            isSubjectMatching(enrolled, details.gsPaper) ||
+            isSubjectMatching(enrolled, cn.subject) ||
+            (details.moduleName && isSubjectMatching(enrolled, details.moduleName))
+          );
+          if (!matches) return;
+        }
 
-          // Also check allClassNotes for subjects under this paper
-          if (Array.isArray(allClassNotes)) {
-            allClassNotes.forEach((cn) => {
-              if (isClassGradeMatching(cn.classGrade, student.classGrade)) {
-                const cnGS = cn.generalStudiesPaper || (cn as any).gs_paper || inferGSPaperFromSubject(cn.subject);
-                if (cnGS && isSubjectMatching(cnGS, matchingPaper) && cn.subject) {
-                  if (!removed.includes(cn.subject.trim())) {
-                    subjectsSet.add(cn.subject.trim());
-                  }
-                }
-              }
-            });
-          }
-        } else {
-          // It's a specific subject
-          subjectsSet.add(clean);
+        if (details.subject && details.subject.trim()) {
+          subjectsSet.add(details.subject.trim());
         }
       });
-    } else {
-      // If student has no explicitly listed subjects, automatically include all subjects under all papers in upscHierarchy!
-      (upscHierarchy.papers || []).forEach((paper) => {
-        const removed = upscHierarchy.removedSubjects?.[paper] || [];
-        const adminSubjs = (upscHierarchy.subjects?.[paper] || []).filter((s) => !removed.includes(s));
-        adminSubjs.forEach((s) => subjectsSet.add(s));
-      });
-
-      if (Array.isArray(allClassNotes)) {
-        allClassNotes.forEach((cn) => {
-          if (cn.subject && cn.subject.trim() && isClassGradeMatching(cn.classGrade, student.classGrade)) {
-            subjectsSet.add(cn.subject.trim());
-          }
-        });
-      }
     }
   } else {
     // School student

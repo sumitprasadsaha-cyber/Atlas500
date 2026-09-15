@@ -6,16 +6,30 @@ import { ChapterNote } from "../types";
  * Existing notes without an explicit accessType default to "all".
  */
 export function isNoteAccessibleToStudent(
-  note: ChapterNote,
+  note: any,
   studentId?: string | null,
   isAdmin: boolean = false
 ): boolean {
   if (isAdmin) return true;
   if (!studentId) return false;
-  if (!note.accessType || note.accessType === "all") return true;
+  if (!note) return false;
+
+  // Unpublished, deleted, draft, or hidden notes must never appear to students
+  if (note.isDeleted || note.deleted) return false;
+  if (note.isDraft || note.draft) return false;
+  if (note.isPublished === false || note.published === false) return false;
+  if (note.visibility === "hidden") return false;
+
+  // Access control rules
+  const accessRules = note.accessRules;
+  if (accessRules && accessRules.accessType === "selected") {
+    return Array.isArray(accessRules.allowedStudentIds) && accessRules.allowedStudentIds.includes(studentId);
+  }
+
   if (note.accessType === "selected") {
     return Array.isArray(note.allowedStudentIds) && note.allowedStudentIds.includes(studentId);
   }
+
   return true;
 }
 
