@@ -26,7 +26,10 @@ import {
   fetchAllPracticeTests, 
   buildTopicTestId, 
   buildChapterTestId, 
-  buildSubjectTestId 
+  buildSubjectTestId,
+  isStudentPermittedToAccessTest,
+  isClassCompatible,
+  isSubjectCompatible
 } from "../../lib/practiceTestService";
 import { getAllTestAttempts, subscribeToTestAttempts } from "../../utils/assessmentParser";
 import { toStableClassId, getAccessibleClassesGrantedToClass } from "../../lib/curriculumAccessService";
@@ -115,22 +118,31 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
 
   // Compute student's enrolled subjects
   const studentSubjects = useMemo(() => {
-    const rawEnrolled = student.enrolledSubjects || [];
+    const rawEnrolled = (student.enrolledSubjects || []).filter(
+      (s) => typeof s === "string" && s.trim().length > 0
+    );
     if (rawEnrolled.length > 0) {
       return rawEnrolled;
     }
-    // Fallback: collect subjects from notes matching student's class
+    // Fallback: collect subjects from notes and available tests matching student's class
     const subs = new Set<string>();
     const normStudentClass = toStableClassId(studentClass);
     notes.forEach((n) => {
       const nClass = toStableClassId(n.classGrade || (n as any).className || "");
-      if (allowedClasses.includes(nClass) || nClass === normStudentClass) {
+      if (allowedClasses.includes(nClass) || nClass === normStudentClass || isClassCompatible(studentClass, n.classGrade)) {
         const s = n.subject || (n as any).subjectName;
         if (s) subs.add(s.trim());
       }
     });
-    return Array.from(subs);
-  }, [student, notes, allowedClasses, studentClass]);
+
+    Object.values(testsBank).forEach((t) => {
+      if (isClassCompatible(studentClass, t.classGrade) && t.subject) {
+        subs.add(t.subject.trim());
+      }
+    });
+
+    return Array.from(subs).sort();
+  }, [student, notes, allowedClasses, studentClass, testsBank]);
 
   // Filter test bank for this student
   const filteredTests = useMemo(() => {
@@ -148,13 +160,14 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
       // Match student attempts for this test
       const myAttempts = studentAttempts.filter((a) => {
         if (a.testId && t.id && a.testId === t.id) return true;
-        const matchClass = allowedClasses.includes(toStableClassId(a.classGrade || "")) ||
+        const matchClass = isClassCompatible(a.classGrade, t.classGrade) ||
+          allowedClasses.includes(toStableClassId(a.classGrade || "")) ||
           toStableClassId(a.classGrade || "") === toStableClassId(t.classGrade || "");
-        const matchSubj = (a.subject || "").toLowerCase().trim() === (t.subject || "").toLowerCase().trim();
+        const matchSubj = isSubjectCompatible(a.subject || "", t.subject || "");
 
         if (normalizedType === "SUBJECT") return matchClass && matchSubj && a.testType === "subject";
-        if (normalizedType === "CHAPTER") return matchClass && matchSubj && a.chapterNo === t.chapterNo && (a.testType === "chapter" || a.testType === "full_chapter");
-        return matchClass && matchSubj && a.chapterNo === t.chapterNo && (a.topicName || "").toLowerCase().trim() === (t.topicName || "").toLowerCase().trim();
+        if (normalizedType === "CHAPTER") return matchClass && matchSubj && Number(a.chapterNo || 1) === Number(t.chapterNo || 1) && (a.testType === "chapter" || a.testType === "full_chapter");
+        return matchClass && matchSubj && Number(a.chapterNo || 1) === Number(t.chapterNo || 1) && (a.topicName || "").toLowerCase().trim() === (t.topicName || "").toLowerCase().trim();
       });
 
       const latestAttempt = myAttempts.length > 0 ? myAttempts[myAttempts.length - 1] : null;
@@ -178,38 +191,31 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
     });
 
     return list.filter((t) => {
-      // 1. Class match check: test must belong to student's class or allowed access classes
-      const normTestClass = toStableClassId(t.classGrade || "");
-      const isClassMatch = allowedClasses.includes(normTestClass) || 
-        normTestClass === toStableClassId(studentClass) ||
-        (studentClass.toLowerCase().includes("upsc") && (t.classGrade || "").toLowerCase().includes("upsc"));
-      
-      if (!isClassMatch) return false;
+      // 1. Must be published & not deleted & have questions
+      if (t.isPublished === false || (t as any).published === false) return false;
+      if ((t as any).isDeleted || (t as any).deleted) return false;
+      if (!Array.isArray(t.questions) || t.questions.length === 0) return false;
 
-      // 2. Subject filter
-      if (selectedSubject !== "All") {
-        if ((t.subject || "").toLowerCase().trim() !== selectedSubject.toLowerCase().trim()) return false;
-      } else if (studentSubjects.length > 0) {
-        // Only show enrolled subjects unless "All" is selected and subject matches enrolled
-        const matchesEnrolled = studentSubjects.some(
-          (s) => s.toLowerCase().trim() === (t.subject || "").toLowerCase().trim()
-        );
-        // If student has explicit enrolled subjects, check match
-        if (student.enrolledSubjects && student.enrolledSubjects.length > 0 && !matchesEnrolled) {
-          return false;
-        }
+      // 2. Permission check (handles UPSC & School, enrolledSubjects)
+      if (!isStudentPermittedToAccessTest(student, t)) {
+        return false;
       }
 
-      // 3. Category filter
+      // 3. Subject filter if specific subject selected
+      if (selectedSubject !== "All") {
+        if (!isSubjectCompatible(selectedSubject, t.subject || "")) return false;
+      }
+
+      // 4. Category filter
       if (selectedCategory !== "ALL" && t.computedType !== selectedCategory) {
         return false;
       }
 
-      // 4. Status filter
+      // 5. Status filter
       if (selectedStatus === "COMPLETED" && !t.isCompleted) return false;
       if (selectedStatus === "PENDING" && t.isCompleted) return false;
 
-      // 5. Search query
+      // 6. Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const titleMatch = (t.title || "").toLowerCase().includes(q);
@@ -221,7 +227,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
 
       return true;
     });
-  }, [testsBank, attempts, studentIdentifier, studentClass, allowedClasses, studentSubjects, selectedSubject, selectedCategory, selectedStatus, searchQuery, student.id, student.name, student.enrolledSubjects]);
+  }, [testsBank, attempts, studentIdentifier, studentClass, allowedClasses, studentSubjects, selectedSubject, selectedCategory, selectedStatus, searchQuery, student]);
 
   // Overall student test statistics
   const stats = useMemo(() => {

@@ -1,5 +1,5 @@
 import { TestAttemptRecord } from "../types";
-import { isSubjectCompatible } from "../lib/practiceTestService";
+import { isSubjectCompatible, isClassCompatible } from "../lib/practiceTestService";
 
 export interface TopicTestStats {
   bestScore: number;
@@ -109,6 +109,123 @@ export function getTopicTestStats(
 
   // Sort chronologically by timestamp ascending (earliest to latest)
   const sortedAttempts = [...topicAttempts].sort((a, b) => {
+    const tA = a.timestamp || (a.date ? new Date(a.date).getTime() : 0);
+    const tB = b.timestamp || (b.date ? new Date(b.date).getTime() : 0);
+    return tA - tB;
+  });
+
+  const attemptCount = sortedAttempts.length;
+  const latestAttempt = sortedAttempts[sortedAttempts.length - 1];
+
+  let bestAttempt = sortedAttempts[0];
+  let bestRatio = (bestAttempt.totalQuestions || bestAttempt.totalMarks || 1) > 0 
+    ? bestAttempt.score / (bestAttempt.totalQuestions || bestAttempt.totalMarks || 1) 
+    : 0;
+
+  for (let i = 1; i < sortedAttempts.length; i++) {
+    const curr = sortedAttempts[i];
+    const totalQ = curr.totalQuestions || curr.totalMarks || 1;
+    const currRatio = totalQ > 0 ? curr.score / totalQ : 0;
+    if (currRatio > bestRatio || (currRatio === bestRatio && curr.score > bestAttempt.score)) {
+      bestAttempt = curr;
+      bestRatio = currRatio;
+    }
+  }
+
+  const bestScore = bestAttempt.score;
+  const totalQuestions = bestAttempt.totalQuestions || bestAttempt.totalMarks || 1;
+  const bestPercentage = Math.round(bestRatio * 100);
+
+  const latestTotalQuestions = latestAttempt.totalQuestions || latestAttempt.totalMarks || 1;
+  const latestScore = latestAttempt.score;
+  const latestPercentage = latestTotalQuestions > 0 ? Math.round((latestScore / latestTotalQuestions) * 100) : 0;
+
+  const sumScores = sortedAttempts.reduce((acc, a) => acc + a.score, 0);
+  const averageScore = Number((sumScores / attemptCount).toFixed(1));
+  const lastAttemptDate = formatAttemptDate(latestAttempt.date, latestAttempt.timestamp);
+
+  const tooltipText = [
+    `Latest Attempt: ${latestScore}/${latestTotalQuestions}`,
+    `Highest Score: ${bestScore}/${totalQuestions}`,
+    `Number of Attempts: ${attemptCount}`,
+    `Last Attempt Date: ${lastAttemptDate}`
+  ].join("\n");
+
+  return {
+    bestScore,
+    totalQuestions,
+    bestPercentage,
+    latestScore,
+    latestPercentage,
+    latestTotalQuestions,
+    averageScore,
+    attemptCount,
+    lastAttemptDate,
+    bestAttempt,
+    latestAttempt,
+    tooltipText
+  };
+}
+
+/**
+ * Calculates student practice test statistics for a given chapter/module test.
+ * Extracts best score, latest attempt, attempt count, and last attempt date.
+ */
+export function getChapterTestStats(
+  allAttempts: TestAttemptRecord[],
+  studentIdentifier: string | undefined,
+  studentName: string | undefined,
+  classGrade: string,
+  subject: string,
+  chapterNo: number
+): TopicTestStats | null {
+  if (!Array.isArray(allAttempts) || allAttempts.length === 0) return null;
+
+  const normStudentId = cleanString(studentIdentifier);
+  const normStudentName = cleanString(studentName);
+  const ch = Number(chapterNo) || 1;
+
+  const chapterAttempts = allAttempts.filter((a) => {
+    if (!a) return false;
+
+    // 1. Student identity match
+    const aStudentId = cleanString(a.studentId);
+    const aStudentName = cleanString(a.studentName);
+    const matchesStudent =
+      (!normStudentId && !normStudentName) ||
+      (normStudentId && (aStudentId === normStudentId || aStudentName === normStudentId)) ||
+      (normStudentName && (aStudentName === normStudentName || aStudentId === normStudentName));
+
+    if (!matchesStudent) return false;
+
+    // Test type match: must be chapter or full_chapter or have chapter_test in testId
+    const rawType = String(a.testType || "").toLowerCase();
+    const isChapterType = rawType === "chapter" || rawType === "full_chapter" || String(a.testId || "").includes("chapter_test");
+    if (!isChapterType && rawType !== "") {
+      return false;
+    }
+
+    // 2. Class match
+    if (!isClassCompatible(classGrade, a.classGrade)) {
+      return false;
+    }
+
+    // 3. Subject compatibility
+    if (subject && a.subject && !isSubjectCompatible(subject, a.subject)) {
+      return false;
+    }
+
+    // 4. Chapter number match
+    if (a.chapterNo && Number(a.chapterNo) !== ch) {
+      return false;
+    }
+
+    return true;
+  });
+
+  if (chapterAttempts.length === 0) return null;
+
+  const sortedAttempts = [...chapterAttempts].sort((a, b) => {
     const tA = a.timestamp || (a.date ? new Date(a.date).getTime() : 0);
     const tB = b.timestamp || (b.date ? new Date(b.date).getTime() : 0);
     return tA - tB;

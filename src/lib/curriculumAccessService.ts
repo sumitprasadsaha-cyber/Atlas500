@@ -179,7 +179,12 @@ export function toStableClassId(classNameOrId?: string): string {
   if (!classNameOrId) return "";
   const trimmed = String(classNameOrId).trim().toLowerCase();
 
-  if (/^upsc$/i.test(trimmed) || /^class\s+upsc$/i.test(trimmed)) {
+  if (
+    /^upsc$/i.test(trimmed) ||
+    /^class\s+upsc$/i.test(trimmed) ||
+    /^(?:gs|general\s+studies)\s*(?:paper)?\s*([1-4]|i{1,3}|iv)?$/i.test(trimmed) ||
+    /^(?:gs|general\s+studies)[-_]?[1-4]$/i.test(trimmed)
+  ) {
     return "upsc";
   }
 

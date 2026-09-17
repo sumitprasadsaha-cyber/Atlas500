@@ -15,12 +15,13 @@ import { Student, ClassNote, ChapterNote } from "../types";
 import { StudentUPSCGSPaper, StudentUPSCSubject, StudentUPSCModule } from "../utils/studentUPSCHierarchyHelper";
 import { 
   getTopicPracticeTestSync, 
+  getChapterPracticeTestSync,
   subscribeToPracticeTests,
   getTopicPracticeTest
 } from "../lib/practiceTestService";
 import { getAllTestAttempts } from "../utils/assessmentParser";
 import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
-import { getTopicTestStats } from "../utils/testStatsHelper";
+import { getTopicTestStats, getChapterTestStats } from "../utils/testStatsHelper";
 import StudentTestScoreButton from "./StudentTestScoreButton";
 import { notesLogger } from "../lib/notesLogger";
 import { TopicDownloadProgressBar } from "./notes/TopicDownloadProgressBar";
@@ -264,6 +265,33 @@ export default function StudentUPSCTree({
               {subj.modules.map((mod) => {
                 const modKey = `${subj.subjectKey}_${mod.moduleKey}`;
                 const isModExpanded = cleanQuery ? true : (expandedModules[modKey] ?? true);
+                const targetClass = "UPSC";
+                const targetSubj = subj.subject || "";
+                const chapterNo = mod.moduleNo || 1;
+
+                const chapterTest =
+                  getChapterPracticeTestSync(targetClass, targetSubj, chapterNo) ||
+                  getChapterPracticeTestSync(paper.gsPaper, targetSubj, chapterNo);
+
+                const hasChapterTest = !!(chapterTest && Array.isArray(chapterTest.questions) && chapterTest.questions.length > 0);
+
+                const chapterStats =
+                  getChapterTestStats(
+                    allAttempts,
+                    student.id,
+                    student.name,
+                    targetClass,
+                    targetSubj,
+                    chapterNo
+                  ) ||
+                  getChapterTestStats(
+                    allAttempts,
+                    student.id,
+                    student.name,
+                    paper.gsPaper,
+                    targetSubj,
+                    chapterNo
+                  );
 
                 return (
                   <div
@@ -285,7 +313,24 @@ export default function StudentUPSCTree({
                         </h5>
                       </div>
 
-                      <div className="shrink-0 ml-2 self-center">
+                      <div className="flex items-center gap-2 shrink-0 ml-2 self-center" onClick={(e) => e.stopPropagation()}>
+                        {hasChapterTest && (
+                          <StudentTestScoreButton
+                            stats={chapterStats}
+                            hasTest={true}
+                            topicName={`${mod.moduleTitle} Chapter Test`}
+                            onOpenTest={() => {
+                              onOpenPracticeTest?.({
+                                classGrade: targetClass,
+                                subject: targetSubj,
+                                chapterNo,
+                                chapterName: mod.moduleName,
+                                topicName: "Full Chapter Test",
+                                testType: "full_chapter",
+                              });
+                            }}
+                          />
+                        )}
                         <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                           {mod.totalTopics} {mod.totalTopics === 1 ? "Topic" : "Topics"}
                         </span>

@@ -10,6 +10,8 @@ import {
   isClassAllowedForSubject,
   getAccessibleClassesGrantedToClass,
 } from "./curriculumAccessService";
+import { isUPSCClass, canonicalGSPaperName } from "../utils/upscHierarchyHelper";
+import { inferGSPaperFromSubject, isSubjectMatching } from "../utils/classNoteHelper";
 
 import { safeLocalStorageSetItem, safeLocalStorageGetItem, safeLocalStorageRemoveItem } from "./safeStorage";
 import {
@@ -278,24 +280,47 @@ export function isStudentPermittedToAccessTest(
   // 1. Must be a valid active test
   if (!isValidPracticeTest(test)) return false;
 
-  // 2. Must be published
+  // 2. Must be published and not deleted
   if (test.isPublished === false || (test as any).published === false) return false;
+  if ((test as any).isDeleted || (test as any).deleted) return false;
 
   // 3. Class and curriculum matching
   const studentClass = student.classGrade || "";
-  const studentClassNorm = toStableClassId(studentClass);
-  const isStudentUpsc = studentClassNorm === "upsc" || studentClass.toLowerCase().includes("upsc");
+  const isStudentUpsc = isUPSCClass(studentClass) || toStableClassId(studentClass) === "upsc";
 
   const testClass = test.classGrade || (test as any).className || "";
-  const testClassNorm = toStableClassId(testClass);
-  const isTestUpsc = testClassNorm === "upsc" || testClass.toLowerCase().includes("upsc");
+  const isTestUpsc = isUPSCClass(testClass) || toStableClassId(testClass) === "upsc";
 
   if (isStudentUpsc) {
     if (!isTestUpsc) return false;
+
+    // Check student enrolled subjects restriction if present
+    const rawEnrolled = (student.enrolledSubjects || []).filter(
+      (s) => typeof s === "string" && s.trim().length > 0
+    );
+    if (rawEnrolled.length > 0) {
+      const testSubj = (test.subject || "").trim();
+      const testPaper = canonicalGSPaperName(testClass) || inferGSPaperFromSubject(testSubj);
+
+      const enrolledMatch = rawEnrolled.some((enrolled) => {
+        const cleanE = enrolled.trim();
+        if (isSubjectMatching(cleanE, testSubj)) return true;
+        if (isSubjectMatching(cleanE, testClass)) return true;
+        if (testPaper && isSubjectMatching(cleanE, testPaper)) return true;
+        if (isSubjectCompatible(cleanE, testSubj)) return true;
+        return false;
+      });
+
+      if (!enrolledMatch) {
+        return false;
+      }
+    }
   } else if (isTestUpsc) {
     return false;
   } else {
     // School student
+    const studentClassNorm = toStableClassId(studentClass);
+    const testClassNorm = toStableClassId(testClass);
     if (testClassNorm === studentClassNorm) {
       // Exact class match
     } else {
@@ -315,22 +340,24 @@ export function isStudentPermittedToAccessTest(
         return false;
       }
     }
-  }
 
-  // 4. Check student enrolled subjects restriction if present
-  if (student.enrolledSubjects && Array.isArray(student.enrolledSubjects) && student.enrolledSubjects.length > 0) {
-    const testSubj = (test.subject || "").toLowerCase().trim();
-    const enrolledMatch = student.enrolledSubjects.some((s) => {
-      const cleanS = s.toLowerCase().trim();
-      return cleanS === testSubj || isSubjectCompatible(cleanS, testSubj);
-    });
-    if (!enrolledMatch) {
-      return false;
+    // Check student enrolled subjects restriction if present
+    if (student.enrolledSubjects && Array.isArray(student.enrolledSubjects) && student.enrolledSubjects.length > 0) {
+      const testSubj = (test.subject || "").toLowerCase().trim();
+      const enrolledMatch = student.enrolledSubjects.some((s) => {
+        const cleanS = s.toLowerCase().trim();
+        return cleanS === testSubj || isSubjectCompatible(cleanS, testSubj);
+      });
+      if (!enrolledMatch) {
+        return false;
+      }
     }
   }
 
   return true;
 }
+
+export const isTestAccessibleToStudent = isStudentPermittedToAccessTest;
 
 /**
  * Clear cached question images and in-memory queries
@@ -590,12 +617,85 @@ if (typeof window !== "undefined") {
   initPracticeTestsRealtimeSync();
 }
 
+export function isClassCompatible(class1?: string, class2?: string): boolean {
+  if (!class1 || !class2) return true;
+  const s1 = String(class1).trim().toLowerCase();
+  const s2 = String(class2).trim().toLowerCase();
+  if (s1 === s2) return true;
+
+  const isUpsc1 = s1 === "upsc" || s1.includes("upsc") || isUPSCClass(class1);
+  const isUpsc2 = s2 === "upsc" || s2.includes("upsc") || isUPSCClass(class2);
+
+  if (isUpsc1 && isUpsc2) {
+    return true;
+  }
+  if (isUpsc1 !== isUpsc2) {
+    return false;
+  }
+
+  // School classes
+  const num1 = normalizeGradeNumber(class1);
+  const num2 = normalizeGradeNumber(class2);
+  if (num1 !== null && num2 !== null) {
+    return num1 === num2;
+  }
+
+  const clean1 = s1.replace(/[^a-z0-9]/g, "");
+  const clean2 = s2.replace(/[^a-z0-9]/g, "");
+  if (!clean1 || !clean2) return true;
+  if (clean1 === clean2 || clean1.includes(clean2) || clean2.includes(clean1)) return true;
+
+  return toStableClassId(class1) === toStableClassId(class2);
+}
+
 export function isSubjectCompatible(subj1: string, subj2: string): boolean {
   const s1 = String(subj1 || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const s2 = String(subj2 || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   if (!s1 || !s2) return true;
   if (s1 === s2) return true;
   if (s1.includes(s2) || s2.includes(s1)) return true;
+
+  const polityAliases = [
+    "polity", "indianpolity", "constitution", "governance", "indianconstitution",
+    "indianpolityandgovernance", "politygovernance", "constitutionofindia"
+  ];
+  if (polityAliases.some((a) => s1.includes(a)) && polityAliases.some((a) => s2.includes(a))) return true;
+
+  const historyAliases = [
+    "history", "modernhistory", "ancienthistory", "medievalhistory", "indianhistory",
+    "artandculture", "culture", "heritage"
+  ];
+  if (historyAliases.some((a) => s1.includes(a)) && historyAliases.some((a) => s2.includes(a))) return true;
+
+  const geoAliases = [
+    "geography", "indiangeography", "worldgeography", "physicalgeography", "humanandphysicalgeography"
+  ];
+  if (geoAliases.some((a) => s1.includes(a)) && geoAliases.some((a) => s2.includes(a))) return true;
+
+  const ecoAliases = [
+    "economy", "indianeconomy", "economics", "economicdevelopment", "understandingeconomicdevelopment"
+  ];
+  if (ecoAliases.some((a) => s1.includes(a)) && ecoAliases.some((a) => s2.includes(a))) return true;
+
+  const ethicsAliases = [
+    "ethics", "integrity", "aptitude", "ethicsintegrityandaptitude"
+  ];
+  if (ethicsAliases.some((a) => s1.includes(a)) && ethicsAliases.some((a) => s2.includes(a))) return true;
+
+  const envAliases = [
+    "environment", "ecology", "environmentandecology", "biodiversity", "climatechange"
+  ];
+  if (envAliases.some((a) => s1.includes(a)) && envAliases.some((a) => s2.includes(a))) return true;
+
+  const irAliases = [
+    "internationalrelations", "ir", "bilateralrelations", "globalaffairs"
+  ];
+  if (irAliases.some((a) => s1.includes(a)) && irAliases.some((a) => s2.includes(a))) return true;
+
+  const secAliases = [
+    "internalsecurity", "security", "disastermanagement"
+  ];
+  if (secAliases.some((a) => s1.includes(a)) && secAliases.some((a) => s2.includes(a))) return true;
 
   const sstAliases = [
     "socialscience", "sst", "socialstudies", "social",
@@ -1162,19 +1262,19 @@ export async function fetchAllPracticeTests(): Promise<Record<string, TopicPract
           }
         });
 
-        // Also query alias collection if topic_practice_tests was empty
-        if (Object.keys(firestoreBank).length === 0) {
-          try {
-            const aliasColRef = collection(db, "practice_tests");
-            const aliasSnap = await getDocs(aliasColRef);
-            aliasSnap.docs.forEach((docSnap) => {
-              const test = docSnap.data() as TopicPracticeTest;
-              if (test) {
-                if (test.isDeleted === true || (test as any).deleted === true) {
-                  return;
-                }
-                const testId = docSnap.id || test.id;
-                const canonicalId = test.id || docSnap.id;
+        // Also query alias collection practice_tests and merge
+        try {
+          const aliasColRef = collection(db, "practice_tests");
+          const aliasSnap = await getDocs(aliasColRef);
+          aliasSnap.docs.forEach((docSnap) => {
+            const test = docSnap.data() as TopicPracticeTest;
+            if (test) {
+              if (test.isDeleted === true || (test as any).deleted === true) {
+                return;
+              }
+              const testId = docSnap.id || test.id;
+              const canonicalId = test.id || docSnap.id;
+              if (!firestoreBank[canonicalId]) {
                 firestoreBank[canonicalId] = {
                   ...test,
                   id: canonicalId,
@@ -1182,9 +1282,9 @@ export async function fetchAllPracticeTests(): Promise<Record<string, TopicPract
                   docId: docSnap.id,
                 };
               }
-            });
-          } catch {}
-        }
+            }
+          });
+        } catch {}
 
         if (Object.keys(firestoreBank).length > 0) {
           // Authoritative Firestore data replaces memory bank (preventing zombie deleted tests)
@@ -1378,16 +1478,19 @@ export function getChapterPracticeTestSync(
 
   if (!test) {
     const allBankTests = Object.values(memoryTestBank);
-    const normClass = String(classGrade || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     const ch = Number(chapterNo) || 1;
     test = allBankTests.find((t) => {
+      if (!t) return false;
+      if (t.isPublished === false || (t as any).published === false) return false;
+      if ((t as any).isDeleted || (t as any).deleted) return false;
+      if (!Array.isArray(t.questions) || t.questions.length === 0) return false;
+
       const tType = String(t.testType || t.test_type || "").toUpperCase();
       if (tType !== "CHAPTER" && tType !== "FULL_CHAPTER" && !t.id?.endsWith("__chapter_test")) return false;
       const tCh = Number(t.chapterNo) || 1;
       if (tCh !== ch) return false;
       if (!isSubjectCompatible(subject, t.subject)) return false;
-      const tClass = String(t.classGrade || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      return !normClass || !tClass || normClass === tClass || normClass.includes(tClass) || tClass.includes(normClass);
+      return isClassCompatible(classGrade, t.classGrade);
     }) || null;
   }
 
@@ -1407,13 +1510,16 @@ export function getSubjectPracticeTestSync(
 
   if (!test) {
     const allBankTests = Object.values(memoryTestBank);
-    const normClass = String(classGrade || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     test = allBankTests.find((t) => {
+      if (!t) return false;
+      if (t.isPublished === false || (t as any).published === false) return false;
+      if ((t as any).isDeleted || (t as any).deleted) return false;
+      if (!Array.isArray(t.questions) || t.questions.length === 0) return false;
+
       const tType = String(t.testType || t.test_type || "").toUpperCase();
       if (tType !== "SUBJECT" && !t.id?.endsWith("__subject_test")) return false;
       if (!isSubjectCompatible(subject, t.subject)) return false;
-      const tClass = String(t.classGrade || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      return !normClass || !tClass || normClass === tClass || normClass.includes(tClass) || tClass.includes(normClass);
+      return isClassCompatible(classGrade, t.classGrade);
     }) || null;
   }
 
