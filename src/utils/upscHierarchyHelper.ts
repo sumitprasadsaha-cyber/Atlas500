@@ -117,11 +117,12 @@ export interface UPSCDetails {
  */
 export function extractUPSCDetails(note: any): UPSCDetails {
   const explicitTeach = note.teachMode ?? note.teach_mode ?? note.isTeachMode;
-  const subInfo = normalizeSubjectAndTeachMode(note.subject, explicitTeach);
+  const rawSubj = note.subject || note.subjectName || note.subject_name || (note as any).subject_title || "";
+  const subInfo = normalizeSubjectAndTeachMode(rawSubj, explicitTeach);
   const subject = subInfo.displaySubject || "General Studies";
 
   // 1. GS Paper
-  let rawGsPaper = note.gsPaper || note.generalStudiesPaper || note.gs_paper || note.paper || "";
+  let rawGsPaper = note.gsPaper || note.generalStudiesPaper || note.gs_paper || note.paper || (note as any).gsPaperName || "";
   if (!rawGsPaper && note.storagePath) {
     const gsMatch = note.storagePath.match(/(?:GS_Paper_|GS|Paper_)?([1-4]|I{1,4})/i);
     if (gsMatch) {
@@ -139,20 +140,20 @@ export function extractUPSCDetails(note: any): UPSCDetails {
 
   // 2. Module
   let moduleNo = 1;
-  const rawModNo = note.moduleNo ?? note.module_number;
+  const rawModNo = note.moduleNo ?? note.module_number ?? note.moduleNumber ?? note.chapterNo ?? note.chapterNumber;
   if (rawModNo !== undefined && rawModNo !== null && rawModNo !== "") {
     const parsed = parseInt(String(rawModNo), 10);
     if (!isNaN(parsed) && parsed > 0) moduleNo = parsed;
   } else if (note.storagePath) {
-    const modMatch = note.storagePath.match(/\/Module_(\d+)_/i);
+    const modMatch = note.storagePath.match(/\/(?:Module|Chapter)_(\d+)_/i);
     if (modMatch) {
       moduleNo = parseInt(modMatch[1], 10) || 1;
     }
   }
 
-  let moduleName = note.moduleName || note.module_name || "";
+  let moduleName = note.moduleName || note.module_name || note.moduleTitle || note.chapterName || note.chapterTitle || "";
   if (!moduleName && note.storagePath) {
-    const modMatch = note.storagePath.match(/\/Module_\d+_([^/]+)/i);
+    const modMatch = note.storagePath.match(/\/(?:Module|Chapter)_\d+_([^/]+)/i);
     if (modMatch) {
       moduleName = modMatch[1].replace(/_/g, " ").trim();
     }
@@ -165,7 +166,7 @@ export function extractUPSCDetails(note: any): UPSCDetails {
 
   // 3. Chapter
   let chapterNo = 1;
-  const rawChNo = note.chapterNo ?? note.chapter_number ?? note.chapter_no;
+  const rawChNo = note.chapterNo ?? note.chapter_number ?? note.chapter_no ?? note.moduleNo;
   if (rawChNo !== undefined && rawChNo !== null && rawChNo !== "") {
     const parsed = parseInt(String(rawChNo), 10);
     if (!isNaN(parsed) && parsed > 0) chapterNo = parsed;
@@ -176,7 +177,7 @@ export function extractUPSCDetails(note: any): UPSCDetails {
     }
   }
 
-  let chapterName = note.chapterName || note.chapter_name || "";
+  let chapterName = note.chapterName || note.chapter_name || note.moduleName || "";
   if (!chapterName && note.storagePath) {
     const chMatch = note.storagePath.match(/\/(?:Chapter|Module)_\d+_([^/]+)/i);
     if (chMatch) {
@@ -188,8 +189,8 @@ export function extractUPSCDetails(note: any): UPSCDetails {
 
   // 4. Topic
   const partInfo = parseNotePartInfo(note, 0);
-  const topicNo = note.topicNumber ?? note.topicNo ?? partInfo.topicNo ?? 1;
-  const rawTopicName = note.topicTitle || note.topicName || partInfo.topicName || "";
+  const topicNo = note.topicNumber ?? note.topicNo ?? note.topic_no ?? note.topic_number ?? partInfo.topicNo ?? 1;
+  const rawTopicName = note.topicTitle || note.topicName || note.topic_name || (note as any).topic || partInfo.topicName || "";
   const topicName = cleanEntityName(rawTopicName, "topic");
   const topicLabel = topicName ? `Topic ${topicNo} – ${topicName}` : `Topic ${topicNo}`;
 

@@ -107,9 +107,12 @@ export function getStudentEnrolledGSPapers(
       const details = extractUPSCDetails(cn);
       if (rawEnrolled.length > 0) {
         const matches = rawEnrolled.some((enrolled) =>
+          isUPSCClass(enrolled) ||
+          enrolled.toLowerCase().trim() === "upsc" ||
           isSubjectMatching(enrolled, details.subject) ||
           isSubjectMatching(enrolled, details.gsPaper) ||
           isSubjectMatching(enrolled, cn.subject) ||
+          ((cn as any).subjectName && isSubjectMatching(enrolled, (cn as any).subjectName)) ||
           (details.moduleName && isSubjectMatching(enrolled, details.moduleName))
         );
         if (!matches) return;
@@ -160,13 +163,15 @@ export function buildStudentUPSCHierarchy(
 
       const details = extractUPSCDetails(cn);
       const removedForPaper = upscHierarchy.removedSubjects?.[details.gsPaper] || [];
-      if (removedForPaper.includes(details.subject)) return;
+      if (removedForPaper.some((r) => r.toLowerCase().trim() === details.subject.toLowerCase().trim())) return;
 
       if (rawEnrolled.length > 0) {
         const matches = rawEnrolled.some((enrolled) => {
+          if (isUPSCClass(enrolled) || enrolled.toLowerCase().trim() === "upsc") return true;
           if (isSubjectMatching(enrolled, details.subject)) return true;
           if (isSubjectMatching(enrolled, details.gsPaper)) return true;
           if (isSubjectMatching(enrolled, cn.subject)) return true;
+          if ((cn as any).subjectName && isSubjectMatching(enrolled, (cn as any).subjectName)) return true;
           if (details.moduleName && isSubjectMatching(enrolled, details.moduleName)) return true;
           return false;
         });

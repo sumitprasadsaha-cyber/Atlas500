@@ -67,6 +67,14 @@ export default function StudentUPSCTree({
     }
   });
 
+  const [expandedSubjects, setExpandedSubjects] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = sessionStorage.getItem(`${storageKeyPrefix}_expanded_subjects`);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {};
+  });
+
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>(() => {
     try {
       const saved = sessionStorage.getItem(`${storageKeyPrefix}_expanded`);
@@ -90,6 +98,12 @@ export default function StudentUPSCTree({
       }
     } catch {}
   }, [searchQuery, storageKeyPrefix]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(`${storageKeyPrefix}_expanded_subjects`, JSON.stringify(expandedSubjects));
+    } catch {}
+  }, [expandedSubjects, storageKeyPrefix]);
 
   useEffect(() => {
     try {
@@ -123,6 +137,13 @@ export default function StudentUPSCTree({
   const allAttempts = useMemo(() => {
     return getAllTestAttempts();
   }, [student?.id, student?.name, testBankTick]);
+
+  const toggleSubject = (subjectKey: string) => {
+    setExpandedSubjects((prev) => ({
+      ...prev,
+      [subjectKey]: !(prev[subjectKey] ?? true), // default expanded
+    }));
+  };
 
   const toggleModule = (moduleKey: string) => {
     setExpandedModules((prev) => ({
@@ -175,6 +196,11 @@ export default function StudentUPSCTree({
       .filter(Boolean) as StudentUPSCSubject[];
   }, [paper.subjects, cleanQuery]);
 
+  // Collect all visible subject keys
+  const allSubjectKeys = useMemo(() => {
+    return filteredSubjects.map((s) => s.subjectKey);
+  }, [filteredSubjects]);
+
   // Collect all visible module keys for toggle expand/collapse
   const allModuleKeys = useMemo(() => {
     const keys: string[] = [];
@@ -187,12 +213,20 @@ export default function StudentUPSCTree({
   }, [filteredSubjects]);
 
   const areAllExpanded = useMemo(() => {
-    if (allModuleKeys.length === 0) return false;
-    return allModuleKeys.every((key) => expandedModules[key] !== false);
-  }, [allModuleKeys, expandedModules]);
+    if (allModuleKeys.length === 0 && allSubjectKeys.length === 0) return false;
+    const subjectsExpanded = allSubjectKeys.length === 0 || allSubjectKeys.every((key) => expandedSubjects[key] !== false);
+    const modulesExpanded = allModuleKeys.length === 0 || allModuleKeys.every((key) => expandedModules[key] !== false);
+    return subjectsExpanded && modulesExpanded;
+  }, [allModuleKeys, allSubjectKeys, expandedModules, expandedSubjects]);
 
   const handleToggleExpandCollapseAll = () => {
     const nextState = !areAllExpanded;
+    const nextSubjects: Record<string, boolean> = {};
+    allSubjectKeys.forEach((key) => {
+      nextSubjects[key] = nextState;
+    });
+    setExpandedSubjects(nextSubjects);
+
     const nextMods: Record<string, boolean> = {};
     allModuleKeys.forEach((key) => {
       nextMods[key] = nextState;
@@ -231,7 +265,7 @@ export default function StudentUPSCTree({
         <button
           onClick={handleToggleExpandCollapseAll}
           className="px-3 py-2 text-[11px] font-bold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition cursor-pointer shrink-0"
-          title={areAllExpanded ? "Collapse All Modules" : "Expand All Modules"}
+          title={areAllExpanded ? "Collapse All" : "Expand All"}
         >
           {areAllExpanded ? "Collapse All" : "Expand All"}
         </button>
@@ -252,17 +286,59 @@ export default function StudentUPSCTree({
             </p>
           </div>
         ) : (
-          filteredSubjects.map((subj) => (
-            <div key={`upsc-subj-${subj.subjectKey}`} className="space-y-2">
-              {filteredSubjects.length > 1 && (
-                <div className="px-1 pt-1">
-                  <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                    {subj.subject}
-                  </h4>
-                </div>
-              )}
+          filteredSubjects.map((subj) => {
+            const subjKey = subj.subjectKey;
+            const isSubjExpanded = cleanQuery ? true : (expandedSubjects[subjKey] ?? true);
 
-              {subj.modules.map((mod) => {
+            return (
+              <div 
+                key={`upsc-subj-${subjKey}`} 
+                className="space-y-2.5 rounded-2xl border border-slate-200/90 dark:border-slate-800/90 bg-slate-50/50 dark:bg-slate-900/40 p-2.5 sm:p-3"
+                id={`upsc-subject-section-${subjKey}`}
+              >
+                {/* Subject Header (Collapsible & clearly identifies the Subject) */}
+                <div
+                  onClick={() => toggleSubject(subjKey)}
+                  className="flex items-center justify-between px-3.5 py-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs cursor-pointer select-none transition-all hover:border-indigo-300 dark:hover:border-indigo-800/60"
+                  id={`upsc-subject-header-${subjKey}`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
+                    <span className="text-slate-400 shrink-0">
+                      {isSubjExpanded ? (
+                        <ChevronDown className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-slate-500" />
+                      )}
+                    </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shrink-0">
+                        <BookOpen className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-900/50 shrink-0">
+                          Subject
+                        </span>
+                        <h4 className="text-xs sm:text-sm font-black text-slate-900 dark:text-slate-100 truncate">
+                          {subj.subject}
+                        </h4>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-2 self-center">
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                      {subj.totalModules} {subj.totalModules === 1 ? "Module" : "Modules"}
+                    </span>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                      {subj.totalTopics} {subj.totalTopics === 1 ? "Topic Note" : "Topic Notes"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Modules list under this Subject */}
+                {isSubjExpanded && (
+                  <div className="space-y-2 pt-0.5 pl-1 sm:pl-2" id={`upsc-subject-modules-${subjKey}`}>
+                    {subj.modules.map((mod) => {
                 const modKey = `${subj.subjectKey}_${mod.moduleKey}`;
                 const isModExpanded = cleanQuery ? true : (expandedModules[modKey] ?? true);
                 const targetClass = "UPSC";
@@ -599,8 +675,11 @@ export default function StudentUPSCTree({
                   </div>
                 );
               })}
-            </div>
-          ))
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>
