@@ -13,6 +13,7 @@ import {
 import { Student, ClassNote, ChapterNote } from "../types";
 import { StudentSchoolSubject, StudentSchoolModule } from "../utils/studentSchoolHierarchyHelper";
 import { 
+  fetchAllPracticeTests,
   getTopicPracticeTestSync, 
   getChapterPracticeTestSync,
   getChapterPracticeTestsSync,
@@ -103,6 +104,7 @@ export default function StudentSchoolTree({
 
   // Fetch student test attempts and subscribe to real-time practice test & score changes
   useEffect(() => {
+    fetchAllPracticeTests().catch(() => {});
     if (student?.id) {
       fetchStudentTestAttempts(student.id, student.name);
     }

@@ -14,6 +14,7 @@ import {
 import { Student, ClassNote, ChapterNote } from "../types";
 import { StudentUPSCGSPaper, StudentUPSCSubject, StudentUPSCModule } from "../utils/studentUPSCHierarchyHelper";
 import { 
+  fetchAllPracticeTests,
   getTopicPracticeTestSync, 
   getChapterPracticeTestSync,
   getChapterPracticeTestsSync,
@@ -115,6 +116,7 @@ export default function StudentUPSCTree({
 
   // Fetch student test attempts and subscribe to real-time practice test & score changes
   useEffect(() => {
+    fetchAllPracticeTests().catch(() => {});
     if (student?.id) {
       fetchStudentTestAttempts(student.id, student.name);
     }

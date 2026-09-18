@@ -607,7 +607,11 @@ export default function StudentPracticeTestModal({
       subject,
       chapterNo: resolvedChapterNo,
       chapterName: resolvedChapterName,
-      topicName: isSubjectLevel ? `${subject} Subject Test` : isChapterLevel ? `Chapter ${resolvedChapterNo} Test` : resolvedTopicName,
+      topicName: isSubjectLevel 
+        ? `${subject} Subject Test` 
+        : isChapterLevel 
+          ? (testMeta?.title || title || (resolvedTopicName && resolvedTopicName !== "Practice Test" ? resolvedTopicName : `Chapter ${resolvedChapterNo} Test`)) 
+          : resolvedTopicName,
       testType: resolvedAssessmentTestType,
       attemptNumber: attemptCount,
       date: formattedDate,

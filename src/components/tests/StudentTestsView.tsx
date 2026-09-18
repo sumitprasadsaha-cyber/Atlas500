@@ -24,6 +24,8 @@ import {
 import { TopicPracticeTest, TestAttemptRecord, AssessmentTestType, Student, ClassNote } from "../../types";
 import { 
   fetchAllPracticeTests, 
+  subscribeToPracticeTests,
+  normalizeTestCategory,
   buildTopicTestId, 
   buildChapterTestId, 
   buildSubjectTestId,
@@ -93,6 +95,10 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
   useEffect(() => {
     loadData();
 
+    const unsubBank = subscribeToPracticeTests((bank) => {
+      if (bank) setTestsBank(bank);
+    });
+
     const unsubAttempts = subscribeToTestAttempts((updated) => {
       if (updated) setAttempts(updated);
     });
@@ -105,6 +111,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
     window.addEventListener("practice-tests-updated", handleSync);
 
     return () => {
+      unsubBank();
       unsubAttempts();
       window.removeEventListener("practice-tests-updated", handleSync);
     };
@@ -152,22 +159,24 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
     );
 
     const list = Object.values(testsBank).map((t) => {
-      const rawType = (t.testType || (t as any).test_type || "TOPIC").toUpperCase();
-      let normalizedType: "SUBJECT" | "CHAPTER" | "TOPIC" | "PYQ" = "TOPIC";
-      if (rawType === "SUBJECT") normalizedType = "SUBJECT";
-      else if (rawType === "CHAPTER" || rawType === "FULL_CHAPTER") normalizedType = "CHAPTER";
-      else if (rawType === "PYQ") normalizedType = "PYQ";
+      const normalizedType = normalizeTestCategory(t);
 
-      // Match student attempts for this test
+      // Match student attempts for this test strictly by unique test ID
       const myAttempts = studentAttempts.filter((a) => {
-        if (a.testId && t.id && a.testId === t.id) return true;
+        if (a.testId) {
+          return a.testId === t.id;
+        }
+        // Legacy fallback for attempts saved before unique testId was introduced
         const matchClass = isClassCompatible(a.classGrade, t.classGrade) ||
           allowedClasses.includes(toStableClassId(a.classGrade || "")) ||
           toStableClassId(a.classGrade || "") === toStableClassId(t.classGrade || "");
         const matchSubj = isSubjectCompatible(a.subject || "", t.subject || "");
 
         if (normalizedType === "SUBJECT") return matchClass && matchSubj && a.testType === "subject";
-        if (normalizedType === "CHAPTER") return matchClass && matchSubj && Number(a.chapterNo || 1) === Number(t.chapterNo || 1) && (a.testType === "chapter" || a.testType === "full_chapter");
+        if (normalizedType === "CHAPTER") {
+          const baseChapterId = buildChapterTestId(t.classGrade, t.subject, t.chapterNo);
+          return (t.id === baseChapterId) && matchClass && matchSubj && Number(a.chapterNo || 1) === Number(t.chapterNo || 1) && (a.testType === "chapter" || a.testType === "full_chapter");
+        }
         return matchClass && matchSubj && Number(a.chapterNo || 1) === Number(t.chapterNo || 1) && (a.topicName || "").toLowerCase().trim() === (t.topicName || "").toLowerCase().trim();
       });
 

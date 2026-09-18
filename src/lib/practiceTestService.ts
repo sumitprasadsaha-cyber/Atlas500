@@ -129,10 +129,9 @@ export function generateDefaultChapterTestTitle(
 ): string {
   const cleanChapterName = (chapterName || "").trim();
   let baseTitle = "";
-  if (/^Chapter\s*\d+[\s\:\-\—\–]+/i.test(cleanChapterName)) {
-    baseTitle = cleanChapterName;
-  } else if (cleanChapterName) {
-    baseTitle = `Chapter ${chapterNo}: ${cleanChapterName}`;
+  if (cleanChapterName) {
+    const stripped = cleanChapterName.replace(/^Chapter\s*\d+[\s\:\-\—\–]+/i, "").trim();
+    baseTitle = stripped || cleanChapterName;
   } else {
     baseTitle = `Chapter ${chapterNo}`;
   }
