@@ -12,6 +12,7 @@ import {
 } from "./curriculumAccessService";
 import { isUPSCClass, canonicalGSPaperName } from "../utils/upscHierarchyHelper";
 import { inferGSPaperFromSubject, isSubjectMatching } from "../utils/classNoteHelper";
+export { isSubjectMatching };
 
 import { safeLocalStorageSetItem, safeLocalStorageGetItem, safeLocalStorageRemoveItem } from "./safeStorage";
 import {
@@ -200,7 +201,8 @@ export function normalizeTestCategory(t: any): "SUBJECT" | "CHAPTER" | "TOPIC" |
     rawType === "PYQTEST" ||
     rawType === "PREVIOUS_YEAR" ||
     rawType === "PREVIOUS YEAR" ||
-    rawType === "PREVIOUS YEAR QUESTIONS"
+    rawType === "PREVIOUS YEAR QUESTIONS" ||
+    rawType.includes("PYQ")
   ) {
     return "PYQ";
   }
@@ -212,7 +214,8 @@ export function normalizeTestCategory(t: any): "SUBJECT" | "CHAPTER" | "TOPIC" |
     rawType === "SUBJECTTEST" ||
     rawType === "FULL_SUBJECT" ||
     rawType === "FULL SUBJECT" ||
-    rawType === "SUBJECT MOCK"
+    rawType === "SUBJECT MOCK" ||
+    rawType.includes("SUBJECT")
   ) {
     return "SUBJECT";
   }
@@ -224,7 +227,12 @@ export function normalizeTestCategory(t: any): "SUBJECT" | "CHAPTER" | "TOPIC" |
     rawType === "CHAPTERTEST" ||
     rawType === "FULL_CHAPTER" ||
     rawType === "FULL CHAPTER" ||
-    rawType === "FULL CHAPTER TEST"
+    rawType === "FULL CHAPTER TEST" ||
+    rawType.includes("CHAPTER") ||
+    rawType === "CH" ||
+    rawType.startsWith("CH_") ||
+    Boolean((t as any).isChapterTest) ||
+    Boolean((t as any).chapterTest)
   ) {
     return "CHAPTER";
   }
@@ -240,10 +248,15 @@ export function normalizeTestCategory(t: any): "SUBJECT" | "CHAPTER" | "TOPIC" |
 
   // Canonical ID naming conventions when testType was not explicitly saved
   const idStr = String(t.id || t.testId || "").toLowerCase();
-  if (idStr.endsWith("__subject_test")) {
+  if (idStr.endsWith("__subject_test") || idStr.includes("__subject_test")) {
     return "SUBJECT";
   }
-  if (idStr.endsWith("__chapter_test") || idStr.includes("__chapter_test")) {
+  if (
+    idStr.endsWith("__chapter_test") ||
+    idStr.includes("__chapter_test") ||
+    idStr.includes("_ch_") ||
+    (idStr.includes("__ch") && idStr.includes("test"))
+  ) {
     return "CHAPTER";
   }
   if (idStr.includes("__pyq_") || idStr.endsWith("_pyq")) {
@@ -273,8 +286,14 @@ export function normalizeTestCategory(t: any): "SUBJECT" | "CHAPTER" | "TOPIC" |
   if (
     topicName.endsWith("chapter test") ||
     title.endsWith("chapter test") ||
+    topicName.includes("chapter test") ||
+    title.includes("chapter test") ||
     topicName.includes("full chapter test") ||
-    title.includes("full chapter test")
+    title.includes("full chapter test") ||
+    (title.match(/\btest\s*\d+\b/i) && (t.chapterNo || t.chapterName)) ||
+    (topicName.match(/\btest\s*\d+\b/i) && (t.chapterNo || t.chapterName)) ||
+    (title.includes("chapter") && title.includes("test")) ||
+    (t.chapterNo && Number(t.chapterNo) > 0 && !t.topicNoteId && !t.noteId && (title.includes("test") || topicName.includes("test")))
   ) {
     return "CHAPTER";
   }
@@ -289,8 +308,11 @@ export function isValidPracticeTest(t: any): boolean {
   if (!t || typeof t !== "object") return false;
   if (t.isDeleted === true || t.deleted === true) return false;
   if (t.isDraft === true || t.draft === true) return false;
+  if ((t as any).status === "inactive" || (t as any).status === "draft") return false;
+  if ((t as any).isActive === false || (t as any).active === false) return false;
+  if ((t as any).visibility === "hidden" || (t as any).visibility === "private" || (t as any).visibility === "draft") return false;
   if (!t.id && !t.testId) return false;
-  const qCount = Array.isArray(t.questions)
+  const qCount = Array.isArray(t.questions) && t.questions.length > 0
     ? t.questions.length
     : Number(t.questionCount) || Number(t.totalQuestions) || 0;
   if (qCount <= 0) return false;
@@ -310,74 +332,96 @@ export function isStudentPermittedToAccessTest(
   // 1. Must be a valid active test
   if (!isValidPracticeTest(test)) return false;
 
-  // 2. Must be published and not deleted
+  // 2. Must be published, active, visible, and not deleted
   if (test.isPublished === false || (test as any).published === false) return false;
   if ((test as any).isDeleted || (test as any).deleted) return false;
+  if ((test as any).status === "inactive" || (test as any).status === "draft") return false;
+  if ((test as any).isActive === false || (test as any).active === false) return false;
+  if (
+    (test as any).visibility === "hidden" ||
+    (test as any).visibility === "private" ||
+    (test as any).visibility === "draft"
+  ) {
+    return false;
+  }
+
+  // Check student-specific access restrictions if configured
+  if (
+    (test as any).visibility === "selected" ||
+    (test as any).accessType === "restricted"
+  ) {
+    const allowedIds: string[] = Array.isArray((test as any).allowedStudentIds)
+      ? (test as any).allowedStudentIds
+      : [];
+    const studentId = student.id || (student as any).uid || "";
+    if (allowedIds.length > 0 && !allowedIds.includes(studentId)) {
+      return false;
+    }
+  }
 
   // 3. Class and curriculum matching
-  const studentClass = student.classGrade || "";
+  const studentClass = student.classGrade || (student as any).className || (student as any).class || "";
   const isStudentUpsc = isUPSCClass(studentClass) || toStableClassId(studentClass) === "upsc";
 
-  const testClass = test.classGrade || (test as any).className || "";
-  const isTestUpsc = isUPSCClass(testClass) || toStableClassId(testClass) === "upsc";
+  const testClass = test.classGrade || (test as any).className || (test as any).class || (test as any).targetClass || (test as any).class_grade || "";
+  
+  // If test has no class specified or is meant for all classes, allow matching by subject
+  if (!testClass || testClass.toLowerCase() === "all" || testClass.toLowerCase() === "all classes") {
+    // Proceed to subject check below
+  } else {
+    const isTestUpsc = isUPSCClass(testClass) || toStableClassId(testClass) === "upsc";
 
-  if (isStudentUpsc) {
-    if (!isTestUpsc) return false;
+    if (isStudentUpsc) {
+      if (!isTestUpsc) return false;
+    } else if (isTestUpsc) {
+      return false;
+    } else {
+      // School student
+      const studentClassNorm = toStableClassId(studentClass);
+      const testClassNorm = toStableClassId(testClass);
+      if (
+        testClassNorm === studentClassNorm ||
+        isClassCompatible(studentClass, testClass)
+      ) {
+        // Exact class match or compatible
+      } else {
+        // Check granted access permissions
+        const allowedClasses = getAccessibleClassesGrantedToClass(studentClass);
+        const allowedNorms = new Set(allowedClasses.map((c) => toStableClassId(c.ownerClass)));
+        allowedNorms.add(studentClassNorm);
 
-    // Check student enrolled subjects restriction if present
-    const rawEnrolled = (student.enrolledSubjects || []).filter(
-      (s) => typeof s === "string" && s.trim().length > 0
-    );
-    if (rawEnrolled.length > 0) {
-      const testSubj = (test.subject || "").trim();
+        const isDirectOrGrantedMatch = allowedNorms.has(testClassNorm);
+        let isSharedMatch = false;
+        if (!isDirectOrGrantedMatch && test.subject && studentClass) {
+          const accessConfig = getSubjectAccessConfig(test.subject, testClass || studentClass);
+          isSharedMatch = isClassAllowedForSubject(accessConfig, studentClass);
+        }
+
+        if (!isDirectOrGrantedMatch && !isSharedMatch) {
+          return false;
+        }
+      }
+    }
+  }
+
+  // 4. Check student enrolled subjects restriction if present
+  const rawEnrolled = (student.enrolledSubjects || []).filter(
+    (s) => typeof s === "string" && s.trim().length > 0
+  );
+  if (rawEnrolled.length > 0) {
+    const testSubj = (test.subject || (test as any).subjectName || "").trim();
+    if (testSubj) {
       const testPaper = canonicalGSPaperName(testClass) || inferGSPaperFromSubject(testSubj);
-
       const enrolledMatch = rawEnrolled.some((enrolled) => {
         const cleanE = enrolled.trim();
+        if (cleanE.toLowerCase() === testSubj.toLowerCase()) return true;
         if (isSubjectMatching(cleanE, testSubj)) return true;
-        if (isSubjectMatching(cleanE, testClass)) return true;
-        if (testPaper && isSubjectMatching(cleanE, testPaper)) return true;
         if (isSubjectCompatible(cleanE, testSubj)) return true;
+        if (testClass && isSubjectMatching(cleanE, testClass)) return true;
+        if (testPaper && isSubjectMatching(cleanE, testPaper)) return true;
         return false;
       });
 
-      if (!enrolledMatch) {
-        return false;
-      }
-    }
-  } else if (isTestUpsc) {
-    return false;
-  } else {
-    // School student
-    const studentClassNorm = toStableClassId(studentClass);
-    const testClassNorm = toStableClassId(testClass);
-    if (testClassNorm === studentClassNorm) {
-      // Exact class match
-    } else {
-      // Check granted access permissions
-      const allowedClasses = getAccessibleClassesGrantedToClass(studentClass);
-      const allowedNorms = new Set(allowedClasses.map((c) => toStableClassId(c.ownerClass)));
-      allowedNorms.add(studentClassNorm);
-
-      const isDirectOrGrantedMatch = allowedNorms.has(testClassNorm);
-      let isSharedMatch = false;
-      if (!isDirectOrGrantedMatch && test.subject && studentClass) {
-        const accessConfig = getSubjectAccessConfig(test.subject, testClass || studentClass);
-        isSharedMatch = isClassAllowedForSubject(accessConfig, studentClass);
-      }
-
-      if (!isDirectOrGrantedMatch && !isSharedMatch) {
-        return false;
-      }
-    }
-
-    // Check student enrolled subjects restriction if present
-    if (student.enrolledSubjects && Array.isArray(student.enrolledSubjects) && student.enrolledSubjects.length > 0) {
-      const testSubj = (test.subject || "").toLowerCase().trim();
-      const enrolledMatch = student.enrolledSubjects.some((s) => {
-        const cleanS = s.toLowerCase().trim();
-        return cleanS === testSubj || isSubjectCompatible(cleanS, testSubj);
-      });
       if (!enrolledMatch) {
         return false;
       }
@@ -733,28 +777,58 @@ export function isSubjectCompatible(subj1: string, subj2: string): boolean {
     "economics", "indianheritageandculture", "contemporaryindia",
     "democraticpolitics", "understandingeconomicdevelopment", "indiaandthecontemporaryworld"
   ];
-  if (sstAliases.includes(s1) && sstAliases.includes(s2)) return true;
+  if (
+    sstAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
+    sstAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
+  ) {
+    return true;
+  }
 
   const scienceAliases = [
     "science", "sci", "physics", "chemistry", "biology",
     "lifescience", "physicalscience", "generalscience", "natsci", "naturalscience"
   ];
-  if (scienceAliases.includes(s1) && scienceAliases.includes(s2)) return true;
+  if (
+    scienceAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
+    scienceAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
+  ) {
+    return true;
+  }
 
   const mathAliases = [
     "math", "maths", "mathematics", "appliedmaths", "basicmaths",
     "standardmaths", "highermaths", "generalmaths", "algebra", "geometry"
   ];
-  if (mathAliases.includes(s1) && mathAliases.includes(s2)) return true;
+  if (
+    mathAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
+    mathAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
+  ) {
+    return true;
+  }
 
   const engAliases = ["english", "englishlanguage", "englishliterature", "eng", "firstlanguageenglish", "secondlanguageenglish", "englishcommunicative"];
-  if (engAliases.includes(s1) && engAliases.includes(s2)) return true;
+  if (
+    engAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
+    engAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
+  ) {
+    return true;
+  }
 
   const hindiAliases = ["hindi", "hindicoursea", "hindicourseb", "hindilit", "hindilang"];
-  if (hindiAliases.includes(s1) && hindiAliases.includes(s2)) return true;
+  if (
+    hindiAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
+    hindiAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
+  ) {
+    return true;
+  }
 
   const bengaliAliases = ["bengali", "bangla", "bengaliliterature", "bengalilanguage"];
-  if (bengaliAliases.includes(s1) && bengaliAliases.includes(s2)) return true;
+  if (
+    bengaliAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
+    bengaliAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
+  ) {
+    return true;
+  }
 
   return false;
 }
@@ -1178,6 +1252,18 @@ export function getQuestionsSync(
   testType: AssessmentTestType = "topic",
   options?: { publishedOnly?: boolean }
 ): ParsedAssessmentQuestion[] | null {
+  // If classGradeOrTopicId is a specific test ID, prioritize fetching that test directly
+  if (classGradeOrTopicId && !subject) {
+    const directTest = getPracticeTestByIdSync(classGradeOrTopicId);
+    if (directTest && Array.isArray(directTest.questions) && directTest.questions.length > 0) {
+      let list = directTest.questions;
+      if (options?.publishedOnly) {
+        list = list.filter((q) => q.published !== false);
+      }
+      return list;
+    }
+  }
+
   let classGrade = classGradeOrTopicId;
   if (classGradeOrTopicId && classGradeOrTopicId.includes("__") && !subject) {
     const parts = classGradeOrTopicId.split("__");
@@ -1262,7 +1348,10 @@ export function getQuestionsSync(
  */
 let activeFetchPromise: Promise<Record<string, TopicPracticeTest>> | null = null;
 
-export async function fetchAllPracticeTests(): Promise<Record<string, TopicPracticeTest>> {
+export async function fetchAllPracticeTests(options?: { forceFresh?: boolean }): Promise<Record<string, TopicPracticeTest>> {
+  if (options?.forceFresh) {
+    activeFetchPromise = null;
+  }
   if (activeFetchPromise) {
     return activeFetchPromise;
   }
@@ -1828,6 +1917,18 @@ export async function fetchQuestions(
   testType: AssessmentTestType = "topic",
   options?: { publishedOnly?: boolean }
 ): Promise<ParsedAssessmentQuestion[]> {
+  // Direct test lookup if classGradeOrTopicId is a specific test ID
+  if (classGradeOrTopicId && !subject) {
+    const directTest = await getPracticeTestById(classGradeOrTopicId);
+    if (directTest && Array.isArray(directTest.questions) && directTest.questions.length > 0) {
+      let list = directTest.questions;
+      if (options?.publishedOnly) {
+        list = list.filter((q) => q.published !== false);
+      }
+      return list;
+    }
+  }
+
   // First check synchronous in-memory cache
   const cachedSync = getQuestionsSync(classGradeOrTopicId, subject, chapterNo, topicName, testType, options);
   if (cachedSync && cachedSync.length > 0) {
@@ -2263,6 +2364,7 @@ export async function saveTopicPracticeTest(
   );
 
   updateLocalTopicCache(sanitizedTopicTest);
+  activeFetchPromise = null;
   clearAllQuestionCaches();
   notifyTestBankSubscribers();
 

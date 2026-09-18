@@ -287,14 +287,16 @@ export default function StudentPracticeTestModal({
     // 1. Check synchronous in-memory cache first
     const cached = syncMeta?.questions?.length 
       ? syncMeta.questions 
-      : getQuestionsSync(
-          classGrade,
-          subject,
-          resolvedChapterNo,
-          resolvedTopicName,
-          testType,
-          { publishedOnly: true }
-        );
+      : (propTestId
+          ? getQuestionsSync(propTestId, undefined, undefined, undefined, testType, { publishedOnly: true })
+          : getQuestionsSync(
+              classGrade,
+              subject,
+              resolvedChapterNo,
+              resolvedTopicName,
+              testType,
+              { publishedOnly: true }
+            ));
 
     if (cached && cached.length > 0) {
       const durationMs = Math.round(performance.now() - openStartTime);
@@ -316,12 +318,24 @@ export default function StudentPracticeTestModal({
       setIsLoading(true);
       setFetchError(null);
 
-      fetchQuestions(classGrade, subject, resolvedChapterNo, resolvedTopicName, testType, { publishedOnly: true })
+      const fetchPromise = propTestId
+        ? fetchQuestions(propTestId, undefined, undefined, undefined, testType, { publishedOnly: true })
+        : fetchQuestions(classGrade, subject, resolvedChapterNo, resolvedTopicName, testType, { publishedOnly: true });
+
+      fetchPromise
         .then((qList) => {
           if (!isMounted) return;
           if (Array.isArray(qList) && qList.length > 0) {
             applyQuestionsAndRestore(qList);
-            getAssessmentPracticeTest(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType)
+            getAssessmentPracticeTest(
+              classGrade,
+              subject,
+              resolvedChapterNo,
+              resolvedTopicName,
+              resolvedAssessmentTestType,
+              undefined,
+              propTestId
+            )
               .then((m) => {
                 if (isMounted && m) {
                   setTestMeta(m);

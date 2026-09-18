@@ -31,7 +31,8 @@ import {
   buildSubjectTestId,
   isStudentPermittedToAccessTest,
   isClassCompatible,
-  isSubjectCompatible
+  isSubjectCompatible,
+  isSubjectMatching
 } from "../../lib/practiceTestService";
 import { getAllTestAttempts, subscribeToTestAttempts } from "../../utils/assessmentParser";
 import { toStableClassId, getAccessibleClassesGrantedToClass } from "../../lib/curriculumAccessService";
@@ -104,16 +105,20 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
     });
 
     const handleSync = () => {
-      fetchAllPracticeTests().then((bank) => {
+      fetchAllPracticeTests({ forceFresh: true }).then((bank) => {
         setTestsBank(bank || {});
       });
     };
     window.addEventListener("practice-tests-updated", handleSync);
+    window.addEventListener("managed-tests-updated", handleSync);
+    window.addEventListener("storage", handleSync);
 
     return () => {
       unsubBank();
       unsubAttempts();
       window.removeEventListener("practice-tests-updated", handleSync);
+      window.removeEventListener("managed-tests-updated", handleSync);
+      window.removeEventListener("storage", handleSync);
     };
   }, []);
 
@@ -126,26 +131,42 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
 
   // Compute student's enrolled subjects
   const studentSubjects = useMemo(() => {
-    const rawEnrolled = (student.enrolledSubjects || []).filter(
-      (s) => typeof s === "string" && s.trim().length > 0
-    );
-    if (rawEnrolled.length > 0) {
-      return rawEnrolled;
-    }
-    // Fallback: collect subjects from notes and available tests matching student's class
     const subs = new Set<string>();
-    const normStudentClass = toStableClassId(studentClass);
-    notes.forEach((n) => {
-      const nClass = toStableClassId(n.classGrade || (n as any).className || "");
-      if (allowedClasses.includes(nClass) || nClass === normStudentClass || isClassCompatible(studentClass, n.classGrade)) {
-        const s = n.subject || (n as any).subjectName;
-        if (s) subs.add(s.trim());
+
+    // 1. Student's explicitly enrolled subjects
+    (student.enrolledSubjects || []).forEach((s) => {
+      if (typeof s === "string" && s.trim().length > 0) {
+        subs.add(s.trim());
       }
     });
 
+    // 2. Also collect subjects from available tests matching student's class
     Object.values(testsBank).forEach((t) => {
-      if (isClassCompatible(studentClass, t.classGrade) && t.subject) {
-        subs.add(t.subject.trim());
+      if (
+        t &&
+        (isClassCompatible(studentClass, t.classGrade) ||
+          allowedClasses.includes(toStableClassId(t.classGrade || "")))
+      ) {
+        const s = t.subject || (t as any).subjectName;
+        if (s && typeof s === "string" && s.trim().length > 0) {
+          subs.add(s.trim());
+        }
+      }
+    });
+
+    // 3. Also collect subjects from notes matching student's class
+    const normStudentClass = toStableClassId(studentClass);
+    notes.forEach((n) => {
+      const nClass = toStableClassId(n.classGrade || (n as any).className || "");
+      if (
+        allowedClasses.includes(nClass) ||
+        nClass === normStudentClass ||
+        isClassCompatible(studentClass, n.classGrade)
+      ) {
+        const s = n.subject || (n as any).subjectName;
+        if (s && typeof s === "string" && s.trim().length > 0) {
+          subs.add(s.trim());
+        }
       }
     });
 
@@ -158,13 +179,24 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
       (a) => a.studentId === studentIdentifier || (student.name && a.studentName.toLowerCase() === student.name.toLowerCase())
     );
 
-    const list = Object.values(testsBank).map((t) => {
+    // Deduplicate by canonical ID
+    const testMap = new Map<string, TopicPracticeTest>();
+    Object.values(testsBank).forEach((t) => {
+      if (!t) return;
+      const canonicalKey = t.id || (t as any).testId || (t as any).docId;
+      if (canonicalKey && !testMap.has(canonicalKey)) {
+        testMap.set(canonicalKey, t);
+      }
+    });
+
+    const list = Array.from(testMap.values()).map((t) => {
       const normalizedType = normalizeTestCategory(t);
+      const testCanonicalId = t.id || (t as any).testId || (t as any).docId;
 
       // Match student attempts for this test strictly by unique test ID
       const myAttempts = studentAttempts.filter((a) => {
         if (a.testId) {
-          return a.testId === t.id;
+          return a.testId === testCanonicalId || a.testId === t.id;
         }
         // Legacy fallback for attempts saved before unique testId was introduced
         const matchClass = isClassCompatible(a.classGrade, t.classGrade) ||
@@ -201,10 +233,23 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
     });
 
     return list.filter((t) => {
-      // 1. Must be published & not deleted & have questions
+      // 1. Must be published & active & not deleted & have questions
       if (t.isPublished === false || (t as any).published === false) return false;
       if ((t as any).isDeleted || (t as any).deleted) return false;
-      if (!Array.isArray(t.questions) || t.questions.length === 0) return false;
+      if ((t as any).status === "inactive" || (t as any).status === "draft") return false;
+      if ((t as any).isActive === false || (t as any).active === false) return false;
+      if (
+        (t as any).visibility === "hidden" ||
+        (t as any).visibility === "private" ||
+        (t as any).visibility === "draft"
+      ) {
+        return false;
+      }
+
+      const qCount = Array.isArray(t.questions) && t.questions.length > 0
+        ? t.questions.length
+        : (Number(t.questionCount) || Number((t as any).totalQuestions) || 0);
+      if (qCount <= 0) return false;
 
       // 2. Permission check (handles UPSC & School, enrolledSubjects)
       if (!isStudentPermittedToAccessTest(student, t)) {
@@ -213,7 +258,12 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
 
       // 3. Subject filter if specific subject selected
       if (selectedSubject !== "All") {
-        if (!isSubjectCompatible(selectedSubject, t.subject || "")) return false;
+        if (
+          !isSubjectCompatible(selectedSubject, t.subject || "") &&
+          !isSubjectMatching(selectedSubject, t.subject || "")
+        ) {
+          return false;
+        }
       }
 
       // 4. Category filter
