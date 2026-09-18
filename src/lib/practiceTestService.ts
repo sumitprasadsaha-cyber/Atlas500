@@ -59,6 +59,8 @@ export interface SaveTopicResult {
   message: string;
   error?: string;
   fromCache?: boolean;
+  testId?: string;
+  id?: string;
 }
 
 export interface SyncQueueItem {
@@ -102,11 +104,40 @@ export function buildTopicTestId(
 export function buildChapterTestId(
   classGrade: string = "",
   subject: string = "",
-  chapterNo: number = 0
+  chapterNo: number = 0,
+  subIdOrSuffix?: string
 ): string {
   const normClass = String(classGrade || "").toLowerCase().trim().replace(/\s+/g, "_");
   const normSubj = String(subject || "").toLowerCase().trim().replace(/\s+/g, "_");
+  if (subIdOrSuffix) {
+    const normSub = String(subIdOrSuffix).toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
+    return `${normClass}__${normSubj}__ch${chapterNo}__chapter_test__${normSub}`;
+  }
   return `${normClass}__${normSubj}__ch${chapterNo}__chapter_test`;
+}
+
+/**
+ * Dynamically generates a clean, non-hardcoded default title for a chapter test.
+ * Example:
+ * Chapter 3: Money and Credit Test 1
+ * Chapter 3: Money and Credit Test 2
+ */
+export function generateDefaultChapterTestTitle(
+  chapterNo: number,
+  chapterName: string,
+  testIndex: number = 1
+): string {
+  const cleanChapterName = (chapterName || "").trim();
+  let baseTitle = "";
+  if (/^Chapter\s*\d+[\s\:\-\—\–]+/i.test(cleanChapterName)) {
+    baseTitle = cleanChapterName;
+  } else if (cleanChapterName) {
+    baseTitle = `Chapter ${chapterNo}: ${cleanChapterName}`;
+  } else {
+    baseTitle = `Chapter ${chapterNo}`;
+  }
+  baseTitle = baseTitle.replace(/[\s\:\-\—\–]+Test$/i, "").trim();
+  return `${baseTitle} Test ${testIndex}`;
 }
 
 export function buildSubjectTestId(
@@ -1468,37 +1499,124 @@ export function getTopicPracticeTestSync(
   return test;
 }
 
-export function getChapterPracticeTestSync(
+export function getChapterPracticeTestsSync(
   classGrade: string,
   subject: string,
   chapterNo: number
+): TopicPracticeTest[] {
+  const allBankTests = Object.values(memoryTestBank);
+  const ch = Number(chapterNo) || 1;
+  const matches = allBankTests.filter((t) => {
+    if (!t) return false;
+    if (t.isPublished === false || (t as any).published === false) return false;
+    if ((t as any).isDeleted || (t as any).deleted) return false;
+    if (!Array.isArray(t.questions) || t.questions.length === 0) return false;
+
+    const tType = String(t.testType || t.test_type || (t as any).computedType || "").toUpperCase();
+    const isChapter = tType === "CHAPTER" || tType === "FULL_CHAPTER" || String(t.id || "").includes("__chapter_test");
+    if (!isChapter) return false;
+
+    const tCh = Number(t.chapterNo) || 1;
+    if (tCh !== ch) return false;
+    if (!isSubjectCompatible(subject, t.subject)) return false;
+    return isClassCompatible(classGrade, t.classGrade);
+  });
+
+  return matches.sort((a, b) => {
+    const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (tA !== tB) return tA - tB;
+    return (a.title || a.id).localeCompare(b.title || b.id);
+  });
+}
+
+export function getPracticeTestByIdSync(testId: string): TopicPracticeTest | null {
+  if (!testId) return null;
+  const direct = memoryTestBank[testId];
+  if (direct) {
+    if (Array.isArray(direct.questions)) preloadQuestionImages(direct.questions);
+    return direct;
+  }
+  const found = Object.values(memoryTestBank).find(
+    (t) => t?.id === testId || (t as any)?.testId === testId || (t as any)?.docId === testId
+  ) || null;
+  if (found && Array.isArray(found.questions)) {
+    preloadQuestionImages(found.questions);
+  }
+  return found;
+}
+
+export async function getPracticeTestById(
+  testId: string,
+  options?: { forceFresh?: boolean }
+): Promise<TopicPracticeTest | null> {
+  if (!testId) return null;
+  if (!options?.forceFresh) {
+    const cached = getPracticeTestByIdSync(testId);
+    if (cached) return cached;
+  }
+
+  try {
+    const db = await getFirebaseDb();
+    if (db) {
+      const testDocRef = doc(db, "topic_practice_tests", testId);
+      let docSnap = await getDoc(testDocRef);
+      if (!docSnap.exists()) {
+        const aliasDocRef = doc(db, "practice_tests", testId);
+        docSnap = await getDoc(aliasDocRef);
+      }
+      if (docSnap.exists()) {
+        const data = docSnap.data() as TopicPracticeTest;
+        if (data) {
+          const test = { ...data, id: testId, testId };
+          memoryTestBank[testId] = test;
+          notifyTestBankSubscribers();
+          if (Array.isArray(test.questions)) preloadQuestionImages(test.questions);
+          return test;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[PracticeTestService] Error fetching test by ID:", err);
+  }
+
+  await fetchAllPracticeTests();
+  return getPracticeTestByIdSync(testId);
+}
+
+export function getChapterPracticeTestSync(
+  classGrade: string,
+  subject: string,
+  chapterNo: number,
+  testId?: string
 ): TopicPracticeTest | null {
-  const testId = buildChapterTestId(classGrade, subject, chapterNo);
-  let test = memoryTestBank[testId] || null;
-
-  if (!test) {
-    const allBankTests = Object.values(memoryTestBank);
-    const ch = Number(chapterNo) || 1;
-    test = allBankTests.find((t) => {
-      if (!t) return false;
-      if (t.isPublished === false || (t as any).published === false) return false;
-      if ((t as any).isDeleted || (t as any).deleted) return false;
-      if (!Array.isArray(t.questions) || t.questions.length === 0) return false;
-
-      const tType = String(t.testType || t.test_type || "").toUpperCase();
-      if (tType !== "CHAPTER" && tType !== "FULL_CHAPTER" && !t.id?.endsWith("__chapter_test")) return false;
-      const tCh = Number(t.chapterNo) || 1;
-      if (tCh !== ch) return false;
-      if (!isSubjectCompatible(subject, t.subject)) return false;
-      return isClassCompatible(classGrade, t.classGrade);
-    }) || null;
+  if (testId) {
+    const byId = getPracticeTestByIdSync(testId);
+    if (byId) return byId;
   }
 
-  if (test && Array.isArray(test.questions)) {
-    preloadQuestionImages(test.questions);
+  const allChapterTests = getChapterPracticeTestsSync(classGrade, subject, chapterNo);
+  if (testId) {
+    const matched = allChapterTests.find((t) => t.id === testId || (t as any).testId === testId);
+    if (matched) {
+      if (Array.isArray(matched.questions)) preloadQuestionImages(matched.questions);
+      return matched;
+    }
   }
 
-  return test;
+  const baseId = buildChapterTestId(classGrade, subject, chapterNo);
+  const directMatch = memoryTestBank[baseId];
+  if (directMatch && Array.isArray(directMatch.questions) && directMatch.questions.length > 0) {
+    preloadQuestionImages(directMatch.questions);
+    return directMatch;
+  }
+
+  const firstTest = allChapterTests[0] || null;
+  if (firstTest && Array.isArray(firstTest.questions)) {
+    preloadQuestionImages(firstTest.questions);
+  }
+
+  return firstTest;
 }
 
 export function getSubjectPracticeTestSync(
@@ -1535,14 +1653,19 @@ export function getAssessmentPracticeTestSync(
   subject: string,
   chapterNo: number,
   topicName: string,
-  testType: AssessmentTestType = "TOPIC"
+  testType: AssessmentTestType = "TOPIC",
+  testId?: string
 ): TopicPracticeTest | null {
+  if (testId) {
+    const byId = getPracticeTestByIdSync(testId);
+    if (byId) return byId;
+  }
   const tType = String(testType || "TOPIC").toUpperCase();
   if (tType === "SUBJECT") {
     return getSubjectPracticeTestSync(classGrade, subject);
   }
   if (tType === "CHAPTER" || tType === "FULL_CHAPTER") {
-    return getChapterPracticeTestSync(classGrade, subject, chapterNo);
+    return getChapterPracticeTestSync(classGrade, subject, chapterNo, testId);
   }
   return getTopicPracticeTestSync(classGrade, subject, chapterNo, topicName);
 }
@@ -1551,8 +1674,12 @@ export async function getChapterPracticeTest(
   classGrade: string,
   subject: string,
   chapterNo: number,
-  options?: { publishedOnly?: boolean; forceFresh?: boolean }
+  options?: { publishedOnly?: boolean; forceFresh?: boolean },
+  testId?: string
 ): Promise<TopicPracticeTest | null> {
+  if (testId) {
+    return getPracticeTestById(testId, options);
+  }
   if (!options?.forceFresh) {
     const sync = getChapterPracticeTestSync(classGrade, subject, chapterNo);
     if (sync) return sync;
@@ -1580,14 +1707,18 @@ export async function getAssessmentPracticeTest(
   chapterNo: number,
   topicName: string,
   testType: AssessmentTestType = "TOPIC",
-  options?: { publishedOnly?: boolean; forceFresh?: boolean }
+  options?: { publishedOnly?: boolean; forceFresh?: boolean },
+  testId?: string
 ): Promise<TopicPracticeTest | null> {
+  if (testId) {
+    return getPracticeTestById(testId, options);
+  }
   const tType = String(testType || "TOPIC").toUpperCase();
   if (tType === "SUBJECT") {
     return getSubjectPracticeTest(classGrade, subject, options);
   }
   if (tType === "CHAPTER" || tType === "FULL_CHAPTER") {
-    return getChapterPracticeTest(classGrade, subject, chapterNo, options);
+    return getChapterPracticeTest(classGrade, subject, chapterNo, options, testId);
   }
   return getTopicPracticeTest(classGrade, subject, chapterNo, topicName, options);
 }
@@ -1971,6 +2102,8 @@ export function getPassagesForTopicSync(
 
 export async function saveTopicPracticeTest(
   context: {
+    id?: string;
+    testId?: string;
     classGrade: string;
     subject: string;
     chapterNo: number;
@@ -2017,18 +2150,33 @@ export async function saveTopicPracticeTest(
   const rawTestType = String(context.testType || "TOPIC").toUpperCase();
   const testType: AssessmentTestType = (rawTestType === "SUBJECT" ? "SUBJECT" : rawTestType === "CHAPTER" || rawTestType === "FULL_CHAPTER" ? "CHAPTER" : "TOPIC");
 
-  const assessmentTestId = buildAssessmentTestId(
-    context.classGrade,
-    context.subject,
-    context.chapterNo,
-    context.topicName,
-    testType
-  );
+  let assessmentTestId = (context.id || context.testId || "").trim();
+
+  if (!assessmentTestId) {
+    if (testType === "CHAPTER") {
+      const baseId = buildChapterTestId(context.classGrade, context.subject, context.chapterNo);
+      const existingTests = getChapterPracticeTestsSync(context.classGrade, context.subject, context.chapterNo);
+      if (existingTests.length > 0 || memoryTestBank[baseId]) {
+        const uniqueSuffix = Date.now().toString(36) + "_" + Math.random().toString(36).substring(2, 6);
+        assessmentTestId = `${baseId}__${uniqueSuffix}`;
+      } else {
+        assessmentTestId = baseId;
+      }
+    } else {
+      assessmentTestId = buildAssessmentTestId(
+        context.classGrade,
+        context.subject,
+        context.chapterNo,
+        context.topicName,
+        testType
+      );
+    }
+  }
 
   const fallbackTitle = testType === "SUBJECT"
     ? `${context.subject} Subject Test`
     : testType === "CHAPTER"
-      ? `${context.chapterName || `Chapter ${context.chapterNo}`} Chapter Test`
+      ? generateDefaultChapterTestTitle(context.chapterNo, context.chapterName, 1)
       : context.topicName;
 
   const canonicalNoteId = String(context.noteId || context.topicNoteId || assessmentTestId).trim();
@@ -2193,7 +2341,9 @@ export async function saveTopicPracticeTest(
   return {
     success: true,
     count: formattedQuestions.length,
-    message: `Successfully saved test with ${formattedQuestions.length} questions.`
+    message: `Successfully saved test with ${formattedQuestions.length} questions.`,
+    testId: assessmentTestId,
+    id: assessmentTestId
   };
 }
 
@@ -2260,7 +2410,8 @@ export async function deletePracticeTest(
   if ((testObj as any).docId) candidateIds.add((testObj as any).docId);
   if ((testObj as any).firestoreDocId) candidateIds.add((testObj as any).firestoreDocId);
 
-  if (classGrade && subject) {
+  // Only derive generic candidate IDs if no specific test ID was targeted
+  if (!primaryId && classGrade && subject) {
     if (rawType) {
       candidateIds.add(buildAssessmentTestId(classGrade, subject, chapterNo, topicName, rawType as any));
     }
@@ -2296,7 +2447,8 @@ export async function deletePracticeTest(
       return;
     }
 
-    if (classGrade && subject) {
+    // Only match by general metadata if no specific primaryId was supplied
+    if (!primaryId && classGrade && subject) {
       const matchClass = (t.classGrade || "").toLowerCase().trim() === classGrade.toLowerCase();
       const matchSubj = (t.subject || "").toLowerCase().trim() === subject.toLowerCase();
 
@@ -2461,9 +2613,12 @@ export async function deletePracticeTest(
 export async function deleteChapterPracticeTest(
   classGrade: string,
   subject: string,
-  chapterNo: number
+  chapterNo: number,
+  testId?: string
 ): Promise<{ success: boolean; message: string; error?: string }> {
   return deletePracticeTest({
+    id: testId,
+    testId: testId,
     classGrade,
     subject,
     chapterNo,
@@ -2789,10 +2944,14 @@ export async function reorderAssessmentQuestions(
   subject: string,
   chapterNo: number,
   topicName: string,
-  reorderedQuestions: ParsedAssessmentQuestion[]
+  reorderedQuestions: ParsedAssessmentQuestion[],
+  testIdOrSubId?: string
 ): Promise<{ success: boolean }> {
-  const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
+  let testId = testIdOrSubId;
   const bank = getLocalTestBank();
+  if (!testId || !bank[testId]) {
+    testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
+  }
   const test = bank[testId];
 
   if (test) {

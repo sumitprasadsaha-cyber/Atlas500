@@ -16,6 +16,7 @@ import { StudentUPSCGSPaper, StudentUPSCSubject, StudentUPSCModule } from "../ut
 import { 
   getTopicPracticeTestSync, 
   getChapterPracticeTestSync,
+  getChapterPracticeTestsSync,
   subscribeToPracticeTests,
   getTopicPracticeTest
 } from "../lib/practiceTestService";
@@ -33,6 +34,7 @@ interface StudentUPSCTreeProps {
   onPreviewNote: (note: ClassNote | ChapterNote) => void | Promise<any>;
   onToggleTopicCompletion?: (note: ClassNote | ChapterNote, subject: string, isCompleted: boolean) => void;
   onOpenPracticeTest?: (testTarget: {
+    testId?: string;
     classGrade: string;
     subject: string;
     chapterNo: number;
@@ -345,29 +347,17 @@ export default function StudentUPSCTree({
                 const targetSubj = subj.subject || "";
                 const chapterNo = mod.moduleNo || 1;
 
-                const chapterTest =
-                  getChapterPracticeTestSync(targetClass, targetSubj, chapterNo) ||
-                  getChapterPracticeTestSync(paper.gsPaper, targetSubj, chapterNo);
-
-                const hasChapterTest = !!(chapterTest && Array.isArray(chapterTest.questions) && chapterTest.questions.length > 0);
-
-                const chapterStats =
-                  getChapterTestStats(
-                    allAttempts,
-                    student.id,
-                    student.name,
-                    targetClass,
-                    targetSubj,
-                    chapterNo
-                  ) ||
-                  getChapterTestStats(
-                    allAttempts,
-                    student.id,
-                    student.name,
-                    paper.gsPaper,
-                    targetSubj,
-                    chapterNo
-                  );
+                const testsTarget = getChapterPracticeTestsSync(targetClass, targetSubj, chapterNo);
+                const testsPaper = getChapterPracticeTestsSync(paper.gsPaper, targetSubj, chapterNo);
+                const combinedTests = testsTarget.length > 0 ? testsTarget : testsPaper;
+                const fallbackChapterTest = combinedTests.length === 0
+                  ? (getChapterPracticeTestSync(targetClass, targetSubj, chapterNo) || getChapterPracticeTestSync(paper.gsPaper, targetSubj, chapterNo))
+                  : null;
+                const effectiveChapterTests = combinedTests.length > 0
+                  ? combinedTests
+                  : (fallbackChapterTest && Array.isArray(fallbackChapterTest.questions) && fallbackChapterTest.questions.length > 0)
+                    ? [fallbackChapterTest]
+                    : [];
 
                 return (
                   <div
@@ -389,24 +379,34 @@ export default function StudentUPSCTree({
                         </h5>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0 ml-2 self-center" onClick={(e) => e.stopPropagation()}>
-                        {hasChapterTest && (
-                          <StudentTestScoreButton
-                            stats={chapterStats}
-                            hasTest={true}
-                            topicName={`${mod.moduleTitle} Chapter Test`}
-                            onOpenTest={() => {
-                              onOpenPracticeTest?.({
-                                classGrade: targetClass,
-                                subject: targetSubj,
-                                chapterNo,
-                                chapterName: mod.moduleName,
-                                topicName: "Full Chapter Test",
-                                testType: "full_chapter",
-                              });
-                            }}
-                          />
-                        )}
+                      <div className="flex items-center gap-1.5 shrink-0 ml-2 self-center flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
+                        {effectiveChapterTests.map((t, idx) => {
+                          const stats =
+                            getChapterTestStats(allAttempts, student.id, student.name, targetClass, targetSubj, chapterNo, t.id) ||
+                            getChapterTestStats(allAttempts, student.id, student.name, paper.gsPaper, targetSubj, chapterNo, t.id);
+                          const btnLabel = effectiveChapterTests.length > 1 ? `Test ${idx + 1}` : undefined;
+                          const fullTitle = t.title || `${mod.moduleTitle} Test ${idx + 1}`;
+                          return (
+                            <StudentTestScoreButton
+                              key={t.id || `chapter-test-${idx}`}
+                              stats={stats}
+                              hasTest={true}
+                              label={btnLabel}
+                              topicName={fullTitle}
+                              onOpenTest={() => {
+                                onOpenPracticeTest?.({
+                                  testId: t.id,
+                                  classGrade: targetClass,
+                                  subject: targetSubj,
+                                  chapterNo,
+                                  chapterName: mod.moduleName,
+                                  topicName: fullTitle,
+                                  testType: "full_chapter",
+                                });
+                              }}
+                            />
+                          );
+                        })}
                         <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                           {mod.totalTopics} {mod.totalTopics === 1 ? "Topic" : "Topics"}
                         </span>

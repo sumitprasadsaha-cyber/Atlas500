@@ -12,6 +12,7 @@ interface StudentTestScoreButtonProps {
   className?: string;
   size?: "sm" | "md";
   showCustomTooltip?: boolean;
+  label?: string;
 }
 
 export default function StudentTestScoreButton({
@@ -23,6 +24,7 @@ export default function StudentTestScoreButton({
   className = "",
   size = "sm",
   showCustomTooltip = true,
+  label,
 }: StudentTestScoreButtonProps) {
   const [showTooltip, setShowTooltip] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -94,13 +96,13 @@ export default function StudentTestScoreButton({
       >
         {isAttempted && stats ? (
           <span className="font-extrabold flex items-center gap-1 tracking-tight">
-            <span>✓</span>
+            {label ? <span className="opacity-90 font-bold text-[10px] mr-0.5">{label}:</span> : <span>✓</span>}
             <span>{stats.bestScore}/{stats.totalQuestions}</span>
           </span>
         ) : (
           <>
             <FlaskConical className={`w-3.5 h-3.5 shrink-0 ${btnStyles.icon}`} />
-            <span>Test</span>
+            <span>{label || "Test"}</span>
           </>
         )}
       </button>

@@ -177,7 +177,8 @@ export function getChapterTestStats(
   studentName: string | undefined,
   classGrade: string,
   subject: string,
-  chapterNo: number
+  chapterNo: number,
+  testId?: string
 ): TopicTestStats | null {
   if (!Array.isArray(allAttempts) || allAttempts.length === 0) return null;
 
@@ -187,6 +188,13 @@ export function getChapterTestStats(
 
   const chapterAttempts = allAttempts.filter((a) => {
     if (!a) return false;
+
+    // Specific testId check if provided
+    if (testId) {
+      if (a.testId && a.testId !== testId) {
+        return false;
+      }
+    }
 
     // 1. Student identity match
     const aStudentId = cleanString(a.studentId);

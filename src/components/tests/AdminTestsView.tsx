@@ -77,12 +77,14 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
 
   // Modal states
   const [activeEditorTest, setActiveEditorTest] = useState<{
+    testId?: string;
     classGrade: string;
     subject: string;
     chapterNo?: number;
     chapterName?: string;
     topicName?: string;
     testType: AssessmentTestType;
+    isNewTest?: boolean;
   } | null>(null);
 
   const [testToDelete, setTestToDelete] = useState<TopicPracticeTest | null>(null);
@@ -346,7 +348,8 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
       chapterNo: newTestChapterNo,
       chapterName: newTestChapterName.trim() || `Chapter ${newTestChapterNo}`,
       topicName: newTestType === "SUBJECT" ? `${newTestSubject} Subject Test` : newTestType === "CHAPTER" ? `${newTestChapterName || `Chapter ${newTestChapterNo}`} Chapter Test` : (newTestTopicName.trim() || "Practice Test"),
-      testType: newTestType
+      testType: newTestType,
+      isNewTest: true
     });
   };
 
@@ -620,6 +623,7 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
                         type="button"
                         onClick={() => {
                           setActiveEditorTest({
+                            testId: test.id || (test as any).testId,
                             classGrade: test.classGrade,
                             subject: test.subject,
                             chapterNo: test.chapterNo,
@@ -1018,6 +1022,8 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
             setActiveEditorTest(null);
             loadData();
           }}
+          testId={activeEditorTest.testId}
+          isNewTest={activeEditorTest.isNewTest}
           classGrade={activeEditorTest.classGrade}
           subject={activeEditorTest.subject}
           chapterNo={activeEditorTest.chapterNo}

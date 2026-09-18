@@ -55,6 +55,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
 
   // Test Taking Modal state
   const [activeTestTarget, setActiveTestTarget] = useState<{
+    testId?: string;
     classGrade: string;
     subject: string;
     chapterNo?: number;
@@ -249,6 +250,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
   // Handle starting/taking a test
   const handleStartTest = (test: any) => {
     setActiveTestTarget({
+      testId: test.id || test.testId,
       classGrade: test.classGrade,
       subject: test.subject,
       chapterNo: test.chapterNo,
@@ -666,6 +668,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
             setActiveTestTarget(null);
             loadData();
           }}
+          testId={activeTestTarget.testId}
           studentId={student.id}
           studentName={student.name}
           classGrade={activeTestTarget.classGrade}

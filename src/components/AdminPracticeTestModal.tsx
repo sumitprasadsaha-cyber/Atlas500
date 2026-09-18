@@ -62,6 +62,8 @@ import { resolveQuestionPassage } from "../utils/passageHelper";
 interface AdminPracticeTestModalProps {
   isOpen: boolean;
   onClose: () => void;
+  testId?: string;
+  isNewTest?: boolean;
   classGrade: string;
   subject: string;
   chapterNo?: number;
@@ -82,6 +84,8 @@ export const getAssessmentQuestionTypeLabel = (type: string, isChild?: boolean |
 export default function AdminPracticeTestModal({
   isOpen,
   onClose,
+  testId,
+  isNewTest,
   classGrade,
   subject,
   chapterNo,
@@ -152,13 +156,29 @@ export default function AdminPracticeTestModal({
 
     const loadData = async () => {
       try {
+        if (isNewTest) {
+          if (isMounted) {
+            setSavedTest(null);
+            setRawText("");
+            setTestTitle("");
+            setDurationMinutes("");
+            setTotalMarks("");
+            setPassingMarks("");
+            setInstructions("");
+            setMaxAttempts("");
+            setValidationSuccess(null);
+          }
+          return;
+        }
+
         const testFromDb = await getAssessmentPracticeTest(
           classGrade,
           subject,
           effectiveChapterNo,
           effectiveTopicName,
           effectiveTestType,
-          { forceFresh: true }
+          { forceFresh: true },
+          testId
         );
         if (isMounted && testFromDb) {
           setSavedTest(testFromDb);
@@ -239,7 +259,7 @@ export default function AdminPracticeTestModal({
       isMounted = false;
       unsubscribeAttempts();
     };
-  }, [isOpen, classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType]);
+  }, [isOpen, testId, isNewTest, classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType]);
 
   const selectedTopicAttempts = useMemo(() => {
     const normClass = (classGrade || "").toLowerCase().trim();
@@ -388,8 +408,11 @@ export default function AdminPracticeTestModal({
 
     try {
       setIsSaving(true);
+      const targetId = isNewTest ? undefined : (testId || savedTest?.id);
       const res = await saveTopicPracticeTest(
         {
+          id: targetId,
+          testId: targetId,
           classGrade,
           subject,
           chapterNo: effectiveChapterNo,
@@ -415,13 +438,15 @@ export default function AdminPracticeTestModal({
 
       if (res.success) {
         // Fetch fresh questions for this Practice Test (Part C - Refresh)
+        const resultingTestId = (res as any).testId || targetId;
         const fetched = await getAssessmentPracticeTest(
           classGrade,
           subject,
           effectiveChapterNo,
           effectiveTopicName,
           effectiveTestType,
-          { forceFresh: true }
+          { forceFresh: true },
+          resultingTestId
         );
         const freshTest = fetched || {
           id: buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType),
@@ -600,8 +625,9 @@ export default function AdminPracticeTestModal({
     if (!savedTest) return;
     const newPublished = q.published === false ? true : false;
     await updateAssessmentQuestion(q.id, { published: newPublished });
-    const fresh = await getTopicPracticeTest(classGrade, subject, chapterNo, topicName, { forceFresh: true });
-    setSavedTest(fresh);
+    const targetId = testId || savedTest.id;
+    const fresh = await getAssessmentPracticeTest(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType, { forceFresh: true }, targetId);
+    if (fresh) setSavedTest(fresh);
     notifyPracticeTestChanged();
     if (onPracticeTestChanged) {
       onPracticeTestChanged();
@@ -618,9 +644,10 @@ export default function AdminPracticeTestModal({
     newQuestions[index] = newQuestions[targetIdx];
     newQuestions[targetIdx] = temp;
 
-    await reorderAssessmentQuestions(classGrade, subject, chapterNo, topicName, newQuestions);
-    const fresh = await getTopicPracticeTest(classGrade, subject, chapterNo, topicName, { forceFresh: true });
-    setSavedTest(fresh);
+    await reorderAssessmentQuestions(classGrade, subject, effectiveChapterNo, effectiveTopicName, newQuestions, savedTest.id);
+    const targetId = testId || savedTest.id;
+    const fresh = await getAssessmentPracticeTest(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType, { forceFresh: true }, targetId);
+    if (fresh) setSavedTest(fresh);
     notifyPracticeTestChanged();
     if (onPracticeTestChanged) {
       onPracticeTestChanged();
@@ -631,7 +658,7 @@ export default function AdminPracticeTestModal({
     if (!file || !savedTest) return;
     try {
       setUploadingImageQId(qId);
-      const testId = buildTopicTestId(classGrade, subject, chapterNo, topicName);
+      const testId = savedTest.id || buildTopicTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName);
       // Storage path key scoped specifically to this question ID
       const questionStorageKey = `${testId}_q_${qId}`;
       const metadata = await uploadQuestionImageToStorage(questionStorageKey, file, file.name);
@@ -644,11 +671,14 @@ export default function AdminPracticeTestModal({
 
         await saveTopicPracticeTest(
           {
+            id: savedTest.id,
+            testId: savedTest.id,
+            testType: effectiveTestType,
             classGrade,
             subject,
-            chapterNo,
-            chapterName: savedTest.chapterName || `Chapter ${chapterNo}`,
-            topicName,
+            chapterNo: effectiveChapterNo,
+            chapterName: savedTest.chapterName || `Chapter ${effectiveChapterNo}`,
+            topicName: effectiveTopicName,
             rawText: savedTest.rawText || "",
             passages: savedTest.passages,
             cases: savedTest.cases,
@@ -679,11 +709,14 @@ export default function AdminPracticeTestModal({
 
     await saveTopicPracticeTest(
       {
+        id: savedTest.id,
+        testId: savedTest.id,
+        testType: effectiveTestType,
         classGrade,
         subject,
-        chapterNo,
-        chapterName: savedTest.chapterName || `Chapter ${chapterNo}`,
-        topicName,
+        chapterNo: effectiveChapterNo,
+        chapterName: savedTest.chapterName || `Chapter ${effectiveChapterNo}`,
+        topicName: effectiveTopicName,
         rawText: savedTest.rawText || "",
         passages: savedTest.passages,
         cases: savedTest.cases,
@@ -693,7 +726,8 @@ export default function AdminPracticeTestModal({
       updatedQuestions
     );
 
-    const fresh = await getTopicPracticeTest(classGrade, subject, chapterNo, topicName, { forceFresh: true });
+    const targetId = testId || savedTest.id;
+    const fresh = await getAssessmentPracticeTest(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType, { forceFresh: true }, targetId);
     if (fresh && fresh.questions && fresh.questions.length > 0) setSavedTest(fresh);
     notifyPracticeTestChanged();
     if (onPracticeTestChanged) {
@@ -768,8 +802,9 @@ export default function AdminPracticeTestModal({
     });
 
     setEditingQuestion(null);
-    const fresh = await getTopicPracticeTest(classGrade, subject, chapterNo, topicName, { forceFresh: true });
-    setSavedTest(fresh);
+    const targetId = testId || savedTest?.id;
+    const fresh = await getAssessmentPracticeTest(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType, { forceFresh: true }, targetId);
+    if (fresh) setSavedTest(fresh);
     notifyPracticeTestChanged();
     if (onPracticeTestChanged) {
       onPracticeTestChanged();

@@ -15,6 +15,7 @@ import { StudentSchoolSubject, StudentSchoolModule } from "../utils/studentSchoo
 import { 
   getTopicPracticeTestSync, 
   getChapterPracticeTestSync,
+  getChapterPracticeTestsSync,
   subscribeToPracticeTests, 
   preloadChapterPracticeTests,
   getTopicPracticeTest
@@ -34,6 +35,7 @@ interface StudentSchoolTreeProps {
   onPreviewNote: (note: ClassNote | ChapterNote) => void | Promise<any>;
   onToggleTopicCompletion?: (note: ClassNote | ChapterNote, subject: string, isCompleted: boolean) => void;
   onOpenPracticeTest?: (testTarget: {
+    testId?: string;
     classGrade: string;
     subject: string;
     chapterNo: number;
@@ -271,9 +273,13 @@ export default function StudentSchoolTree({
                 const targetSubj = subj.subject || "";
                 const chapterNo = mod.moduleNo || 1;
 
-                const chapterTest = getChapterPracticeTestSync(targetClass, targetSubj, chapterNo);
-                const hasChapterTest = !!(chapterTest && Array.isArray(chapterTest.questions) && chapterTest.questions.length > 0);
-                const chapterStats = getChapterTestStats(allAttempts, student.id, student.name, targetClass, targetSubj, chapterNo);
+                const chapterTests = getChapterPracticeTestsSync(targetClass, targetSubj, chapterNo);
+                const fallbackChapterTest = chapterTests.length === 0 ? getChapterPracticeTestSync(targetClass, targetSubj, chapterNo) : null;
+                const effectiveChapterTests = chapterTests.length > 0
+                  ? chapterTests
+                  : (fallbackChapterTest && Array.isArray(fallbackChapterTest.questions) && fallbackChapterTest.questions.length > 0)
+                    ? [fallbackChapterTest]
+                    : [];
 
                 return (
                   <div
@@ -295,24 +301,32 @@ export default function StudentSchoolTree({
                         </h5>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0 ml-2 self-center" onClick={(e) => e.stopPropagation()}>
-                        {hasChapterTest && (
-                          <StudentTestScoreButton
-                            stats={chapterStats}
-                            hasTest={true}
-                            topicName={`${mod.moduleTitle} Chapter Test`}
-                            onOpenTest={() => {
-                              onOpenPracticeTest?.({
-                                classGrade: targetClass,
-                                subject: targetSubj,
-                                chapterNo,
-                                chapterName: mod.moduleName,
-                                topicName: "Full Chapter Test",
-                                testType: "full_chapter",
-                              });
-                            }}
-                          />
-                        )}
+                      <div className="flex items-center gap-1.5 shrink-0 ml-2 self-center flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
+                        {effectiveChapterTests.map((t, idx) => {
+                          const stats = getChapterTestStats(allAttempts, student.id, student.name, targetClass, targetSubj, chapterNo, t.id);
+                          const btnLabel = effectiveChapterTests.length > 1 ? `Test ${idx + 1}` : undefined;
+                          const fullTitle = t.title || `${mod.moduleTitle} Test ${idx + 1}`;
+                          return (
+                            <StudentTestScoreButton
+                              key={t.id || `chapter-test-${idx}`}
+                              stats={stats}
+                              hasTest={true}
+                              label={btnLabel}
+                              topicName={fullTitle}
+                              onOpenTest={() => {
+                                onOpenPracticeTest?.({
+                                  testId: t.id,
+                                  classGrade: targetClass,
+                                  subject: targetSubj,
+                                  chapterNo,
+                                  chapterName: mod.moduleName,
+                                  topicName: fullTitle,
+                                  testType: "full_chapter",
+                                });
+                              }}
+                            />
+                          );
+                        })}
                         <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                           {mod.totalTopics} {mod.totalTopics === 1 ? "Topic" : "Topics"}
                         </span>

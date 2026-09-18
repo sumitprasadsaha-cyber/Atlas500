@@ -1807,6 +1807,7 @@ export function StudentMyTab({
 
   // Practice test modal state
   const [studentTestTarget, setStudentTestTarget] = useState<{
+    testId?: string;
     classGrade: string;
     subject: string;
     chapterNo: number;
@@ -2738,6 +2739,7 @@ export function StudentMyTab({
           onClose={() => setStudentTestTarget(null)}
           studentId={localStudent.id}
           studentName={localStudent.name}
+          testId={studentTestTarget.testId}
           classGrade={studentTestTarget.classGrade}
           subject={studentTestTarget.subject}
           chapterNo={studentTestTarget.chapterNo}

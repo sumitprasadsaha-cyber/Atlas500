@@ -85,10 +85,15 @@ export function buildTopicTestId(
 export function buildChapterTestId(
   classGrade: string = "",
   subject: string = "",
-  chapterNo: number = 0
+  chapterNo: number = 0,
+  subIdOrSuffix?: string
 ): string {
   const normClass = (classGrade || "").toLowerCase().replace(/\s+/g, "_");
   const normSubj = (subject || "").toLowerCase().replace(/\s+/g, "_");
+  if (subIdOrSuffix) {
+    const normSub = String(subIdOrSuffix).toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
+    return `${normClass}__${normSubj}__ch${chapterNo}__chapter_test__${normSub}`;
+  }
   return `${normClass}__${normSubj}__ch${chapterNo}__chapter_test`;
 }
 

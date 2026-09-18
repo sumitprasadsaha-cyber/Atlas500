@@ -68,6 +68,7 @@ interface StudentPracticeTestModalProps {
   testType: AssessmentTestType;
   serviceStatus?: string;
   title?: string;
+  testId?: string;
 }
 
 export default function StudentPracticeTestModal({
@@ -82,7 +83,8 @@ export default function StudentPracticeTestModal({
   topicName,
   testType,
   serviceStatus,
-  title
+  title,
+  testId: propTestId
 }: StudentPracticeTestModalProps) {
   const normStatus = String(serviceStatus || "").toLowerCase();
 
@@ -139,10 +141,10 @@ export default function StudentPracticeTestModal({
   const resolvedChapterName = chapterName ?? "";
   const resolvedTopicName = topicName ?? "";
 
-  const testId = buildAssessmentTestId(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType);
+  const testId = propTestId || buildAssessmentTestId(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType);
 
   const [testMeta, setTestMeta] = useState<TopicPracticeTest | null>(() => {
-    return getAssessmentPracticeTestSync(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType);
+    return getAssessmentPracticeTestSync(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType, propTestId);
   });
 
   const durationMinutes = testMeta?.durationMinutes || testMeta?.duration_minutes;
@@ -214,13 +216,13 @@ export default function StudentPracticeTestModal({
     let isMounted = true;
 
     // Load fresh assessment metadata
-    const syncMeta = getAssessmentPracticeTestSync(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType);
+    const syncMeta = getAssessmentPracticeTestSync(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType, propTestId);
     if (syncMeta) {
       setTestMeta(syncMeta);
       if (syncMeta.passages) setPassages(syncMeta.passages);
       if (syncMeta.cases) setCases(syncMeta.cases);
     } else {
-      getAssessmentPracticeTest(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType)
+      getAssessmentPracticeTest(classGrade, subject, resolvedChapterNo, resolvedTopicName, resolvedAssessmentTestType, undefined, propTestId)
         .then((m) => {
           if (isMounted && m) {
             setTestMeta(m);
