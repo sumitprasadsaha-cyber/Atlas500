@@ -39,6 +39,9 @@ import {
   buildPyqTestId,
   normalizeTestCategory,
   isValidPracticeTest,
+  isClassCompatible,
+  isExactOrCanonicalSubjectMatch,
+  isSubjectMatching,
 } from "../../lib/practiceTestService";
 import { getAllTestAttempts, subscribeToTestAttempts } from "../../utils/assessmentParser";
 import { toStableClassId } from "../../lib/curriculumAccessService";
@@ -105,7 +108,7 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const bank = await fetchAllPracticeTests();
+      const bank = await fetchAllPracticeTests({ forceFresh: true });
       setTestsBank(bank || {});
       const allAtt = getAllTestAttempts();
       setAttempts(allAtt || []);
@@ -128,30 +131,43 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
     });
 
     const handleSync = () => {
-      fetchAllPracticeTests().then((bank) => {
+      fetchAllPracticeTests({ forceFresh: true }).then((bank) => {
         setTestsBank(bank || {});
       });
     };
     window.addEventListener("practice-tests-updated", handleSync);
+    window.addEventListener("managed-tests-updated", handleSync);
+    window.addEventListener("storage", handleSync);
 
     return () => {
       unsubAttempts();
       unsubBank();
       window.removeEventListener("practice-tests-updated", handleSync);
+      window.removeEventListener("managed-tests-updated", handleSync);
+      window.removeEventListener("storage", handleSync);
     };
   }, []);
 
-  // 1. Filter out deleted tests, drafts, or invalid tests from testsBank
+  // 1. Authoritative tests dataset for Admin Console (deduplicated by canonical ID, excluding only deleted tests)
   const validTests = useMemo(() => {
-    return Object.values(testsBank)
-      .filter(isValidPracticeTest)
-      .map((t) => {
-        const computedType = normalizeTestCategory(t);
-        return {
-          ...t,
-          computedType
-        };
-      });
+    const testMap = new Map<string, TopicPracticeTest>();
+    Object.values(testsBank).forEach((t) => {
+      if (!t || typeof t !== "object") return;
+      // In Admin Console, admin must see all uploaded/created tests, excluding only explicitly deleted tests
+      if (t.isDeleted === true || (t as any).deleted === true) return;
+      const canonicalKey = t.id || (t as any).testId || (t as any).docId;
+      if (canonicalKey && !testMap.has(canonicalKey)) {
+        testMap.set(canonicalKey, t);
+      }
+    });
+
+    return Array.from(testMap.values()).map((t) => {
+      const computedType = normalizeTestCategory(t);
+      return {
+        ...t,
+        computedType
+      };
+    });
   }, [testsBank]);
 
   // Compute all available subjects from notes and valid tests
@@ -201,14 +217,26 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
     return validTests.filter((t) => {
       // Class filter
       if (selectedClass !== "All") {
-        const normSelected = toStableClassId(selectedClass);
-        const normTestClass = toStableClassId(t.classGrade || "");
-        if (normSelected !== normTestClass) return false;
+        const testClass = t.classGrade || "";
+        const isClassMatch =
+          !testClass ||
+          testClass.toLowerCase() === "all" ||
+          testClass.toLowerCase() === "all classes" ||
+          toStableClassId(selectedClass) === toStableClassId(testClass) ||
+          isClassCompatible(selectedClass, testClass);
+        if (!isClassMatch) return false;
       }
 
       // Subject filter
       if (selectedSubject !== "All") {
-        if ((t.subject || "").toLowerCase().trim() !== selectedSubject.toLowerCase().trim()) return false;
+        const testSubj = (t.subject || (t as any).subjectName || "").trim();
+        const isSubjMatch =
+          !testSubj ||
+          testSubj.toLowerCase() === "all" ||
+          testSubj.toLowerCase() === "all subjects" ||
+          isExactOrCanonicalSubjectMatch(selectedSubject, testSubj) ||
+          isSubjectMatching(selectedSubject, testSubj);
+        if (!isSubjMatch) return false;
       }
 
       // Search query

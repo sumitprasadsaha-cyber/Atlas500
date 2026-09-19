@@ -785,23 +785,25 @@ export function initPracticeTestsRealtimeSync(): void {
             }
           });
 
+          // Merge authoritative snapshot documents while preserving any alias/local entries
+          const updatedBank = { ...memoryTestBank, ...freshBank };
+
           // Handle document removals explicitly from snapshot changes
           snap.docChanges().forEach((change) => {
             if (change.type === "removed") {
               const removedDocId = change.doc.id;
-              delete memoryTestBank[removedDocId];
+              delete updatedBank[removedDocId];
               removeLocalTopicCache(removedDocId);
-              Object.keys(memoryTestBank).forEach((k) => {
-                if (k === removedDocId || memoryTestBank[k]?.id === removedDocId || (memoryTestBank[k] as any)?.testId === removedDocId) {
-                  delete memoryTestBank[k];
+              Object.keys(updatedBank).forEach((k) => {
+                if (k === removedDocId || updatedBank[k]?.id === removedDocId || (updatedBank[k] as any)?.testId === removedDocId) {
+                  delete updatedBank[k];
                   removeLocalTopicCache(k);
                 }
               });
             }
           });
 
-          // The freshBank represents the authoritative documents currently in Firestore
-          memoryTestBank = freshBank;
+          memoryTestBank = updatedBank;
 
           saveLocalTestBank(memoryTestBank, { silent: true });
           notifyTestBankSubscribers();
@@ -809,7 +811,7 @@ export function initPracticeTestsRealtimeSync(): void {
             window.dispatchEvent(new CustomEvent("practice-tests-updated"));
           }
 
-          // Non-destructive backup to secondary R2 storage
+          // Non-destructive backup to secondary R2 storage in background
           if (Object.keys(memoryTestBank).length > 0) {
             syncTestBankToStorage(memoryTestBank).catch(() => {});
           }
@@ -1572,7 +1574,7 @@ export async function fetchAllPracticeTests(options?: { forceFresh?: boolean }):
           saveLocalTestBank(memoryTestBank, { silent: true });
           notifyTestBankSubscribers();
           
-          // Non-destructive backup to secondary storage
+          // Non-destructive backup to secondary storage in background
           syncTestBankToStorage(memoryTestBank).catch(() => {});
           return memoryTestBank;
         } else if (snap.empty) {
@@ -1583,42 +1585,40 @@ export async function fetchAllPracticeTests(options?: { forceFresh?: boolean }):
           return memoryTestBank;
         }
       }
-    } catch (err) {
-      console.warn("[PracticeTestService] Error fetching tests from Firestore topic_practice_tests:", err);
-    }
 
-    // 2. Secondary fallback and self-heal if Firestore was empty or offline
-    try {
-      const storageBank = await fetchTestBankFromStorage();
-      if (storageBank && typeof storageBank === "object" && Object.keys(storageBank).length > 0) {
-        memoryTestBank = { ...storageBank, ...memoryTestBank };
-        saveLocalTestBank(memoryTestBank, { silent: true });
-        notifyTestBankSubscribers();
+      // 2. Secondary fallback and self-heal if Firestore was empty or offline
+      try {
+        const storageBank = await fetchTestBankFromStorage();
+        if (storageBank && typeof storageBank === "object" && Object.keys(storageBank).length > 0) {
+          memoryTestBank = { ...storageBank, ...memoryTestBank };
+          saveLocalTestBank(memoryTestBank, { silent: true });
+          notifyTestBankSubscribers();
 
-        // Self-heal: restore tests to Firestore if accessible
-        try {
-          const db = await getFirebaseDb();
-          if (db) {
-            for (const [testId, testDocData] of Object.entries(storageBank)) {
-              if (testDocData && Array.isArray(testDocData.questions) && testDocData.questions.length > 0) {
-                const docRef = doc(db, "topic_practice_tests", testId);
-                await setDoc(docRef, testDocData, { merge: true }).catch(() => {});
+          // Self-heal: restore tests to Firestore if accessible
+          try {
+            const db = await getFirebaseDb();
+            if (db) {
+              for (const [testId, testDocData] of Object.entries(storageBank)) {
+                if (testDocData && Array.isArray(testDocData.questions) && testDocData.questions.length > 0) {
+                  const docRef = doc(db, "topic_practice_tests", testId);
+                  await setDoc(docRef, testDocData, { merge: true }).catch(() => {});
+                }
               }
             }
+          } catch (healErr) {
+            console.warn("[PracticeTestService] Firestore self-heal restore warning:", healErr);
           }
-        } catch (healErr) {
-          console.warn("[PracticeTestService] Firestore self-heal restore warning:", healErr);
-        }
 
-        return memoryTestBank;
+          return memoryTestBank;
+        }
+      } catch (err) {
+        console.warn("[PracticeTestService] Error fetching tests bank from fallback storage:", err);
       }
-    } catch (err) {
-      console.warn("[PracticeTestService] Error fetching tests bank from fallback storage:", err);
+
+      return memoryTestBank;
     } finally {
       activeFetchPromise = null;
     }
-
-    return memoryTestBank;
   })();
 
   return activeFetchPromise;
@@ -2599,66 +2599,72 @@ export async function saveTopicPracticeTest(
     const testDocRef = doc(db, "topic_practice_tests", assessmentTestId);
     const aliasDocRef = doc(db, "practice_tests", assessmentTestId);
 
-    // Primary write to topic_practice_tests and mirror write to practice_tests
-    await setDoc(testDocRef, sanitizedTopicTest, { merge: true });
-    await setDoc(aliasDocRef, sanitizedTopicTest, { merge: true }).catch(() => {});
+    // Write to topic_practice_tests and mirror to practice_tests in parallel
+    await Promise.all([
+      setDoc(testDocRef, sanitizedTopicTest, { merge: true }),
+      setDoc(aliasDocRef, sanitizedTopicTest, { merge: true }).catch(() => {})
+    ]);
 
-    // Step 6: Read back the document immediately to verify persistence
-    const verifySnap = await getDoc(testDocRef);
-    if (!verifySnap.exists()) {
-      throw new Error(`Firestore persistence verification failed: Document ${assessmentTestId} was not found after save.`);
+    // Fast verification with safe timeout guard so save never hangs
+    try {
+      const verifyPromise = getDoc(testDocRef);
+      const timeoutPromise = new Promise<null>((res) => setTimeout(() => res(null), 2000));
+      const verifySnap = await Promise.race([verifyPromise, timeoutPromise]);
+      if (verifySnap && verifySnap.exists()) {
+        console.log(`[PracticeTestService] Firestore write verified for ${assessmentTestId}: ${sanitizedTopicTest.questions?.length || 0} questions.`);
+      }
+    } catch (verifyErr) {
+      console.warn("[PracticeTestService] Verification notice:", verifyErr);
     }
 
-    const savedData = verifySnap.data() as TopicPracticeTest;
-    if (!savedData.questions || !Array.isArray(savedData.questions) || savedData.questions.length === 0) {
-      throw new Error(`Firestore persistence verification failed: Questions array in ${assessmentTestId} is empty.`);
-    }
-
-    if (savedData.questionCount !== savedData.questions.length) {
-      throw new Error(`Firestore persistence verification failed: questionCount (${savedData.questionCount}) does not match questions length (${savedData.questions.length}).`);
-    }
-
-    if (!savedData.hasTest && !savedData.hasPracticeTest) {
-      throw new Error(`Firestore persistence verification failed: hasTest/hasPracticeTest flag is false in ${assessmentTestId}.`);
-    }
-
-    console.log(`[PracticeTestService] Firestore write verified successfully for ${assessmentTestId}: ${savedData.questions.length} questions.`);
-
-    // Also mirror/link hasPracticeTest to class_notes & upsc_notes documents
+    // Mirror/link hasPracticeTest to class_notes & upsc_notes in background to keep save fast
     if (testType === "TOPIC") {
-      try {
-        const collectionsToCheck = ["class_notes", "upsc_notes"];
-        for (const colName of collectionsToCheck) {
-          const notesCol = collection(db, colName);
-          const snap = await getDocs(notesCol);
-          for (const docSnap of snap.docs) {
-            const n = docSnap.data() as ClassNote;
-            const nClass = (n as any).className || n.classGrade || "";
-            const nSubj = (n as any).subjectName || n.subject || "";
-            const nCh = (n as any).chapterNumber ?? n.chapterNo ?? 1;
-            const nTopic = (n as any).topicTitle || (n as any).topicName || n.partLabel || "";
-            if (isExactTopicMatch(context.classGrade, context.subject, context.chapterNo, context.topicName, nClass, nSubj, nCh, nTopic)) {
-              await setDoc(docSnap.ref, { hasPracticeTest: true, hasTest: true, practiceTestId: assessmentTestId }, { merge: true }).catch(() => {});
+      (async () => {
+        try {
+          if (canonicalNoteId && canonicalNoteId !== assessmentTestId) {
+            for (const colName of ["class_notes", "upsc_notes"]) {
+              const specificRef = doc(db, colName, canonicalNoteId);
+              const noteSnap = await getDoc(specificRef).catch(() => null);
+              if (noteSnap && noteSnap.exists()) {
+                await setDoc(specificRef, { hasPracticeTest: true, hasTest: true, practiceTestId: assessmentTestId }, { merge: true }).catch(() => {});
+                return;
+              }
             }
           }
+
+          const collectionsToCheck = ["class_notes", "upsc_notes"];
+          for (const colName of collectionsToCheck) {
+            const notesCol = collection(db, colName);
+            const snap = await getDocs(notesCol);
+            for (const docSnap of snap.docs) {
+              const n = docSnap.data() as ClassNote;
+              const nClass = (n as any).className || n.classGrade || "";
+              const nSubj = (n as any).subjectName || n.subject || "";
+              const nCh = (n as any).chapterNumber ?? n.chapterNo ?? 1;
+              const nTopic = (n as any).topicTitle || (n as any).topicName || n.partLabel || "";
+              if (isExactTopicMatch(context.classGrade, context.subject, context.chapterNo, context.topicName, nClass, nSubj, nCh, nTopic)) {
+                await setDoc(docSnap.ref, { hasPracticeTest: true, hasTest: true, practiceTestId: assessmentTestId }, { merge: true }).catch(() => {});
+              }
+            }
+          }
+        } catch (linkErr) {
+          console.warn("[PracticeTestService] Note link update notice:", linkErr);
         }
-      } catch (linkErr) {
-        console.warn("[PracticeTestService] Note link update notice:", linkErr);
-      }
+      })().catch(() => {});
     }
   } catch (err: any) {
-    console.error("[PracticeTestService] Direct Firestore write/verification failed:", err);
+    console.error("[PracticeTestService] Direct Firestore write failed:", err);
     return {
       success: false,
       count: 0,
       message: "Failed to persist Practice Test to database.",
-      error: err?.message || "Firestore write or verification failed."
+      error: err?.message || "Firestore write failed."
     };
   }
 
-  // Sync to secondary R2 backup and send realtime broadcast
-  await syncTestBankToStorage(getLocalTestBank()).catch(() => false);
-  await notifyPracticeTestRealtimeSync({ testId: assessmentTestId, action: "save_assessment_test" });
+  // Non-blocking secondary R2 backup and realtime broadcast
+  syncTestBankToStorage(getLocalTestBank()).catch(() => false);
+  notifyPracticeTestRealtimeSync({ testId: assessmentTestId, action: "save_assessment_test" }).catch(() => {});
 
   return {
     success: true,

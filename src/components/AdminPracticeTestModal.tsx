@@ -53,6 +53,7 @@ import {
   buildChapterTestId,
   buildSubjectTestId,
   buildAssessmentTestId,
+  getPracticeTestByIdSync,
   getNextChapterTestNumber,
   getNextSubjectTestNumber,
   generateDefaultChapterTestTitle,
@@ -403,6 +404,8 @@ export default function AdminPracticeTestModal({
   };
 
   const handleValidateAndSave = async () => {
+    if (isSaving) return; // Prevent duplicate submissions
+
     setValidationErrorMsg([]);
     setValidationSuccess(null);
 
@@ -455,19 +458,9 @@ export default function AdminPracticeTestModal({
       );
 
       if (res.success) {
-        // Fetch fresh questions for this Practice Test (Part C - Refresh)
         const resultingTestId = (res as any).testId || targetId;
-        const fetched = await getAssessmentPracticeTest(
-          classGrade,
-          subject,
-          effectiveChapterNo,
-          effectiveTopicName,
-          effectiveTestType,
-          { forceFresh: true },
-          resultingTestId
-        );
-        const freshTest = fetched || {
-          id: buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType),
+        const freshTest = (resultingTestId ? getPracticeTestByIdSync(resultingTestId) : null) || {
+          id: resultingTestId || buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType),
           classGrade,
           subject,
           chapterNo: effectiveChapterNo,
