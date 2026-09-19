@@ -456,6 +456,7 @@ export interface TopicPracticeTest {
   // Assessment System Enhancement (vNext) settings
   testType?: AssessmentTestType;
   test_type?: AssessmentTestType;
+  testNumber?: number;
   title?: string;
   totalMarks?: number;
   passingMarks?: number;

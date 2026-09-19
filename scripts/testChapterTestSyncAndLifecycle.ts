@@ -1,6 +1,6 @@
 /**
  * Comprehensive Verification: Chapter Test Syncing, Unique Test IDs,
- * Result Separation, Deletion Safety, and Student Console Access (v7.12.6)
+ * Result Separation, Deletion Safety, and Student Console Access (v7.12.7)
  */
 import { 
   buildChapterTestId, 
@@ -24,7 +24,7 @@ function assert(condition: boolean, message: string) {
 
 async function runVerification() {
   console.log("===================================================================");
-  console.log("  RELEASE 7.12.6 — CHAPTER TEST SYNCING & LIFECYCLE VERIFICATION   ");
+  console.log("  RELEASE 7.12.7 — CHAPTER TEST SYNCING & LIFECYCLE VERIFICATION   ");
   console.log("===================================================================\n");
 
   // Mock bank

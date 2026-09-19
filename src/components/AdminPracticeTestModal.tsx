@@ -52,7 +52,11 @@ import {
   buildTopicTestId,
   buildChapterTestId,
   buildSubjectTestId,
-  buildAssessmentTestId
+  buildAssessmentTestId,
+  getNextChapterTestNumber,
+  getNextSubjectTestNumber,
+  generateDefaultChapterTestTitle,
+  generateDefaultSubjectTestTitle
 } from "../lib/practiceTestService";
 import { uploadQuestionImageToStorage } from "../lib/storageService";
 import { createPracticeTestChangeHandler } from "../utils/practiceTestState";
@@ -120,11 +124,24 @@ export default function AdminPracticeTestModal({
   const [isDeleteAllConfirmOpen, setIsDeleteAllConfirmOpen] = useState(false);
   const [deleteToast, setDeleteToast] = useState<string | null>(null);
 
+  const autoTestNumber = useMemo(() => {
+    if (savedTest && typeof savedTest.testNumber === "number" && savedTest.testNumber > 0 && !isNewTest) {
+      return savedTest.testNumber;
+    }
+    if (effectiveTestType === "CHAPTER") {
+      return getNextChapterTestNumber(classGrade, subject, effectiveChapterNo, isNewTest ? undefined : (testId || savedTest?.id));
+    }
+    if (effectiveTestType === "SUBJECT") {
+      return getNextSubjectTestNumber(classGrade, subject, isNewTest ? undefined : (testId || savedTest?.id));
+    }
+    return 1;
+  }, [savedTest, isNewTest, effectiveTestType, classGrade, subject, effectiveChapterNo, testId]);
+
   const defaultTitle = useMemo(() => {
-    if (effectiveTestType === "SUBJECT") return `${subject} Subject Test`;
-    if (effectiveTestType === "CHAPTER") return `Chapter ${effectiveChapterNo}: ${effectiveChapterName || "Chapter"} Test`;
+    if (effectiveTestType === "SUBJECT") return generateDefaultSubjectTestTitle(subject, autoTestNumber);
+    if (effectiveTestType === "CHAPTER") return generateDefaultChapterTestTitle(effectiveChapterNo, effectiveChapterName, autoTestNumber);
     return effectiveTopicName || "Topic Test";
-  }, [effectiveTestType, subject, effectiveChapterNo, effectiveChapterName, effectiveTopicName]);
+  }, [effectiveTestType, subject, effectiveChapterNo, effectiveChapterName, effectiveTopicName, autoTestNumber]);
 
   // Single Question Edit Modal state
   const [editingQuestion, setEditingQuestion] = useState<ParsedAssessmentQuestion | null>(null);
@@ -422,6 +439,7 @@ export default function AdminPracticeTestModal({
           noteId,
           topicNoteId,
           testType: effectiveTestType,
+          testNumber: autoTestNumber,
           title: testTitle.trim() || defaultTitle,
           durationMinutes: durationMinutes !== "" ? Number(durationMinutes) : undefined,
           totalMarks: totalMarks !== "" ? Number(totalMarks) : undefined,

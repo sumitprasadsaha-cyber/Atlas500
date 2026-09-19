@@ -140,6 +140,174 @@ export function generateDefaultChapterTestTitle(
   return `${baseTitle} Test ${testIndex}`;
 }
 
+/**
+ * Dynamically generates a clean default title for a subject test.
+ * Example:
+ * Economics Test 1
+ * Economics Test 2
+ * Mathematics Test 1
+ */
+export function generateDefaultSubjectTestTitle(
+  subject: string,
+  testIndex: number = 1
+): string {
+  const cleanSubj = (subject || "")
+    .replace(/[\s\:\-\—\–]+Subject[\s\:\-\—\–]+Test$/i, "")
+    .replace(/[\s\:\-\—\–]+Test$/i, "")
+    .trim();
+  const baseTitle = cleanSubj || "Subject";
+  return `${baseTitle} Test ${testIndex}`;
+}
+
+/**
+ * Returns all currently assigned test numbers for a specific chapter.
+ */
+export function getExistingChapterTestNumbers(
+  classGrade: string,
+  subject: string,
+  chapterNo: number,
+  excludeTestId?: string
+): number[] {
+  const allTests = Object.values(memoryTestBank);
+  const ch = Number(chapterNo) || 1;
+  const numbers = new Set<number>();
+
+  allTests.forEach((t) => {
+    if (!t) return;
+    if (t.isDeleted || (t as any).deleted) return;
+    const testId = t.id || (t as any).testId;
+    if (excludeTestId && (testId === excludeTestId || t.id === excludeTestId)) return;
+
+    const tType = normalizeTestCategory(t);
+    if (tType !== "CHAPTER") return;
+
+    const tCh = Number(t.chapterNo) || 1;
+    if (tCh !== ch) return;
+    if (!isSubjectCompatible(subject, t.subject || "")) return;
+    if (!isClassCompatible(classGrade, t.classGrade || "")) return;
+
+    if (typeof t.testNumber === "number" && t.testNumber > 0) {
+      numbers.add(t.testNumber);
+      return;
+    }
+
+    const titleMatch = (t.title || "").match(/\bTest\s*(\d+)\b/i);
+    if (titleMatch) {
+      const num = parseInt(titleMatch[1], 10);
+      if (num > 0) {
+        numbers.add(num);
+        return;
+      }
+    }
+
+    const idMatch = (t.id || "").match(/__test(\d+)_/i);
+    if (idMatch) {
+      const num = parseInt(idMatch[1], 10);
+      if (num > 0) {
+        numbers.add(num);
+        return;
+      }
+    }
+
+    const baseId = buildChapterTestId(classGrade, subject, chapterNo);
+    if (t.id === baseId || (t as any).testId === baseId) {
+      numbers.add(1);
+    }
+  });
+
+  return Array.from(numbers).sort((a, b) => a - b);
+}
+
+/**
+ * Calculates the next available test number for a chapter.
+ * Fills lowest available slot without colliding, avoiding duplicate numbers.
+ */
+export function getNextChapterTestNumber(
+  classGrade: string,
+  subject: string,
+  chapterNo: number,
+  excludeTestId?: string
+): number {
+  const existing = getExistingChapterTestNumbers(classGrade, subject, chapterNo, excludeTestId);
+  let nextNum = 1;
+  while (existing.includes(nextNum)) {
+    nextNum++;
+  }
+  return nextNum;
+}
+
+/**
+ * Returns all currently assigned test numbers for a specific subject.
+ */
+export function getExistingSubjectTestNumbers(
+  classGrade: string,
+  subject: string,
+  excludeTestId?: string
+): number[] {
+  const allTests = Object.values(memoryTestBank);
+  const numbers = new Set<number>();
+
+  allTests.forEach((t) => {
+    if (!t) return;
+    if (t.isDeleted || (t as any).deleted) return;
+    const testId = t.id || (t as any).testId;
+    if (excludeTestId && (testId === excludeTestId || t.id === excludeTestId)) return;
+
+    const tType = normalizeTestCategory(t);
+    if (tType !== "SUBJECT") return;
+
+    if (!isSubjectCompatible(subject, t.subject || "")) return;
+    if (!isClassCompatible(classGrade, t.classGrade || "")) return;
+
+    if (typeof t.testNumber === "number" && t.testNumber > 0) {
+      numbers.add(t.testNumber);
+      return;
+    }
+
+    const titleMatch = (t.title || "").match(/\bTest\s*(\d+)\b/i);
+    if (titleMatch) {
+      const num = parseInt(titleMatch[1], 10);
+      if (num > 0) {
+        numbers.add(num);
+        return;
+      }
+    }
+
+    const idMatch = (t.id || "").match(/__test(\d+)_/i);
+    if (idMatch) {
+      const num = parseInt(idMatch[1], 10);
+      if (num > 0) {
+        numbers.add(num);
+        return;
+      }
+    }
+
+    const baseId = buildSubjectTestId(classGrade, subject);
+    if (t.id === baseId || (t as any).testId === baseId) {
+      numbers.add(1);
+    }
+  });
+
+  return Array.from(numbers).sort((a, b) => a - b);
+}
+
+/**
+ * Calculates the next available test number for a subject.
+ * Numbers remain independent per subject (e.g. Mathematics Test 1 independent of Economics Test 1).
+ */
+export function getNextSubjectTestNumber(
+  classGrade: string,
+  subject: string,
+  excludeTestId?: string
+): number {
+  const existing = getExistingSubjectTestNumbers(classGrade, subject, excludeTestId);
+  let nextNum = 1;
+  while (existing.includes(nextNum)) {
+    nextNum++;
+  }
+  return nextNum;
+}
+
 export function buildSubjectTestId(
   classGrade: string = "",
   subject: string = ""
@@ -1707,6 +1875,33 @@ export function getChapterPracticeTestSync(
   return firstTest;
 }
 
+export function getSubjectPracticeTestsSync(
+  classGrade: string,
+  subject: string
+): TopicPracticeTest[] {
+  const allBankTests = Object.values(memoryTestBank);
+  const matches = allBankTests.filter((t) => {
+    if (!t) return false;
+    if (t.isPublished === false || (t as any).published === false) return false;
+    if ((t as any).isDeleted || (t as any).deleted) return false;
+    if (!Array.isArray(t.questions) || t.questions.length === 0) return false;
+
+    const tType = normalizeTestCategory(t);
+    if (tType !== "SUBJECT") return false;
+    if (!isSubjectCompatible(subject, t.subject || "")) return false;
+    return isClassCompatible(classGrade, t.classGrade || "");
+  });
+
+  return matches.sort((a, b) => {
+    const numA = typeof a.testNumber === "number" && a.testNumber > 0 ? a.testNumber : (a.title?.match(/\bTest\s*(\d+)\b/i)?.[1] ? parseInt(a.title.match(/\bTest\s*(\d+)\b/i)![1], 10) : 1);
+    const numB = typeof b.testNumber === "number" && b.testNumber > 0 ? b.testNumber : (b.title?.match(/\bTest\s*(\d+)\b/i)?.[1] ? parseInt(b.title.match(/\bTest\s*(\d+)\b/i)![1], 10) : 1);
+    if (numA !== numB) return numA - numB;
+    const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return tA - tB;
+  });
+}
+
 export function getSubjectPracticeTestSync(
   classGrade: string,
   subject: string
@@ -2213,6 +2408,7 @@ export async function saveTopicPracticeTest(
     noteId?: string;
     topicNoteId?: string;
     testType?: AssessmentTestType;
+    testNumber?: number;
     title?: string;
     totalMarks?: number;
     passingMarks?: number;
@@ -2252,12 +2448,43 @@ export async function saveTopicPracticeTest(
 
   let assessmentTestId = (context.id || context.testId || "").trim();
 
+  let assignedTestNumber: number | undefined = context.testNumber;
+
+  if (testType === "CHAPTER") {
+    if (!assignedTestNumber) {
+      const existingDoc = assessmentTestId ? memoryTestBank[assessmentTestId] : null;
+      if (existingDoc && typeof existingDoc.testNumber === "number" && existingDoc.testNumber > 0) {
+        assignedTestNumber = existingDoc.testNumber;
+      } else {
+        assignedTestNumber = getNextChapterTestNumber(context.classGrade, context.subject, context.chapterNo, assessmentTestId || undefined);
+      }
+    }
+  } else if (testType === "SUBJECT") {
+    if (!assignedTestNumber) {
+      const existingDoc = assessmentTestId ? memoryTestBank[assessmentTestId] : null;
+      if (existingDoc && typeof existingDoc.testNumber === "number" && existingDoc.testNumber > 0) {
+        assignedTestNumber = existingDoc.testNumber;
+      } else {
+        assignedTestNumber = getNextSubjectTestNumber(context.classGrade, context.subject, assessmentTestId || undefined);
+      }
+    }
+  }
+
   if (!assessmentTestId) {
     if (testType === "CHAPTER") {
       const baseId = buildChapterTestId(context.classGrade, context.subject, context.chapterNo);
       const existingTests = getChapterPracticeTestsSync(context.classGrade, context.subject, context.chapterNo);
       if (existingTests.length > 0 || memoryTestBank[baseId]) {
-        const uniqueSuffix = Date.now().toString(36) + "_" + Math.random().toString(36).substring(2, 6);
+        const uniqueSuffix = `test${assignedTestNumber || 2}_` + Date.now().toString(36) + "_" + Math.random().toString(36).substring(2, 6);
+        assessmentTestId = `${baseId}__${uniqueSuffix}`;
+      } else {
+        assessmentTestId = baseId;
+      }
+    } else if (testType === "SUBJECT") {
+      const baseId = buildSubjectTestId(context.classGrade, context.subject);
+      const existingTests = getSubjectPracticeTestsSync(context.classGrade, context.subject);
+      if (existingTests.length > 0 || memoryTestBank[baseId]) {
+        const uniqueSuffix = `test${assignedTestNumber || 2}_` + Date.now().toString(36) + "_" + Math.random().toString(36).substring(2, 6);
         assessmentTestId = `${baseId}__${uniqueSuffix}`;
       } else {
         assessmentTestId = baseId;
@@ -2274,9 +2501,9 @@ export async function saveTopicPracticeTest(
   }
 
   const fallbackTitle = testType === "SUBJECT"
-    ? `${context.subject} Subject Test`
+    ? generateDefaultSubjectTestTitle(context.subject, assignedTestNumber || 1)
     : testType === "CHAPTER"
-      ? generateDefaultChapterTestTitle(context.chapterNo, context.chapterName, 1)
+      ? generateDefaultChapterTestTitle(context.chapterNo, context.chapterName, assignedTestNumber || 1)
       : context.topicName;
 
   const canonicalNoteId = String(context.noteId || context.topicNoteId || assessmentTestId).trim();
@@ -2310,6 +2537,7 @@ export async function saveTopicPracticeTest(
     hasPracticeTest: true,
     testType: testType,
     test_type: testType,
+    testNumber: assignedTestNumber,
     title: context.title ? String(context.title).trim() : fallbackTitle,
     totalMarks: effectiveTotalMarks,
     passingMarks: context.passingMarks !== undefined && context.passingMarks !== null && !isNaN(Number(context.passingMarks)) ? Number(context.passingMarks) : undefined,
