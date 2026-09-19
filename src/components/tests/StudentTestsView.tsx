@@ -33,6 +33,7 @@ import {
   isStudentPermittedToAccessTest,
   isClassCompatible,
   isSubjectCompatible,
+  isExactOrCanonicalSubjectMatch,
   isSubjectMatching
 } from "../../lib/practiceTestService";
 import { getAllTestAttempts, subscribeToTestAttempts } from "../../utils/assessmentParser";
@@ -141,49 +142,29 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
     return Array.from(new Set([norm, ...granted]));
   }, [studentClass]);
 
-  // Compute student's enrolled subjects
+  // Compute student's enrolled subjects strictly from authenticated student's enrollment data
   const studentSubjects = useMemo(() => {
-    const subs = new Set<string>();
+    const rawEnrolled = (student.enrolledSubjects || []).filter(
+      (s) => typeof s === "string" && s.trim().length > 0
+    );
 
-    // 1. Student's explicitly enrolled subjects
-    (student.enrolledSubjects || []).forEach((s) => {
-      if (typeof s === "string" && s.trim().length > 0) {
-        subs.add(s.trim());
-      }
-    });
-
-    // 2. Also collect subjects from available tests matching student's class
-    Object.values(testsBank).forEach((t) => {
-      if (
-        t &&
-        (isClassCompatible(studentClass, t.classGrade) ||
-          allowedClasses.includes(toStableClassId(t.classGrade || "")))
-      ) {
-        const s = t.subject || (t as any).subjectName;
-        if (s && typeof s === "string" && s.trim().length > 0) {
-          subs.add(s.trim());
+    if (rawEnrolled.length > 0) {
+      // Deduplicate while preserving clean display names
+      const seen = new Set<string>();
+      const result: string[] = [];
+      rawEnrolled.forEach((s) => {
+        const clean = s.trim();
+        const normKey = clean.toLowerCase();
+        if (!seen.has(normKey)) {
+          seen.add(normKey);
+          result.push(clean);
         }
-      }
-    });
+      });
+      return result.sort((a, b) => a.localeCompare(b));
+    }
 
-    // 3. Also collect subjects from notes matching student's class
-    const normStudentClass = toStableClassId(studentClass);
-    notes.forEach((n) => {
-      const nClass = toStableClassId(n.classGrade || (n as any).className || "");
-      if (
-        allowedClasses.includes(nClass) ||
-        nClass === normStudentClass ||
-        isClassCompatible(studentClass, n.classGrade)
-      ) {
-        const s = n.subject || (n as any).subjectName;
-        if (s && typeof s === "string" && s.trim().length > 0) {
-          subs.add(s.trim());
-        }
-      }
-    });
-
-    return Array.from(subs).sort();
-  }, [student, notes, allowedClasses, studentClass, testsBank]);
+    return [];
+  }, [student.enrolledSubjects]);
 
   // Filter test bank for this student
   const filteredTests = useMemo(() => {
@@ -268,11 +249,28 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
         return false;
       }
 
+      // 2b. Strict Enrolled Subjects Rule:
+      // A student must NEVER see a test belonging to a subject in which they are not enrolled.
+      const rawEnrolled = (student.enrolledSubjects || []).filter(
+        (s) => typeof s === "string" && s.trim().length > 0
+      );
+      if (rawEnrolled.length > 0) {
+        const testSubj = (t.subject || (t as any).subjectName || "").trim();
+        const isEnrolledInTestSubj = rawEnrolled.some((enrolled) =>
+          isExactOrCanonicalSubjectMatch(enrolled, testSubj) ||
+          isSubjectMatching(enrolled, testSubj)
+        );
+        if (!isEnrolledInTestSubj) {
+          return false;
+        }
+      }
+
       // 3. Subject filter if specific subject selected
       if (selectedSubject !== "All") {
+        const testSubj = (t.subject || (t as any).subjectName || "").trim();
         if (
-          !isSubjectCompatible(selectedSubject, t.subject || "") &&
-          !isSubjectMatching(selectedSubject, t.subject || "")
+          !isExactOrCanonicalSubjectMatch(selectedSubject, testSubj) &&
+          !isSubjectMatching(selectedSubject, testSubj)
         ) {
           return false;
         }
@@ -461,7 +459,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
       .filter(
         (t) =>
           t.computedType === "CHAPTER" &&
-          (isSubjectCompatible(selectedChapterGroup.subject, t.subject || "") ||
+          (isExactOrCanonicalSubjectMatch(selectedChapterGroup.subject, t.subject || "") ||
             isSubjectMatching(selectedChapterGroup.subject, t.subject || "")) &&
           Number(t.chapterNo) === Number(selectedChapterGroup.chapterNo)
       )
@@ -484,7 +482,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
       .filter(
         (t) =>
           t.computedType === "SUBJECT" &&
-          (isSubjectCompatible(selectedSubjectGroup.subject, t.subject || "") ||
+          (isExactOrCanonicalSubjectMatch(selectedSubjectGroup.subject, t.subject || "") ||
             isSubjectMatching(selectedSubjectGroup.subject, t.subject || ""))
       )
       .sort((a, b) => {
@@ -723,10 +721,10 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                 const newSubj = e.target.value;
                 setSelectedSubject(newSubj);
                 if (newSubj !== "All") {
-                  if (selectedChapterGroup && !isSubjectCompatible(newSubj, selectedChapterGroup.subject) && !isSubjectMatching(newSubj, selectedChapterGroup.subject)) {
+                  if (selectedChapterGroup && !isExactOrCanonicalSubjectMatch(newSubj, selectedChapterGroup.subject) && !isSubjectMatching(newSubj, selectedChapterGroup.subject)) {
                     setSelectedChapterGroup(null);
                   }
-                  if (selectedSubjectGroup && !isSubjectCompatible(newSubj, selectedSubjectGroup.subject) && !isSubjectMatching(newSubj, selectedSubjectGroup.subject)) {
+                  if (selectedSubjectGroup && !isExactOrCanonicalSubjectMatch(newSubj, selectedSubjectGroup.subject) && !isSubjectMatching(newSubj, selectedSubjectGroup.subject)) {
                     setSelectedSubjectGroup(null);
                   }
                 }

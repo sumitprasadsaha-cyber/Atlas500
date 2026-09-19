@@ -578,21 +578,22 @@ export function isStudentPermittedToAccessTest(
   );
   if (rawEnrolled.length > 0) {
     const testSubj = (test.subject || (test as any).subjectName || "").trim();
-    if (testSubj) {
-      const testPaper = canonicalGSPaperName(testClass) || inferGSPaperFromSubject(testSubj);
-      const enrolledMatch = rawEnrolled.some((enrolled) => {
-        const cleanE = enrolled.trim();
-        if (cleanE.toLowerCase() === testSubj.toLowerCase()) return true;
-        if (isSubjectMatching(cleanE, testSubj)) return true;
-        if (isSubjectCompatible(cleanE, testSubj)) return true;
-        if (testClass && isSubjectMatching(cleanE, testClass)) return true;
-        if (testPaper && isSubjectMatching(cleanE, testPaper)) return true;
-        return false;
-      });
+    if (!testSubj) {
+      return false;
+    }
+    const testPaper = canonicalGSPaperName(testClass) || inferGSPaperFromSubject(testSubj);
+    const enrolledMatch = rawEnrolled.some((enrolled) => {
+      const cleanE = enrolled.trim();
+      if (cleanE.toLowerCase() === testSubj.toLowerCase()) return true;
+      if (isExactOrCanonicalSubjectMatch(cleanE, testSubj)) return true;
+      if (isSubjectMatching(cleanE, testSubj)) return true;
+      if (testClass && isSubjectMatching(cleanE, testClass)) return true;
+      if (testPaper && isSubjectMatching(cleanE, testPaper)) return true;
+      return false;
+    });
 
-      if (!enrolledMatch) {
-        return false;
-      }
+    if (!enrolledMatch) {
+      return false;
     }
   }
 
@@ -890,115 +891,107 @@ export function isClassCompatible(class1?: string, class2?: string): boolean {
   return toStableClassId(class1) === toStableClassId(class2);
 }
 
-export function isSubjectCompatible(subj1: string, subj2: string): boolean {
-  const s1 = String(subj1 || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const s2 = String(subj2 || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (!s1 || !s2) return true;
-  if (s1 === s2) return true;
-  if (s1.includes(s2) || s2.includes(s1)) return true;
+/**
+ * Strict Subject Identity Matching:
+ * Evaluates whether two subject names represent the exact same subject.
+ * Guarantees zero cross-subject bleeding (e.g. Economics tests never match Geography,
+ * History, Mathematics, Civics, or any other subject).
+ */
+export function isExactOrCanonicalSubjectMatch(subj1?: string, subj2?: string): boolean {
+  if (!subj1 || !subj2) return false;
+  const raw1 = String(subj1).trim().toLowerCase();
+  const raw2 = String(subj2).trim().toLowerCase();
+  if (raw1 === raw2) return true;
 
-  const polityAliases = [
-    "polity", "indianpolity", "constitution", "governance", "indianconstitution",
-    "indianpolityandgovernance", "politygovernance", "constitutionofindia"
-  ];
-  if (polityAliases.some((a) => s1.includes(a)) && polityAliases.some((a) => s2.includes(a))) return true;
-
-  const historyAliases = [
-    "history", "modernhistory", "ancienthistory", "medievalhistory", "indianhistory",
-    "artandculture", "culture", "heritage"
-  ];
-  if (historyAliases.some((a) => s1.includes(a)) && historyAliases.some((a) => s2.includes(a))) return true;
-
-  const geoAliases = [
-    "geography", "indiangeography", "worldgeography", "physicalgeography", "humanandphysicalgeography"
-  ];
-  if (geoAliases.some((a) => s1.includes(a)) && geoAliases.some((a) => s2.includes(a))) return true;
-
-  const ecoAliases = [
-    "economy", "indianeconomy", "economics", "economicdevelopment", "understandingeconomicdevelopment"
-  ];
-  if (ecoAliases.some((a) => s1.includes(a)) && ecoAliases.some((a) => s2.includes(a))) return true;
-
-  const ethicsAliases = [
-    "ethics", "integrity", "aptitude", "ethicsintegrityandaptitude"
-  ];
-  if (ethicsAliases.some((a) => s1.includes(a)) && ethicsAliases.some((a) => s2.includes(a))) return true;
-
-  const envAliases = [
-    "environment", "ecology", "environmentandecology", "biodiversity", "climatechange"
-  ];
-  if (envAliases.some((a) => s1.includes(a)) && envAliases.some((a) => s2.includes(a))) return true;
-
-  const irAliases = [
-    "internationalrelations", "ir", "bilateralrelations", "globalaffairs"
-  ];
-  if (irAliases.some((a) => s1.includes(a)) && irAliases.some((a) => s2.includes(a))) return true;
-
-  const secAliases = [
-    "internalsecurity", "security", "disastermanagement"
-  ];
-  if (secAliases.some((a) => s1.includes(a)) && secAliases.some((a) => s2.includes(a))) return true;
-
-  const sstAliases = [
-    "socialscience", "sst", "socialstudies", "social",
-    "geography", "history", "politicalscience", "civics",
-    "economics", "indianheritageandculture", "contemporaryindia",
-    "democraticpolitics", "understandingeconomicdevelopment", "indiaandthecontemporaryworld"
-  ];
-  if (
-    sstAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
-    sstAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
-  ) {
+  if (raw1 === "all" || raw1 === "all subjects" || raw2 === "all" || raw2 === "all subjects") {
     return true;
   }
 
-  const scienceAliases = [
-    "science", "sci", "physics", "chemistry", "biology",
-    "lifescience", "physicalscience", "generalscience", "natsci", "naturalscience"
+  // Strip all non-alphanumeric characters for clean key matching
+  const k1 = raw1.replace(/[^a-z0-9]/g, "");
+  const k2 = raw2.replace(/[^a-z0-9]/g, "");
+  if (!k1 || !k2) return false;
+  if (k1 === k2) return true;
+
+  // Strict Canonical Clusters: If a key belongs to cluster X, it MUST ONLY match keys in cluster X.
+  const clusters: string[][] = [
+    // Economics cluster (e.g. NCERT Class 10 Economics is titled "Understanding Economic Development")
+    ["economics", "economy", "indianeconomy", "eco", "understandingeconomicdevelopment", "economicdevelopment"],
+
+    // Geography cluster (e.g. NCERT Class 10 Geography is titled "Contemporary India")
+    ["geography", "indiangeography", "worldgeography", "physicalgeography", "humanandphysicalgeography", "geo", "contemporaryindia", "contemporaryindiai", "contemporaryindiaii"],
+
+    // History cluster (e.g. NCERT Class 10 History is titled "India and the Contemporary World")
+    ["history", "indianhistory", "ancienthistory", "medievalhistory", "modernhistory", "hist", "worldhistory", "indiaandthecontemporaryworld", "indiaandthecontemporaryworldi", "indiaandthecontemporaryworldii"],
+
+    // Political Science / Civics cluster (e.g. NCERT Class 10 Civics is titled "Democratic Politics")
+    ["polity", "politicalscience", "civics", "indianpolity", "governance", "constitution", "democraticpolitics", "democraticpoliticsi", "democraticpoliticsii", "polityandgovernance", "politygovernance", "constitutionofindia"],
+
+    // Mathematics cluster
+    ["math", "maths", "mathematics", "appliedmaths", "appliedmathematics", "basicmaths", "standardmaths", "highermaths", "generalmaths", "algebra", "geometry"],
+
+    // Physics cluster
+    ["physics", "phy"],
+
+    // Chemistry cluster
+    ["chemistry", "chem"],
+
+    // Biology cluster
+    ["biology", "bio", "lifescience", "lifesciences"],
+
+    // General Science cluster (only pure general science, never physics/chemistry/biology)
+    ["science", "sci", "generalscience", "naturalscience", "natsci"],
+
+    // General Social Science cluster (only generic social science, never geography/economics/history)
+    ["socialscience", "sst", "socialstudies", "social"],
+
+    // English cluster
+    ["english", "englishlanguage", "englishliterature", "eng", "firstlanguageenglish", "secondlanguageenglish", "englishcommunicative", "englishgrammar", "englishgrammer"],
+
+    // Hindi cluster
+    ["hindi", "hindicoursea", "hindicourseb", "hindilit", "hindilang", "hindiliterature"],
+
+    // Environment & Ecology
+    ["environment", "ecology", "environmentandecology", "biodiversity", "climatechange", "env"],
+
+    // Science & Tech
+    ["sciencetechnology", "scienceandtechnology", "sciencetech", "scitech", "st"],
+
+    // International Relations
+    ["internationalrelations", "ir", "bilateralrelations", "globalaffairs", "internationalaffairs"],
+
+    // Ethics
+    ["ethics", "ethicsintegrity", "ethicsintegrityaptitude", "ethicsandintegrity", "integrity", "aptitude"],
+
+    // Security & Disaster Management
+    ["internalsecurity", "security", "disastermanagement"],
+
+    // Current Affairs
+    ["currentaffairs", "dailycurrentaffairs", "currentissues", "ca"],
+
+    // CSAT
+    ["csat", "generalmentalability", "paper2"],
+
+    // Art & Culture / Heritage
+    ["artandculture", "culture", "indianheritageandculture", "heritage"],
+
+    // Bengali
+    ["bengali", "bangla", "bengaliliterature", "bengalilanguage"]
   ];
-  if (
-    scienceAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
-    scienceAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
-  ) {
-    return true;
-  }
 
-  const mathAliases = [
-    "math", "maths", "mathematics", "appliedmaths", "basicmaths",
-    "standardmaths", "highermaths", "generalmaths", "algebra", "geometry"
-  ];
-  if (
-    mathAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
-    mathAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
-  ) {
-    return true;
-  }
-
-  const engAliases = ["english", "englishlanguage", "englishliterature", "eng", "firstlanguageenglish", "secondlanguageenglish", "englishcommunicative"];
-  if (
-    engAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
-    engAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
-  ) {
-    return true;
-  }
-
-  const hindiAliases = ["hindi", "hindicoursea", "hindicourseb", "hindilit", "hindilang"];
-  if (
-    hindiAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
-    hindiAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
-  ) {
-    return true;
-  }
-
-  const bengaliAliases = ["bengali", "bangla", "bengaliliterature", "bengalilanguage"];
-  if (
-    bengaliAliases.some((a) => s1 === a || s1.includes(a) || a.includes(s1)) &&
-    bengaliAliases.some((a) => s2 === a || s2.includes(a) || a.includes(s2))
-  ) {
-    return true;
+  for (const cluster of clusters) {
+    const inCluster1 = cluster.includes(k1);
+    const inCluster2 = cluster.includes(k2);
+    if (inCluster1 || inCluster2) {
+      return inCluster1 && inCluster2;
+    }
   }
 
   return false;
+}
+
+export function isSubjectCompatible(subj1: string, subj2: string): boolean {
+  return isExactOrCanonicalSubjectMatch(subj1, subj2);
 }
 
 function normalizeGradeNumber(gradeStr: string): number | null {

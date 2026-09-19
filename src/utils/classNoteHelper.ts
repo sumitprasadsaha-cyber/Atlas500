@@ -392,13 +392,6 @@ export function getStudentSubjects(student: Student, allClassNotes: ClassNote[] 
           subjectsSet.add(sub.trim());
         }
       });
-      // Automatically include all permitted accessible subjects granted to student's class
-      const accessibleSubjs = getAccessibleSubjectsForClass(studentClass, schoolHierarchy, allClassNotes);
-      accessibleSubjs.forEach((sub) => {
-        if (!removed.includes(sub)) {
-          subjectsSet.add(sub);
-        }
-      });
     } else {
       // Automatically include all accessible subjects under student's class from Admin hierarchy & access rules!
       const accessibleSubjs = getAccessibleSubjectsForClass(studentClass, schoolHierarchy, allClassNotes);
