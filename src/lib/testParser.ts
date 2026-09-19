@@ -1080,6 +1080,7 @@ export function parseChapterTest(
         }
       } else if (activeCandidate && activeCandidate.lines.length > 0) {
         activeCandidate.lines.push("");
+        activeCandidate.rawBlockLines.push(rawLine);
       }
       continue;
     }
@@ -1408,22 +1409,25 @@ export function parseChapterTest(
       return;
     }
 
-    // Extract Answer line
+    // Extract Answer line directly from candidate.lines so that intentional paragraph breaks are preserved
     let explicitAnswer = "";
     const remainingLines: string[] = [];
     let isReadingMultiLineAnswer = false;
     const answerParts: string[] = [];
 
-    cleanLines.forEach((l) => {
-      const caMatch = l.match(/^(?:Correct\s*)?Ans(?:wer)?\s*[:\-]\s*(.*)$/i);
+    candidate.lines.forEach((l) => {
+      const trimmed = l.trim();
+      if (trimmed && isDivider(trimmed)) return;
+
+      const caMatch = trimmed.match(/^(?:Correct\s*)?Ans(?:wer)?\s*[:\-]\s*(.*)$/i);
       if (caMatch) {
         isReadingMultiLineAnswer = true;
         const inlineAns = caMatch[1].trim();
         if (inlineAns) answerParts.push(inlineAns);
       } else if (isReadingMultiLineAnswer) {
-        answerParts.push(l);
-      } else {
-        remainingLines.push(l);
+        answerParts.push(trimmed);
+      } else if (trimmed.length > 0) {
+        remainingLines.push(trimmed);
       }
     });
 

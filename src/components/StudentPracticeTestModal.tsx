@@ -55,6 +55,24 @@ import {
 } from "../lib/testSessionManager";
 import { testDiagnostics } from "../lib/testDiagnostics";
 
+const formatCorrectAnswerForDisplay = (val: unknown): string => {
+  if (val === null || val === undefined) return "";
+  let str = String(val);
+
+  if (/<(?:br|p|div|li)\b[^>]*>/i.test(str)) {
+    str = str
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n\n")
+      .replace(/<\/div>/gi, "\n")
+      .replace(/<li[^>]*>/gi, "• ")
+      .replace(/<\/li>/gi, "\n")
+      .replace(/<[^>]+>/g, "");
+  }
+
+  str = str.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return str.trim();
+};
+
 interface StudentPracticeTestModalProps {
   isOpen?: boolean;
   onClose: () => void;
@@ -1414,9 +1432,22 @@ export default function StudentPracticeTestModal({
                           </div>
 
                           {q.correctAnswer && (
-                            <div>
-                              <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Correct Answer / Key: </span>
-                              <span className="font-bold text-emerald-800 dark:text-emerald-200">{q.correctAnswer}</span>
+                            <div className="text-xs">
+                              {formatCorrectAnswerForDisplay(q.correctAnswer).includes("\n") ? (
+                                <div>
+                                  <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Correct Answer / Key:</span>
+                                  <div className="mt-1 font-bold text-emerald-800 dark:text-emerald-200 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
+                                    {formatCorrectAnswerForDisplay(q.correctAnswer)}
+                                  </div>
+                                </div>
+                              ) : (
+                                <p className="break-words [overflow-wrap:anywhere] leading-relaxed">
+                                  <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Correct Answer / Key: </span>
+                                  <span className="font-bold text-emerald-800 dark:text-emerald-200 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                                    {formatCorrectAnswerForDisplay(q.correctAnswer)}
+                                  </span>
+                                </p>
+                              )}
                             </div>
                           )}
 

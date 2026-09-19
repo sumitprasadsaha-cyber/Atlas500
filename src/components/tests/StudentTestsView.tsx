@@ -46,6 +46,24 @@ interface StudentTestsViewProps {
   notes?: ClassNote[];
 }
 
+const formatCorrectAnswerForDisplay = (val: unknown): string => {
+  if (val === null || val === undefined) return "";
+  let str = String(val);
+
+  if (/<(?:br|p|div|li)\b[^>]*>/i.test(str)) {
+    str = str
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n\n")
+      .replace(/<\/div>/gi, "\n")
+      .replace(/<li[^>]*>/gi, "• ")
+      .replace(/<\/li>/gi, "\n")
+      .replace(/<[^>]+>/g, "");
+  }
+
+  str = str.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return str.trim();
+};
+
 export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
   student,
   notes = []
@@ -1257,10 +1275,13 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                   {activeScorecard.questions.map((q: any, qIdx: number) => {
                     const studentAns = activeScorecard.attempt.userAnswers?.[q.id] || "Not answered";
                     const isCorrect = studentAns === q.correctAnswer;
+                    const formattedCorrectAns = formatCorrectAnswerForDisplay(q.correctAnswer);
+                    const isMultiLineAns = formattedCorrectAns.includes("\n");
+
                     return (
                       <div key={q.id || qIdx} className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-800">
                         <div className="flex items-start justify-between gap-2 mb-1.5">
-                          <p className="font-bold text-slate-900 dark:text-slate-100">
+                          <p className="font-bold text-slate-900 dark:text-slate-100 text-xs sm:text-sm">
                             Q{qIdx + 1}. {q.question}
                           </p>
                           <span className={`text-[10px] font-black px-2 py-0.5 rounded-md shrink-0 ${
@@ -1271,15 +1292,31 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                             {isCorrect ? "Correct" : "Incorrect"}
                           </span>
                         </div>
-                        <div className="text-[11px] text-slate-600 dark:text-slate-400 space-y-0.5">
-                          <p>Your Answer: <span className="font-bold text-slate-800 dark:text-slate-200">{studentAns}</span></p>
-                          <p>Correct Answer: <span className="font-bold text-emerald-600 dark:text-emerald-400">{q.correctAnswer}</span></p>
+                        <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
+                          <p className="break-words [overflow-wrap:anywhere]">
+                            Your Answer: <span className="font-bold text-slate-800 dark:text-slate-200">{studentAns}</span>
+                          </p>
+                          {isMultiLineAns ? (
+                            <div className="pt-0.5">
+                              <span className="text-slate-600 dark:text-slate-400">Correct Answer:</span>
+                              <div className="mt-1 font-bold text-emerald-600 dark:text-emerald-400 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
+                                {formattedCorrectAns}
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="break-words [overflow-wrap:anywhere] leading-relaxed">
+                              Correct Answer:{" "}
+                              <span className="font-bold text-emerald-600 dark:text-emerald-400 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                                {formattedCorrectAns}
+                              </span>
+                            </p>
+                          )}
                         </div>
                         {q.explanation && (
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400 bg-slate-100/80 dark:bg-slate-800/80 p-2 rounded-lg mt-2">
+                          <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-100/80 dark:bg-slate-800/80 p-2.5 rounded-lg mt-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
                             <span className="font-bold text-slate-700 dark:text-slate-300">Explanation: </span>
-                            {q.explanation}
-                          </p>
+                            {formatCorrectAnswerForDisplay(q.explanation)}
+                          </div>
                         )}
                       </div>
                     );

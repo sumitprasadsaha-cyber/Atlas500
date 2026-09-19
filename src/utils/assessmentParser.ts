@@ -864,7 +864,20 @@ export function parseAssessmentText(
       continue;
     }
 
-    // 5. If currently reading passage/case body before the first question
+    // 5. Empty line handling: preserve blank lines for active question blocks and passage text
+    if (!trimmed) {
+      if (activePassage && activePassage.questionCount === 0 && activePassage.textLines.length > 0) {
+        if (activePassage.textLines[activePassage.textLines.length - 1] !== "") {
+          activePassage.textLines.push("");
+        }
+      } else if (activeBlock && activeBlock.lines.length > 0) {
+        activeBlock.lines.push("");
+        activeBlock.rawBlockLines.push(rawLine);
+      }
+      continue;
+    }
+
+    // 6. If currently reading passage/case body before the first question
     if (activePassage && activePassage.questionCount === 0) {
       if (activePassage.textLines.length === 0 && /^(?:Passage|Case\s+Study)[\:\.]?$/i.test(trimmed)) {
         continue;
@@ -873,7 +886,7 @@ export function parseAssessmentText(
       continue;
     }
 
-    // 6. Check for divider or other parser markers
+    // 7. Check for divider or other parser markers
     if (isIgnoredMarkerOrDivider(trimmed)) {
       continue;
     }
@@ -930,14 +943,17 @@ export function parseAssessmentText(
       return;
     }
 
-    // Extract explicit "Answer: ..." line if present
+    // Extract explicit "Answer: ..." line if present, preserving intentional blank lines inside multi-line answers
     let explicitCorrectAnswer = "";
     const remainingLines: string[] = [];
     let isReadingMultiLineAnswer = false;
     const multiLineAnswerParts: string[] = [];
 
-    cleanLines.forEach((l) => {
-      const caMatch = l.match(/^(?:Correct\s*)?Ans(?:wer)?\s*[:\-]\s*(.*)$/i);
+    block.lines.forEach((l) => {
+      const trimmed = l.trim();
+      if ((trimmed && isIgnoredMarkerOrDivider(trimmed)) || extractMetadataLine(trimmed, metadata)) return;
+
+      const caMatch = trimmed.match(/^(?:Correct\s*)?Ans(?:wer)?\s*[:\-]\s*(.*)$/i);
       if (caMatch) {
         isReadingMultiLineAnswer = true;
         const inlineAns = caMatch[1].trim();
@@ -945,9 +961,9 @@ export function parseAssessmentText(
           multiLineAnswerParts.push(inlineAns);
         }
       } else if (isReadingMultiLineAnswer) {
-        multiLineAnswerParts.push(l);
-      } else {
-        remainingLines.push(l);
+        multiLineAnswerParts.push(trimmed);
+      } else if (trimmed.length > 0) {
+        remainingLines.push(trimmed);
       }
     });
 

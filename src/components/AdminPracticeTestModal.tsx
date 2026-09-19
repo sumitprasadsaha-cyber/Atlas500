@@ -1739,13 +1739,23 @@ export default function AdminPracticeTestModal({
 
               <div>
                 <label className="font-bold text-slate-700 dark:text-slate-300 mb-1 block">Correct / Expected Answer:</label>
-                <input
-                  type="text"
-                  value={editQCorrectAns}
-                  onChange={(e) => setEditQCorrectAns(e.target.value)}
-                  placeholder="e.g. B or True or keyword"
-                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-bold text-emerald-600"
-                />
+                {editQCorrectAns.includes("\n") || editQType.includes("answer") ? (
+                  <textarea
+                    value={editQCorrectAns}
+                    onChange={(e) => setEditQCorrectAns(e.target.value)}
+                    rows={3}
+                    placeholder="e.g. B or True or multi-paragraph solution..."
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-bold text-emerald-600 whitespace-pre-wrap leading-relaxed"
+                  />
+                ) : (
+                  <input
+                    type="text"
+                    value={editQCorrectAns}
+                    onChange={(e) => setEditQCorrectAns(e.target.value)}
+                    placeholder="e.g. B or True or keyword"
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-bold text-emerald-600"
+                  />
+                )}
               </div>
 
               <div>
