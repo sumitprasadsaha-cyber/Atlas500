@@ -15,15 +15,12 @@ import { StudentSchoolSubject, StudentSchoolModule } from "../utils/studentSchoo
 import { 
   fetchAllPracticeTests,
   getTopicPracticeTestSync, 
-  getChapterPracticeTestSync,
-  getChapterPracticeTestsSync,
   subscribeToPracticeTests, 
-  preloadChapterPracticeTests,
   getTopicPracticeTest
 } from "../lib/practiceTestService";
 import { getAllTestAttempts } from "../utils/assessmentParser";
 import { fetchStudentTestAttempts } from "../lib/testScorePersistence";
-import { getTopicTestStats, getChapterTestStats } from "../utils/testStatsHelper";
+import { getTopicTestStats } from "../utils/testStatsHelper";
 import StudentTestScoreButton from "./StudentTestScoreButton";
 import { notesLogger } from "../lib/notesLogger";
 import { TopicDownloadProgressBar } from "./notes/TopicDownloadProgressBar";
@@ -275,14 +272,6 @@ export default function StudentSchoolTree({
                 const targetSubj = subj.subject || "";
                 const chapterNo = mod.moduleNo || 1;
 
-                const chapterTests = getChapterPracticeTestsSync(targetClass, targetSubj, chapterNo);
-                const fallbackChapterTest = chapterTests.length === 0 ? getChapterPracticeTestSync(targetClass, targetSubj, chapterNo) : null;
-                const effectiveChapterTests = chapterTests.length > 0
-                  ? chapterTests
-                  : (fallbackChapterTest && Array.isArray(fallbackChapterTest.questions) && fallbackChapterTest.questions.length > 0)
-                    ? [fallbackChapterTest]
-                    : [];
-
                 return (
                   <div
                     key={mod.moduleKey}
@@ -304,31 +293,6 @@ export default function StudentSchoolTree({
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0 ml-2 self-center flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
-                        {effectiveChapterTests.map((t, idx) => {
-                          const stats = getChapterTestStats(allAttempts, student.id, student.name, targetClass, targetSubj, chapterNo, t.id);
-                          const btnLabel = effectiveChapterTests.length > 1 ? `Test ${idx + 1}` : undefined;
-                          const fullTitle = t.title || `${mod.moduleTitle} Test ${idx + 1}`;
-                          return (
-                            <StudentTestScoreButton
-                              key={t.id || `chapter-test-${idx}`}
-                              stats={stats}
-                              hasTest={true}
-                              label={btnLabel}
-                              topicName={fullTitle}
-                              onOpenTest={() => {
-                                onOpenPracticeTest?.({
-                                  testId: t.id,
-                                  classGrade: targetClass,
-                                  subject: targetSubj,
-                                  chapterNo,
-                                  chapterName: mod.moduleName,
-                                  topicName: fullTitle,
-                                  testType: "full_chapter",
-                                });
-                              }}
-                            />
-                          );
-                        })}
                         <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                           {mod.totalTopics} {mod.totalTopics === 1 ? "Topic" : "Topics"}
                         </span>

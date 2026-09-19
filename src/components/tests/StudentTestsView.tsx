@@ -54,7 +54,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
   const [attempts, setAttempts] = useState<TestAttemptRecord[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [selectedSubject, setSelectedSubject] = useState<string>("All");
-  const [selectedCategory, setSelectedCategory] = useState<"ALL" | "SUBJECT" | "CHAPTER" | "TOPIC" | "PYQ">("ALL");
+  const [selectedCategory, setSelectedCategory] = useState<"ALL" | "SUBJECT" | "CHAPTER" | "PYQ">("ALL");
   const [selectedStatus, setSelectedStatus] = useState<"ALL" | "COMPLETED" | "PENDING">("ALL");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
@@ -276,7 +276,10 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
         }
       }
 
-      // 4. Category filter
+      // 4. Category filter - Topic tests are exclusively accessed via My Study Space
+      if (t.computedType === "TOPIC") {
+        return false;
+      }
       if (selectedCategory !== "ALL" && t.computedType !== selectedCategory) {
         return false;
       }
@@ -519,10 +522,10 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
     return (
       <div
         key={test.id}
-        className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-xl p-3.5 sm:p-4 shadow-2xs hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700 transition-all flex flex-col justify-between gap-3"
+        className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-xl p-3 sm:p-3.5 shadow-2xs hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700 transition-all flex flex-col justify-between gap-2"
         id={`student-test-card-${test.id}`}
       >
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {/* Top meta tags */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 flex-wrap min-w-0">
@@ -543,34 +546,37 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
           </div>
 
           {/* Test title */}
-          <h3 className="text-sm font-bold text-slate-900 dark:text-white leading-snug line-clamp-2">
+          <h3
+            className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white leading-tight line-clamp-1"
+            title={displayTitle}
+          >
             {displayTitle}
           </h3>
 
           {/* Compact Specs Bar */}
-          <div className="flex items-center gap-3 py-1.5 px-2.5 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-800/80 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+          <div className="flex items-center gap-2.5 py-1 px-2.5 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-800/80 text-[10.5px] font-semibold text-slate-600 dark:text-slate-300">
             <span className="flex items-center gap-1" title="Questions">
-              <ListChecks className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+              <ListChecks className="w-3 h-3 text-blue-500 shrink-0" />
               <span>{questionCount} Qs</span>
             </span>
             <span className="w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-600" />
             <span className="flex items-center gap-1" title="Marks">
-              <Award className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <Award className="w-3 h-3 text-amber-500 shrink-0" />
               <span>{totalMarks} Marks</span>
             </span>
             <span className="w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-600" />
             <span className="flex items-center gap-1" title="Duration">
-              <Clock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              <Clock className="w-3 h-3 text-emerald-500 shrink-0" />
               <span>{duration > 0 ? `${duration}m` : "Untimed"}</span>
             </span>
           </div>
 
           {/* Performance status */}
-          <div className="pt-0.5">
+          <div className="pt-0">
             {test.latestAttempt ? (
               <div className="flex items-center justify-between text-xs">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400">Score:</span>
-                <span className={`text-xs font-black px-2 py-0.5 rounded-md inline-flex items-center gap-1 ${
+                <span className="text-[10.5px] text-slate-500 dark:text-slate-400">Score:</span>
+                <span className={`text-[11px] font-black px-1.5 py-0.5 rounded-md inline-flex items-center gap-1 ${
                   test.latestAttempt.percentage >= 75
                     ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200"
                     : test.latestAttempt.percentage >= 40
@@ -583,7 +589,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
               </div>
             ) : test.hasActiveDraft ? (
               <div className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400 font-bold">
-                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                 <span>Draft in progress</span>
               </div>
             ) : (
@@ -604,7 +610,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                 className="flex-1 py-1.5 px-2.5 bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer border border-amber-200 dark:border-amber-800/60"
                 id={`retake-test-btn-${test.id}`}
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3 h-3" />
                 <span>Re-take</span>
               </button>
               <button
@@ -619,7 +625,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                 className="py-1.5 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
                 title="View scorecard analysis"
               >
-                <BarChart3 className="w-3.5 h-3.5" />
+                <BarChart3 className="w-3 h-3" />
                 <span>Review</span>
               </button>
             </>
@@ -627,7 +633,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
             <button
               type="button"
               onClick={() => handleStartTest(test)}
-              className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-2xs shadow-blue-500/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-2xs shadow-blue-500/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
               id={`start-test-btn-${test.id}`}
             >
               <Play className="w-3 h-3 fill-current" />
@@ -690,7 +696,6 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
               { id: "ALL", label: "All Tests" },
               { id: "CHAPTER", label: "Chapter Tests" },
               { id: "SUBJECT", label: "Subject Tests" },
-              { id: "TOPIC", label: "Topic Tests" },
               { id: "PYQ", label: "PYQs" },
             ].map((tab) => (
               <button
@@ -915,25 +920,25 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                   <div
                     key={grp.key}
                     onClick={() => setSelectedChapterGroup({ subject: grp.subject, chapterNo: grp.chapterNo, chapterName: grp.chapterName })}
-                    className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-xl p-4 sm:p-5 shadow-2xs hover:shadow-md hover:border-amber-400 dark:hover:border-amber-500/60 transition-all cursor-pointer group flex flex-col justify-between gap-3"
+                    className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-xl p-3 sm:p-3.5 shadow-2xs hover:shadow-md hover:border-amber-400 dark:hover:border-amber-500/60 transition-all cursor-pointer group flex flex-col justify-between gap-2"
                     id={`chapter-group-card-${grp.key}`}
                   >
                     <div>
-                      <div className="flex items-center justify-between gap-2 mb-2">
-                        <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/80 px-2 py-0.5 rounded-md border border-amber-200/80 dark:border-amber-800/60">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/80 px-2 py-0.5 rounded-md border border-amber-200/80 dark:border-amber-800/60">
                           {grp.subject}
                         </span>
-                        <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700">
+                        <span className="text-[10.5px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700">
                           {grp.tests.length} {grp.tests.length === 1 ? "Test" : "Tests"}
                         </span>
                       </div>
 
-                      <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors line-clamp-2 mt-1">
+                      <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors line-clamp-1 mt-0.5">
                         {grp.chapterNo ? `Chapter ${grp.chapterNo}: ` : ""}{grp.chapterName}
                       </h3>
                     </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800/80">
+                    <div className="flex items-center justify-between pt-1.5 border-t border-slate-100 dark:border-slate-800/80 text-xs">
                       <div className="text-xs">
                         {grp.completedCount === grp.tests.length && grp.tests.length > 0 ? (
                           <span className="inline-flex items-center gap-1 font-bold text-emerald-600 dark:text-emerald-400">
@@ -1073,11 +1078,11 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                       <div
                         key={grp.key}
                         onClick={() => setSelectedChapterGroup({ subject: grp.subject, chapterNo: grp.chapterNo, chapterName: grp.chapterName })}
-                        className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-xl p-4 shadow-2xs hover:shadow-md hover:border-amber-400 dark:hover:border-amber-500/60 transition-all cursor-pointer group flex flex-col justify-between gap-3"
+                        className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-xl p-3 sm:p-3.5 shadow-2xs hover:shadow-md hover:border-amber-400 dark:hover:border-amber-500/60 transition-all cursor-pointer group flex flex-col justify-between gap-2"
                         id={`chapter-group-card-${grp.key}`}
                       >
                         <div>
-                          <div className="flex items-center justify-between gap-2 mb-2">
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
                             <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/80 px-2 py-0.5 rounded-md border border-amber-200/80 dark:border-amber-800/60">
                               {grp.subject}
                             </span>
@@ -1085,11 +1090,11 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                               {grp.tests.length} {grp.tests.length === 1 ? "Test" : "Tests"}
                             </span>
                           </div>
-                          <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors line-clamp-2 mt-1">
+                          <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors line-clamp-1 mt-0.5">
                             {grp.chapterNo ? `Chapter ${grp.chapterNo}: ` : ""}{grp.chapterName}
                           </h3>
                         </div>
-                        <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800/80 text-xs">
+                        <div className="flex items-center justify-between pt-1.5 border-t border-slate-100 dark:border-slate-800/80 text-xs">
                           <span className="text-slate-500">
                             {grp.completedCount > 0 ? `${grp.completedCount}/${grp.tests.length} Completed` : "Not started"}
                           </span>
@@ -1167,28 +1172,28 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                 </div>
               )}
 
-              {/* Topic Tests & PYQs Section */}
-              {filteredTests.filter((t) => t.computedType !== "CHAPTER" && t.computedType !== "SUBJECT").length > 0 && (
+              {/* PYQs Section */}
+              {filteredTests.filter((t) => t.computedType === "PYQ").length > 0 && (
                 <div className="space-y-3">
                   <div>
                     <h2 className="text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-white flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                      <span>Topic Tests & PYQs</span>
+                      <span>PYQs</span>
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Focused micro assessments and past papers
+                      Previous year question papers and past assessments
                     </p>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {filteredTests
-                      .filter((t) => t.computedType !== "CHAPTER" && t.computedType !== "SUBJECT")
+                      .filter((t) => t.computedType === "PYQ")
                       .map(renderCompactTestCard)}
                   </div>
                 </div>
               )}
             </div>
           ) : (
-            /* Mode 7: Topic or PYQ Tab - Compact cards grid */
+            /* Mode 7: PYQ Tab - Compact cards grid */
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="student-tests-grid">
               {filteredTests.map(renderCompactTestCard)}
             </div>
