@@ -4,7 +4,7 @@
  * and Native Cache Integration.
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
   X, 
   Download, 
@@ -163,6 +163,8 @@ export default function NotesPreviewModal({
     }
   };
 
+  const bucket = (note as any).bucket || "academy-connect-files";
+  const canonicalProxyUrl = useMemo(() => getCanonicalNoteDownloadUrl(note, bucket), [note, bucket]);
   const directUrl = blobUrl || note.pdfUrl || "";
 
   return (
@@ -240,7 +242,7 @@ export default function NotesPreviewModal({
 
             {directUrl && (
               <a
-                href={directUrl}
+                href={canonicalProxyUrl || directUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
@@ -251,16 +253,25 @@ export default function NotesPreviewModal({
               </a>
             )}
 
-            {onDownload && (
-              <button
-                onClick={() => onDownload(note)}
-                className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
-                title="Download"
-                id="preview-download-btn"
-              >
-                <Download className="w-4 h-4" />
-              </button>
-            )}
+            <button
+              onClick={() => {
+                if (onDownload) {
+                  onDownload(note);
+                  return;
+                }
+                const a = document.createElement("a");
+                a.href = canonicalProxyUrl || directUrl;
+                a.download = note.fileName || (note as any).pdfFileName || `${title}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+              }}
+              className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
+              title="Download"
+              id="preview-download-btn"
+            >
+              <Download className="w-4 h-4" />
+            </button>
 
             <button
               onClick={toggleFullscreen}
@@ -308,7 +319,7 @@ export default function NotesPreviewModal({
               </p>
               {directUrl && (
                 <a
-                  href={directUrl}
+                  href={canonicalProxyUrl || directUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition-colors inline-flex items-center gap-2"
@@ -334,16 +345,22 @@ export default function NotesPreviewModal({
               />
             </div>
           ) : (
-            <iframe
-              src={`${directUrl}#toolbar=1&navpanes=0`}
-              title={title}
-              className="w-full h-full border-0 rounded-xl bg-white shadow-inner"
-              onLoad={() => setIsLoading(false)}
-              onError={() => {
-                setIsLoading(false);
-                setErrorMessage("Failed to render PDF format in embedded frame.");
-              }}
-            />
+            <object
+              data={directUrl.startsWith("blob:") ? directUrl : `${directUrl}#toolbar=1&navpanes=0`}
+              type="application/pdf"
+              className="w-full h-full rounded-xl bg-white shadow-inner"
+            >
+              <iframe
+                src={directUrl.startsWith("blob:") ? directUrl : `${directUrl}#toolbar=1&navpanes=0`}
+                title={title}
+                className="w-full h-full border-0 rounded-xl bg-white shadow-inner"
+                onLoad={() => setIsLoading(false)}
+                onError={() => {
+                  setIsLoading(false);
+                  setErrorMessage("Failed to render PDF format in embedded frame.");
+                }}
+              />
+            </object>
           )}
         </div>
       </div>

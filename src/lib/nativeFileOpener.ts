@@ -186,18 +186,6 @@ export async function launchFileInNativeViewer(params: LaunchNativeFileParams): 
     console.error("[NativeFileOpener] Anchor fallback failed:", anchorErr);
   }
 
-  // Strategy 4: Standalone PWA / iPad WebKit Navigation Fallback
-  // If popups are completely suppressed in standalone iOS PWA mode, navigate the location directly
-  if (isStandalonePWA() || isIPad()) {
-    try {
-      window.location.assign(viewUrl);
-      console.log(`[NativeFileOpener] Invoked PWA/iPad location navigation for: ${cleanName}`);
-      return true;
-    } catch (assignErr) {
-      console.error("[NativeFileOpener] Standalone PWA navigation fallback failed:", assignErr);
-    }
-  }
-
   return false;
 }
 

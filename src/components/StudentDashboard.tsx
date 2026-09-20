@@ -68,6 +68,7 @@ import {
   Folder,
 } from "lucide-react";
 import StudentAIAssistantModal from "./StudentAIAssistantModal";
+import NotesPreviewModal from "./notes/NotesPreviewModal";
 import { jsPDF } from "jspdf";
 import { AnimatePresence, motion } from "motion/react";
 import { Student, ChapterNote } from "../types";
@@ -1803,6 +1804,7 @@ export function StudentMyTab({
   const [remarkDrafts, setRemarkDrafts] = useState<Record<string, string>>({});
   const [openingNoteId, setOpeningNoteId] = useState<string | null>(null);
   const [openErrorNoteId, setOpenErrorNoteId] = useState<string | null>(null);
+  const [previewNote, setPreviewNote] = useState<ChapterNote | ClassNote | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
   const [progressModalNote, setProgressModalNote] = useState<ChapterNote | null>(null);
   const [reportModalData, setReportModalData] = useState<SubjectReportData | null>(null);
@@ -2095,6 +2097,10 @@ export function StudentMyTab({
       return;
     }
 
+    if (localStudent?.id) {
+      updateStudentPresence(localStudent.id);
+    }
+
     let url = note.pdfUrl || (note as any).publicUrl || (note as any).fileUrl || (note as any).downloadUrl || "";
     let storagePath = note.storagePath || (note as any).storage_path || (note as any).objectKey || (note as any).r2Key || (note as any).key;
     let bucket = note.bucket;
@@ -2121,149 +2127,52 @@ export function StudentMyTab({
     const topicFormatted = getFormattedTopicLabel(note);
     const title = topicFormatted || `Chapter ${note.chapterNo} – ${note.chapterName}`;
 
-    // Compute canonical same-origin download URL synchronously at the exact moment of student click
-    const canonicalUrl = getCanonicalNoteDownloadUrl(
-      {
-        storageKey: finalStorageKey,
-        storagePath: finalStorageKey,
-        storage_path: (note as any).storage_path,
-        objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
-        url,
-        bucket,
-      },
-      bucket
-    );
-
-    // Synchronously capture user gesture for browsers and iPad Safari to prevent popup blockers
-    let preOpenedWindow: Window | null = null;
-    if (typeof window !== "undefined" && !isCapacitorNative() && !isStandalonePWA()) {
+    // On native Capacitor Android/iOS shell, invoke native OS FileOpener intent
+    if (isCapacitorNative()) {
       try {
-        preOpenedWindow = window.open("about:blank", "_blank");
-        if (preOpenedWindow) {
-          preOpenedWindow.document.write(`
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <title>Loading Note...</title>
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <style>
-                  body { margin:0; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f8fafc; color:#1e293b; }
-                  .spinner { width:40px; height:40px; border:3px solid #e2e8f0; border-top-color:#3b82f6; border-radius:50%; animation:spin 0.8s linear infinite; }
-                  @keyframes spin { to { transform:rotate(360deg); } }
-                  p { margin-top:16px; font-size:14px; font-weight:600; color:#64748b; }
-                </style>
-              </head>
-              <body>
-                <div class="spinner"></div>
-                <p>Loading Note...</p>
-              </body>
-            </html>
-          `);
-          preOpenedWindow.document.close();
-        }
-      } catch {}
-    }
-
-    // Check if already in cache to skip downloading indicator
-    const candidateKeys = [
-      finalStorageKey,
-      storagePath,
-      (note as any).storage_path,
-      (note as any).objectKey,
-      (note as any).r2Key,
-      note.id,
-      note.pdfFileName,
-      note.fileName,
-      url,
-    ].filter((k): k is string => typeof k === "string" && k.trim().length > 0);
-
-    const isAlreadyCached = await notesCacheService.isLocallyCached(candidateKeys);
-    if (!isAlreadyCached) {
-      setOpeningNoteId(note.id);
-    }
-    const watchdogTimer = setTimeout(() => {
-      setOpeningNoteId((current) => (current === note.id ? null : current));
-    }, 15000);
-
-    if (localStudent?.id) {
-      updateStudentPresence(localStudent.id);
-    }
-
-    console.log("[Trace 1: Student Clicks Topic]", {
-      topicId: (note as any).topicId || (note as any).topicNo || note.id,
-      chapterId: (note as any).chapterId || (note as any).chapterNo || "chapter_1",
-      subject: selectedSubject || note.subject || "Economics",
-      studentId: localStudent?.id || "anonymous_student",
-    });
-
-    console.log("[Trace 2: Firestore Document]", {
-      storagePath: note.storagePath || (note as any).storage_path || (note as any).objectKey || (note as any).r2Key || "",
-      bucket: note.bucket || "academy-connect-files",
-      contentType: note.mimeType || (note as any).contentType || (note as any).mime_type || (note.fileType === "image" ? "image/png" : "application/pdf"),
-      fileName: note.pdfFileName || note.fileName || (note as any).filename || "document.pdf",
-      urlFields: {
-        pdfUrl: note.pdfUrl || null,
-        storagePath: note.storagePath || null,
-        storageKey: (note as any).storageKey || null,
-        objectKey: (note as any).objectKey || null,
-        r2Key: (note as any).r2Key || null,
-        downloadKey: (note as any).downloadKey || null,
-        downloadUrl: (note as any).downloadUrl || null,
-        fileUrl: (note as any).fileUrl || null,
-        publicUrl: (note as any).publicUrl || null,
-      },
-    });
-
-    console.log("Topic ID:", note.id);
-    console.log("Topic Name:", (note as any).topicTitle || (note as any).topicName || topicFormatted || note.chapterName || "Topic Note");
-    console.log("Download URL:", url || storagePath || (note as any).downloadUrl || "");
-
-    try {
-      if (typeof window !== "undefined") {
-        try {
-          sessionStorage.setItem("student_last_scroll_y", String(window.scrollY));
-          const mainEl = document.getElementById("main-content-scroll");
-          if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainEl.scrollTop));
-          const treeEl = document.getElementById("study-tree-scroll-container");
-          if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeEl.scrollTop));
-        } catch {}
+        setOpeningNoteId(note.id);
+        const canonicalUrl = getCanonicalNoteDownloadUrl(
+          {
+            storageKey: finalStorageKey,
+            storagePath: finalStorageKey,
+            storage_path: (note as any).storage_path,
+            objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
+            url,
+            bucket,
+          },
+          bucket
+        );
+        await openNoteInNativeViewer({
+          storageKey: finalStorageKey,
+          storagePath: finalStorageKey,
+          storage_path: (note as any).storage_path,
+          objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
+          url,
+          canonicalUrl,
+          title,
+          noteId: note.id,
+          bucket: bucket,
+          fileName: note.pdfFileName || note.fileName || (note as any).filename || `${note.chapterName || "Note"}.${note.fileType === "image" ? "jpg" : "pdf"}`,
+          pdfFileName: note.pdfFileName,
+          mimeType: note.mimeType || (note as any).mime_type,
+          fileType: note.fileType,
+          storageProvider: note.storageProvider,
+          studentId: localStudent?.id,
+          subject: selectedSubject || note.subject,
+        });
+      } catch (err: any) {
+        console.warn("[StudentMyTab] Native opener fallback to in-app preview:", err);
+        setPreviewNote(note);
+      } finally {
+        setOpeningNoteId(null);
       }
-
-      await openNoteInNativeViewer({
-        storageKey: finalStorageKey,
-        storagePath: finalStorageKey,
-        storage_path: (note as any).storage_path,
-        objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
-        url,
-        canonicalUrl,
-        targetWindow: preOpenedWindow,
-        title,
-        noteId: note.id,
-        bucket: bucket,
-        fileName: note.pdfFileName || note.fileName || (note as any).filename || `${note.chapterName || "Note"}.${note.fileType === "image" ? "jpg" : "pdf"}`,
-        pdfFileName: note.pdfFileName,
-        mimeType: note.mimeType || (note as any).mime_type,
-        fileType: note.fileType,
-        storageProvider: note.storageProvider,
-        studentId: localStudent?.id,
-        subject: selectedSubject || note.subject,
-      });
-    } catch (err: any) {
-      if (preOpenedWindow && !preOpenedWindow.closed) {
-        try {
-          preOpenedWindow.close();
-        } catch {}
-      }
-      console.error("[StudentDashboard] Error opening note natively:", err);
-      setOpenErrorNoteId(note.id);
-      setTimeout(() => {
-        setOpenErrorNoteId((current) => (current === note.id ? null : current));
-      }, 4000);
-      throw err;
-    } finally {
-      clearTimeout(watchdogTimer);
-      setOpeningNoteId(null);
+      return;
     }
+
+    // In PWA, iPad Safari, and standard web browsers:
+    // Open the note inside the app using the in-app viewer so the student remains
+    // within the active Student Portal / My Study Space session without restarting or reloading the app.
+    setPreviewNote(note);
   };
 
   const getFileSizeStr = (pdfUrl: string, chapterNo: number) => {
@@ -2829,6 +2738,15 @@ export function StudentMyTab({
           }
         }}
       />
+
+      {/* Topic Note In-App Preview Modal */}
+      {previewNote && (
+        <NotesPreviewModal
+          isOpen={Boolean(previewNote)}
+          onClose={() => setPreviewNote(null)}
+          note={previewNote}
+        />
+      )}
     </div>
   );
 }
