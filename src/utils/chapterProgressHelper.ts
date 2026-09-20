@@ -441,13 +441,13 @@ export function calculateSubjectTestProgress(
     topicSet.forEach((displayTopic, normKey) => {
       // Find topic test attempts
       const topicAttempts = allAttempts.filter((a) => {
+        if (!student || (!student.id && !student.name)) return false;
         const sId = (student?.id || "").toLowerCase().trim();
         const sName = (student?.name || "").toLowerCase().trim();
         const aId = (a.studentId || "").toLowerCase().trim();
         const aName = (a.studentName || "").toLowerCase().trim();
 
         const matchesStudent =
-          !student ||
           (aId && sId && aId === sId) ||
           (aName && sName && aName === sName) ||
           (aId && sName && aId === sName) ||
@@ -458,7 +458,7 @@ export function calculateSubjectTestProgress(
         if (!isSubjectMatching(a.subject, subject)) return false;
         if (Number(a.chapterNo) !== Number(group.chapterNo)) return false;
         const aNorm = (a.topicName || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-        return aNorm === normKey || aNorm.includes(normKey) || normKey.includes(aNorm);
+        return aNorm === normKey;
       });
 
       const attemptsCount = topicAttempts.length;
@@ -489,8 +489,8 @@ export function calculateSubjectTestProgress(
       let highestScoreFormatted = "";
 
       if (attemptsCount === 0) {
-        highestScoreFormatted = "Not Attempted (0%)";
-        weaknessAndStrength = "Requires Revision";
+        highestScoreFormatted = "Not Attempted";
+        weaknessAndStrength = "Not Attempted";
       } else {
         highestScoreFormatted = `${highestScorePercentage}% (${bestScore}/${totalQuestions})`;
         if (highestScorePercentage < 85) {
@@ -713,10 +713,10 @@ export function calculateSubjectWeightedProgress(
 
         // Find student attempts for this topic
         const attempts = (allAttempts || []).filter((a) => {
+          if (!student || (!student.id && !student.name)) return false;
           const aId = (a.studentId || "").toLowerCase().trim();
           const aName = (a.studentName || "").toLowerCase().trim();
           const matchesStudent =
-            !student ||
             (aId && sId && aId === sId) ||
             (aName && sName && aName === sName) ||
             (aId && sName && aId === sName) ||
@@ -727,7 +727,7 @@ export function calculateSubjectWeightedProgress(
           if (!isSubjectMatching(a.subject, subject)) return false;
           if (Number(a.chapterNo) !== Number(group.chapterNo)) return false;
           const aNorm = (a.topicName || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-          return aNorm === normTopic || aNorm.includes(normTopic) || normTopic.includes(aNorm);
+          return aNorm === normTopic;
         });
 
         if (attempts.length > 0) {

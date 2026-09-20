@@ -76,15 +76,22 @@ export function getTopicTestStats(
   classGrade: string,
   subject: string,
   chapterNo: number,
-  topicLabel: string
+  topicLabel: string,
+  testId?: string
 ): TopicTestStats | null {
+  if (!studentIdentifier && !studentName) return null;
   const normClass = classGrade.toLowerCase().trim();
   const normSubj = subject.toLowerCase().trim();
   const normTopic = topicLabel.toLowerCase().trim();
+  const cleanTargetTestId = (testId || "").trim().toLowerCase();
 
   const topicAttempts = allAttempts.filter((a) => {
+    if (cleanTargetTestId) {
+      const aTestId = (a.testId || (a as any).topicTestId || (a as any).assessmentTestId || "").trim().toLowerCase();
+      if (!aTestId || aTestId !== cleanTargetTestId) return false;
+    }
+
     const matchesStudent =
-      (!studentIdentifier && !studentName) ||
       (studentIdentifier && a.studentId === studentIdentifier) ||
       (studentName && a.studentName.toLowerCase().trim() === studentName.toLowerCase().trim());
     if (!matchesStudent) return false;
@@ -94,7 +101,7 @@ export function getTopicTestStats(
     if (a.chapterNo !== chapterNo) return false;
     const aNorm = a.topicName.toLowerCase().replace(/[^a-z0-9]/g, "");
     const targetNorm = normTopic.replace(/[^a-z0-9]/g, "");
-    return aNorm === targetNorm || aNorm.includes(targetNorm) || targetNorm.includes(aNorm);
+    return aNorm === targetNorm;
   });
 
   if (topicAttempts.length === 0) return null;

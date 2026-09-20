@@ -53,24 +53,34 @@ export function getTopicTestStats(
   classGrade: string,
   subject: string,
   chapterNo: number,
-  topicLabel: string
+  topicLabel: string,
+  testId?: string
 ): TopicTestStats | null {
   if (!Array.isArray(allAttempts) || allAttempts.length === 0) return null;
 
   const normStudentId = cleanString(studentIdentifier);
   const normStudentName = cleanString(studentName);
+  // Do not match or return marks if no student identity was provided
+  if (!normStudentId && !normStudentName) return null;
+
   const normClass = cleanString(classGrade);
   const normSubj = (subject || "").toLowerCase().trim();
   const normTopic = cleanString(topicLabel);
+  const cleanTargetTestId = cleanString(testId);
 
   const topicAttempts = allAttempts.filter((a) => {
     if (!a) return false;
+
+    // 0. Specific testId check if provided
+    if (cleanTargetTestId) {
+      const aTestId = cleanString(a.testId);
+      if (!aTestId || aTestId !== cleanTargetTestId) return false;
+    }
     
     // 1. Verify student identity match
     const aStudentId = cleanString(a.studentId);
     const aStudentName = cleanString(a.studentName);
     const matchesStudent =
-      (!normStudentId && !normStudentName) ||
       (normStudentId && (aStudentId === normStudentId || aStudentName === normStudentId)) ||
       (normStudentName && (aStudentName === normStudentName || aStudentId === normStudentName));
 
@@ -93,13 +103,10 @@ export function getTopicTestStats(
       return false;
     }
 
-    // 5. Topic name match
+    // 5. Topic name match - strict exact match to avoid cross-topic inheritance
     const aTopic = cleanString(a.topicName);
     if (normTopic && aTopic) {
-      if (aTopic === normTopic || aTopic.includes(normTopic) || normTopic.includes(aTopic)) {
-        return true;
-      }
-      return false;
+      return aTopic === normTopic;
     }
 
     return true;
@@ -184,14 +191,18 @@ export function getChapterTestStats(
 
   const normStudentId = cleanString(studentIdentifier);
   const normStudentName = cleanString(studentName);
+  if (!normStudentId && !normStudentName) return null;
+
   const ch = Number(chapterNo) || 1;
+  const cleanTargetTestId = cleanString(testId);
 
   const chapterAttempts = allAttempts.filter((a) => {
     if (!a) return false;
 
     // Specific testId check if provided
-    if (testId) {
-      if (a.testId && a.testId !== testId) {
+    if (cleanTargetTestId) {
+      const aTestId = cleanString(a.testId);
+      if (!aTestId || aTestId !== cleanTargetTestId) {
         return false;
       }
     }
@@ -200,7 +211,6 @@ export function getChapterTestStats(
     const aStudentId = cleanString(a.studentId);
     const aStudentName = cleanString(a.studentName);
     const matchesStudent =
-      (!normStudentId && !normStudentName) ||
       (normStudentId && (aStudentId === normStudentId || aStudentName === normStudentId)) ||
       (normStudentName && (aStudentName === normStudentName || aStudentId === normStudentName));
 

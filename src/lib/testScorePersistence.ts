@@ -37,6 +37,15 @@ const LEGACY_SCORE_CACHE_KEYS = [
   "tuition_test_attempts_cache",
 ];
 
+// Purge any stale legacy score cache keys on client load to ensure unattempted tests never display stale cached marks
+if (typeof window !== "undefined") {
+  try {
+    for (const key of LEGACY_SCORE_CACHE_KEYS) {
+      localStorage.removeItem(key);
+    }
+  } catch {}
+}
+
 async function downloadJsonFromR2<T>(key: string): Promise<T | null> {
   try {
     const { blob } = await downloadFromR2({ bucket: PRACTICE_TESTS_BUCKET, key });
@@ -375,21 +384,39 @@ function findMatchingAttempt(
   normSubj: string,
   chapterNo?: number,
   normTopic?: string,
-  testType: string = "topic"
+  testType: string = "topic",
+  targetTestId?: string
 ): TestAttemptRecord | null {
   if (!attempts || attempts.length === 0) return null;
 
+  const cleanTargetTestId = (targetTestId || "").trim().toLowerCase();
+
   const matches = attempts.filter((a) => {
     if (!a) return false;
-    if (a.testType && a.testType !== testType) return false;
     const aStudent = cleanId(a.studentId) || cleanId(a.studentName);
     if (normStudent && aStudent !== normStudent && a.studentId !== normStudent) return false;
+
+    // Strict testId check: Every test is completely independent
+    const aTestId = (a.testId || (a as any).topicTestId || (a as any).assessmentTestId || "").trim().toLowerCase();
+    if (cleanTargetTestId) {
+      if (aTestId) {
+        return aTestId === cleanTargetTestId;
+      }
+      return false;
+    }
+
+    // If targetTestId is not specified, do NOT allow an attempt with a specific testId to match another test
+    if (aTestId) {
+      return false;
+    }
+
+    if (a.testType && a.testType !== testType) return false;
     if (normClass && (a.classGrade || "").toLowerCase().trim() !== normClass) return false;
     if (normSubj && (a.subject || "").toLowerCase().trim() !== normSubj) return false;
     if (chapterNo !== undefined && Number(a.chapterNo) !== Number(chapterNo)) return false;
     if (normTopic && testType === "topic") {
       const aTopicNorm = (a.topicName || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      return aTopicNorm === normTopic || aTopicNorm.includes(normTopic) || normTopic.includes(aTopicNorm);
+      return aTopicNorm === normTopic;
     }
     return true;
   });
@@ -410,7 +437,8 @@ export async function fetchStudentScore(
   subject?: string,
   chapterNo?: number,
   topicName?: string,
-  testType: AssessmentTestType | "topic" | "full_chapter" | string = "topic"
+  testType: AssessmentTestType | "topic" | "full_chapter" | string = "topic",
+  testId?: string
 ): Promise<TestAttemptRecord | null> {
   if (!studentId) return null;
 
@@ -427,8 +455,11 @@ export async function fetchStudentScore(
   const normClass = (classGrade || "").toLowerCase().trim();
   const normSubj = (subject || "").toLowerCase().trim();
   const normTopic = (topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
+  const cleanTargetTestId = (testId || "").trim().toLowerCase();
 
-  const cacheKey = `${normStudent}__${normClass}__${normSubj}__${chapterNo || 0}__${normTopic}__${testType}`;
+  const cacheKey = cleanTargetTestId
+    ? `${normStudent}__${cleanTargetTestId}`
+    : `${normStudent}__${normClass}__${normSubj}__${chapterNo || 0}__${normTopic}__${testType}`;
 
   if (scoreSessionCache.has(cacheKey)) {
     return scoreSessionCache.get(cacheKey) || null;
@@ -442,7 +473,7 @@ export async function fetchStudentScore(
     try {
       // 1. Check in-memory attempts
       const cachedAttempts = getCachedAttemptsFromMemory();
-      const existing = findMatchingAttempt(cachedAttempts, normStudent, normClass, normSubj, chapterNo, normTopic, testType);
+      const existing = findMatchingAttempt(cachedAttempts, normStudent, normClass, normSubj, chapterNo, normTopic, testType, cleanTargetTestId);
       if (existing) {
         scoreSessionCache.set(cacheKey, existing);
         return existing;
@@ -462,7 +493,7 @@ export async function fetchStudentScore(
           });
           if (docs.length > 0) {
             mergeAttemptsIntoMemoryAndCache(docs);
-            const match = findMatchingAttempt(docs, normStudent, normClass, normSubj, chapterNo, normTopic, testType);
+            const match = findMatchingAttempt(docs, normStudent, normClass, normSubj, chapterNo, normTopic, testType, cleanTargetTestId);
             if (match) {
               scoreSessionCache.set(cacheKey, match);
               return match;
@@ -475,7 +506,7 @@ export async function fetchStudentScore(
 
       // 3. Fallback to per-student R2 storage file
       const storageAttempts = await fetchStudentTestAttempts(studentId);
-      const storageMatch = findMatchingAttempt(storageAttempts, normStudent, normClass, normSubj, chapterNo, normTopic, testType);
+      const storageMatch = findMatchingAttempt(storageAttempts, normStudent, normClass, normSubj, chapterNo, normTopic, testType, cleanTargetTestId);
       if (storageMatch) {
         scoreSessionCache.set(cacheKey, storageMatch);
         return storageMatch;

@@ -37,6 +37,7 @@ import {
   buildChapterTestId,
   buildSubjectTestId,
   buildPyqTestId,
+  buildAssessmentTestId,
   normalizeTestCategory,
   isValidPracticeTest,
   isClassCompatible,
@@ -296,14 +297,22 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
     });
 
     return list.map((t) => {
-      // Count submissions for this test
+      // Count submissions strictly for this specific test
+      const targetIds = new Set<string>();
+      if (t.id) targetIds.add(String(t.id).trim().toLowerCase());
+      if ((t as any).testId) targetIds.add(String((t as any).testId).trim().toLowerCase());
+      if ((t as any).docId) targetIds.add(String((t as any).docId).trim().toLowerCase());
+      if ((t as any).assessmentTestId) targetIds.add(String((t as any).assessmentTestId).trim().toLowerCase());
+      const canonicalId = buildAssessmentTestId(t.classGrade, t.subject, t.chapterNo, t.topicName, t.computedType);
+      if (canonicalId) targetIds.add(canonicalId.trim().toLowerCase());
+
       const testAttempts = attempts.filter((a) => {
-        if (a.testId && t.id && a.testId === t.id) return true;
-        const matchClass = (a.classGrade || "").toLowerCase().trim() === (t.classGrade || "").toLowerCase().trim();
-        const matchSubj = (a.subject || "").toLowerCase().trim() === (t.subject || "").toLowerCase().trim();
-        if (t.computedType === "SUBJECT") return matchClass && matchSubj && a.testType === "subject";
-        if (t.computedType === "CHAPTER") return matchClass && matchSubj && a.chapterNo === t.chapterNo && (a.testType === "chapter" || a.testType === "full_chapter");
-        return matchClass && matchSubj && a.chapterNo === t.chapterNo && (a.topicName || "").toLowerCase().trim() === (t.topicName || "").toLowerCase().trim();
+        if (!a) return false;
+        const aTestId = (a.testId || (a as any).topicTestId || (a as any).assessmentTestId || "").trim().toLowerCase();
+        if (aTestId) {
+          return targetIds.has(aTestId);
+        }
+        return false;
       });
 
       const avgScore = testAttempts.length > 0
@@ -984,11 +993,21 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
 
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3 text-xs scrollbar-thin">
               {(() => {
+                const targetIds = new Set<string>();
+                if (testForSubmissions.id) targetIds.add(String(testForSubmissions.id).trim().toLowerCase());
+                if ((testForSubmissions as any).testId) targetIds.add(String((testForSubmissions as any).testId).trim().toLowerCase());
+                if ((testForSubmissions as any).docId) targetIds.add(String((testForSubmissions as any).docId).trim().toLowerCase());
+                if ((testForSubmissions as any).assessmentTestId) targetIds.add(String((testForSubmissions as any).assessmentTestId).trim().toLowerCase());
+                const canonicalId = buildAssessmentTestId(testForSubmissions.classGrade, testForSubmissions.subject, testForSubmissions.chapterNo, testForSubmissions.topicName, (testForSubmissions as any).computedType || (testForSubmissions as any).testType);
+                if (canonicalId) targetIds.add(canonicalId.trim().toLowerCase());
+
                 const subAttempts = attempts.filter((a) => {
-                  if (a.testId && testForSubmissions.id && a.testId === testForSubmissions.id) return true;
-                  const matchClass = (a.classGrade || "").toLowerCase().trim() === (testForSubmissions.classGrade || "").toLowerCase().trim();
-                  const matchSubj = (a.subject || "").toLowerCase().trim() === (testForSubmissions.subject || "").toLowerCase().trim();
-                  return matchClass && matchSubj && a.chapterNo === testForSubmissions.chapterNo;
+                  if (!a) return false;
+                  const aTestId = (a.testId || (a as any).topicTestId || (a as any).assessmentTestId || "").trim().toLowerCase();
+                  if (aTestId) {
+                    return targetIds.has(aTestId);
+                  }
+                  return false;
                 });
 
                 if (subAttempts.length === 0) {

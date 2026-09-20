@@ -1522,7 +1522,8 @@ export function getStudentTestAttempts(
   subject?: string,
   chapterNo?: number,
   topicName?: string,
-  testType?: AssessmentTestType
+  testType?: AssessmentTestType,
+  testId?: string
 ): TestAttemptRecord[] {
   const all = getAllTestAttempts();
   const normIdent = (studentIdentifier || "").toLowerCase().trim();
@@ -1530,12 +1531,18 @@ export function getStudentTestAttempts(
   const normSubj = (subject || "").toLowerCase().trim();
   const normTopic = (topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
   const normType = String(testType || "").toLowerCase().trim();
+  const cleanTargetTestId = (testId || "").trim().toLowerCase();
 
   if (studentIdentifier && all.length === 0) {
     fetchStudentTestAttempts(studentIdentifier).catch(() => {});
   }
 
   return all.filter((a) => {
+    if (cleanTargetTestId) {
+      const aTestId = (a.testId || (a as any).topicTestId || (a as any).assessmentTestId || "").trim().toLowerCase();
+      if (!aTestId || aTestId !== cleanTargetTestId) return false;
+    }
+
     if (studentIdentifier) {
       const matchId = (a.studentId || "").toLowerCase().trim() === normIdent;
       const matchName = (a.studentName || "").toLowerCase().trim() === normIdent;
@@ -1557,7 +1564,7 @@ export function getStudentTestAttempts(
     if (chapterNo !== undefined && normType !== "subject" && Number(a.chapterNo) !== Number(chapterNo)) return false;
     if (topicName && (normType === "topic" || !normType)) {
       const aTopic = (a.topicName || "").toLowerCase().trim().replace(/[^a-z0-9]/g, "");
-      return aTopic === normTopic || aTopic.includes(normTopic) || normTopic.includes(aTopic);
+      return aTopic === normTopic;
     }
     return true;
   });

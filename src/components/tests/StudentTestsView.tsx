@@ -30,6 +30,7 @@ import {
   buildTopicTestId, 
   buildChapterTestId, 
   buildSubjectTestId,
+  buildAssessmentTestId,
   isStudentPermittedToAccessTest,
   isClassCompatible,
   isSubjectCompatible,
@@ -202,25 +203,28 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
 
     const list = Array.from(testMap.values()).map((t) => {
       const normalizedType = normalizeTestCategory(t);
-      const testCanonicalId = t.id || (t as any).testId || (t as any).docId;
+
+      // Collect all exact unique identifiers for this specific test
+      const targetIds = new Set<string>();
+      if (t.id) targetIds.add(String(t.id).trim().toLowerCase());
+      if ((t as any).testId) targetIds.add(String((t as any).testId).trim().toLowerCase());
+      if ((t as any).docId) targetIds.add(String((t as any).docId).trim().toLowerCase());
+      if ((t as any).assessmentTestId) targetIds.add(String((t as any).assessmentTestId).trim().toLowerCase());
+
+      const canonicalId = buildAssessmentTestId(t.classGrade, t.subject, t.chapterNo, t.topicName, normalizedType);
+      if (canonicalId) targetIds.add(canonicalId.trim().toLowerCase());
 
       // Match student attempts for this test strictly by unique test ID
+      // Every test is completely independent. Never reuse, copy, inherit, or calculate
+      // a student's marks from another test, chapter test, or subject test.
       const myAttempts = studentAttempts.filter((a) => {
-        if (a.testId) {
-          return a.testId === testCanonicalId || a.testId === t.id;
+        if (!a) return false;
+        const aTestId = (a.testId || (a as any).topicTestId || (a as any).assessmentTestId || "").trim().toLowerCase();
+        if (aTestId) {
+          return targetIds.has(aTestId);
         }
-        // Legacy fallback for attempts saved before unique testId was introduced
-        const matchClass = isClassCompatible(a.classGrade, t.classGrade) ||
-          allowedClasses.includes(toStableClassId(a.classGrade || "")) ||
-          toStableClassId(a.classGrade || "") === toStableClassId(t.classGrade || "");
-        const matchSubj = isSubjectCompatible(a.subject || "", t.subject || "");
-
-        if (normalizedType === "SUBJECT") return matchClass && matchSubj && a.testType === "subject";
-        if (normalizedType === "CHAPTER") {
-          const baseChapterId = buildChapterTestId(t.classGrade, t.subject, t.chapterNo);
-          return (t.id === baseChapterId) && matchClass && matchSubj && Number(a.chapterNo || 1) === Number(t.chapterNo || 1) && (a.testType === "chapter" || a.testType === "full_chapter");
-        }
-        return matchClass && matchSubj && Number(a.chapterNo || 1) === Number(t.chapterNo || 1) && (a.topicName || "").toLowerCase().trim() === (t.topicName || "").toLowerCase().trim();
+        // If an attempt has no testId, it can never be safely associated with this test.
+        return false;
       });
 
       const latestAttempt = myAttempts.length > 0 ? myAttempts[myAttempts.length - 1] : null;
@@ -239,7 +243,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
         latestAttempt,
         bestAttempt,
         hasActiveDraft,
-        isCompleted: myAttempts.length > 0
+        isCompleted: myAttempts.length > 0 && latestAttempt !== null
       };
     });
 
@@ -320,22 +324,22 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
     });
   }, [testsBank, attempts, studentIdentifier, studentClass, allowedClasses, studentSubjects, selectedSubject, selectedCategory, selectedStatus, searchQuery, student]);
 
-  // Overall student test statistics
+  // Overall student test statistics strictly derived from tests this student has completed
   const stats = useMemo(() => {
-    const studentAttempts = attempts.filter(
-      (a) => a.studentId === studentIdentifier || (student.name && a.studentName.toLowerCase() === student.name.toLowerCase())
-    );
     const totalAvailable = filteredTests.length;
-    const completedCount = filteredTests.filter((t) => t.isCompleted).length;
-    const avgScore = studentAttempts.length > 0
-      ? Math.round(studentAttempts.reduce((acc, curr) => acc + (curr.percentage || 0), 0) / studentAttempts.length)
-      : 0;
-    const bestScore = studentAttempts.length > 0
-      ? Math.max(...studentAttempts.map((a) => a.percentage || 0))
-      : 0;
+    const completedTests = filteredTests.filter((t) => t.isCompleted && t.latestAttempt);
+    const completedCount = completedTests.length;
+    const validScores = completedTests.map((t) => t.latestAttempt?.percentage).filter((p): p is number => typeof p === "number");
+
+    const avgScore = validScores.length > 0
+      ? Math.round(validScores.reduce((acc, curr) => acc + curr, 0) / validScores.length)
+      : null;
+    const bestScore = validScores.length > 0
+      ? Math.max(...validScores)
+      : null;
 
     return { totalAvailable, completedCount, avgScore, bestScore };
-  }, [filteredTests, attempts, studentIdentifier, student.name]);
+  }, [filteredTests]);
 
   // Handle starting/taking a test
   const handleStartTest = (test: any) => {
@@ -612,7 +616,7 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
               </div>
             ) : (
               <div className="text-[11px] text-slate-400 font-medium">
-                Not attempted
+                Not Attempted
               </div>
             )}
           </div>
@@ -695,11 +699,15 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
             </div>
             <div className="bg-blue-50/60 dark:bg-blue-950/30 border border-blue-200/60 dark:border-blue-900/40 rounded-xl px-3 py-2 text-center">
               <p className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400">Avg Score</p>
-              <p className="text-sm sm:text-base font-black text-blue-700 dark:text-blue-300">{stats.avgScore}%</p>
+              <p className="text-sm sm:text-base font-black text-blue-700 dark:text-blue-300">
+                {stats.avgScore !== null ? `${stats.avgScore}%` : "—"}
+              </p>
             </div>
             <div className="bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 rounded-xl px-3 py-2 text-center">
               <p className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">Best Score</p>
-              <p className="text-sm sm:text-base font-black text-amber-700 dark:text-amber-300">{stats.bestScore}%</p>
+              <p className="text-sm sm:text-base font-black text-amber-700 dark:text-amber-300">
+                {stats.bestScore !== null ? `${stats.bestScore}%` : "—"}
+              </p>
             </div>
           </div>
         </div>

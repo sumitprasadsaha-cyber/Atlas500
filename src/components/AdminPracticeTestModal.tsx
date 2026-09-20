@@ -280,33 +280,22 @@ export default function AdminPracticeTestModal({
   }, [isOpen, testId, isNewTest, classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType]);
 
   const selectedTopicAttempts = useMemo(() => {
-    const normClass = (classGrade || "").toLowerCase().trim();
-    const normSubj = (subject || "").toLowerCase().trim();
-    const normTopic = (effectiveTopicName || "").toLowerCase().trim();
+    const targetIds = new Set<string>();
+    if (testId) targetIds.add(String(testId).trim().toLowerCase());
+    if (savedTest?.id) targetIds.add(String(savedTest.id).trim().toLowerCase());
+    if ((savedTest as any)?.testId) targetIds.add(String((savedTest as any).testId).trim().toLowerCase());
     const expectedTestId = buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType);
+    if (expectedTestId) targetIds.add(expectedTestId.trim().toLowerCase());
 
     return attemptsList.filter((a) => {
       if (!a) return false;
-      if (a.testId && a.testId === expectedTestId) return true;
-
-      const aClass = (a.classGrade || "").toLowerCase().trim();
-      const aSubj = (a.subject || "").toLowerCase().trim();
-      if (aClass !== normClass || aSubj !== normSubj) return false;
-
-      if (effectiveTestType === "SUBJECT") {
-        return a.testType === "subject";
+      const aTestId = (a.testId || (a as any).topicTestId || (a as any).assessmentTestId || "").trim().toLowerCase();
+      if (aTestId) {
+        return targetIds.has(aTestId);
       }
-      if (effectiveTestType === "CHAPTER") {
-        return (a.testType === "chapter" || a.testType === "full_chapter") && Number(a.chapterNo) === Number(effectiveChapterNo);
-      }
-
-      const aTopic = (a.topicName || "").toLowerCase().trim();
-      const isChapterMatch = Number(a.chapterNo) === Number(effectiveChapterNo);
-      const isTopicMatch = aTopic === normTopic;
-
-      return (a.testType === "topic" || !a.testType) && isChapterMatch && isTopicMatch;
+      return false;
     });
-  }, [attemptsList, classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType]);
+  }, [attemptsList, testId, savedTest, classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType]);
 
   const uniqueStudentAttempts = useMemo(() => {
     const groups: Record<string, TestAttemptRecord[]> = {};
