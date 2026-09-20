@@ -76,6 +76,8 @@ import { groupAndSortChapterNotes, getFormattedTopicLabel, isFileNameRedundant }
 import { subscribeToAnnouncements, saveStudentDoc, subscribeToClassNotes, getLocalClassNotes, areClassNotesEqual, updateStudentPresence } from "../lib/firestoreService";
 import { uploadReportToStorage, getBucketName, sanitizeStoragePath } from "../lib/storageService";
 import { openNoteInNativeViewer } from "../lib/nativePdfService";
+import { getCanonicalNoteDownloadUrl } from "../lib/noteOpener";
+import { isCapacitorNative, isStandalonePWA } from "../lib/nativeFileOpener";
 import { notesCacheService } from "../lib/notesCacheService";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import { getPdfDownloadUrl } from "../lib/pdfService";
@@ -2116,6 +2118,52 @@ export function StudentMyTab({
       (note as any).key ||
       url;
 
+    const topicFormatted = getFormattedTopicLabel(note);
+    const title = topicFormatted || `Chapter ${note.chapterNo} – ${note.chapterName}`;
+
+    // Compute canonical same-origin download URL synchronously at the exact moment of student click
+    const canonicalUrl = getCanonicalNoteDownloadUrl(
+      {
+        storageKey: finalStorageKey,
+        storagePath: finalStorageKey,
+        storage_path: (note as any).storage_path,
+        objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
+        url,
+        bucket,
+      },
+      bucket
+    );
+
+    // Synchronously capture user gesture for browsers and iPad Safari to prevent popup blockers
+    let preOpenedWindow: Window | null = null;
+    if (typeof window !== "undefined" && !isCapacitorNative() && !isStandalonePWA()) {
+      try {
+        preOpenedWindow = window.open("about:blank", "_blank");
+        if (preOpenedWindow) {
+          preOpenedWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <title>Loading Note...</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                  body { margin:0; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f8fafc; color:#1e293b; }
+                  .spinner { width:40px; height:40px; border:3px solid #e2e8f0; border-top-color:#3b82f6; border-radius:50%; animation:spin 0.8s linear infinite; }
+                  @keyframes spin { to { transform:rotate(360deg); } }
+                  p { margin-top:16px; font-size:14px; font-weight:600; color:#64748b; }
+                </style>
+              </head>
+              <body>
+                <div class="spinner"></div>
+                <p>Loading Note...</p>
+              </body>
+            </html>
+          `);
+          preOpenedWindow.document.close();
+        }
+      } catch {}
+    }
+
     // Check if already in cache to skip downloading indicator
     const candidateKeys = [
       finalStorageKey,
@@ -2140,8 +2188,6 @@ export function StudentMyTab({
     if (localStudent?.id) {
       updateStudentPresence(localStudent.id);
     }
-    const topicFormatted = getFormattedTopicLabel(note);
-    const title = topicFormatted || `Chapter ${note.chapterNo} – ${note.chapterName}`;
 
     console.log("[Trace 1: Student Clicks Topic]", {
       topicId: (note as any).topicId || (note as any).topicNo || note.id,
@@ -2189,6 +2235,8 @@ export function StudentMyTab({
         storage_path: (note as any).storage_path,
         objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
         url,
+        canonicalUrl,
+        targetWindow: preOpenedWindow,
         title,
         noteId: note.id,
         bucket: bucket,
@@ -2201,6 +2249,11 @@ export function StudentMyTab({
         subject: selectedSubject || note.subject,
       });
     } catch (err: any) {
+      if (preOpenedWindow && !preOpenedWindow.closed) {
+        try {
+          preOpenedWindow.close();
+        } catch {}
+      }
       console.error("[StudentDashboard] Error opening note natively:", err);
       setOpenErrorNoteId(note.id);
       setTimeout(() => {

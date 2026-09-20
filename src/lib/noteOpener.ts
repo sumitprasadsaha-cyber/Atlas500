@@ -19,6 +19,8 @@ export interface NoteOpeningTarget {
   subject?: string;
   noteId?: string;
   title?: string;
+  canonicalUrl?: string;
+  targetWindow?: Window | null;
   onProgress?: (percent: number | null, statusText?: string) => void;
 }
 
@@ -198,7 +200,15 @@ export function getCanonicalNoteDownloadUrl(
   );
   const cleanKey = extractCanonicalStorageKey(storagePathOrTarget, effectiveBucket);
 
-  if (!cleanKey) return "";
+  if (!cleanKey) {
+    if (typeof storagePathOrTarget === "object" && storagePathOrTarget !== null) {
+      const fallbackUrl = (storagePathOrTarget.url || storagePathOrTarget.pdfUrl || storagePathOrTarget.downloadUrl || "").trim();
+      if (fallbackUrl.startsWith("http://") || fallbackUrl.startsWith("https://")) {
+        return fallbackUrl;
+      }
+    }
+    return "";
+  }
   if (cleanKey.startsWith("data:") || cleanKey.startsWith("blob:")) {
     return cleanKey;
   }
@@ -256,6 +266,12 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
 
   const fileType = typeof target === "object" && target !== null ? target.fileType : undefined;
 
+  const targetCanonicalUrl =
+    (typeof target === "object" && target !== null && target.canonicalUrl) ||
+    getCanonicalNoteDownloadUrl(target, typeof target === "object" && target !== null ? target.bucket : undefined);
+
+  const targetWindow = typeof target === "object" && target !== null ? target.targetWindow : undefined;
+
   // 1. Strict Sequential Pipeline: Download & Verify Document First
   const onProgress = typeof target === "object" && target !== null ? target.onProgress : undefined;
   const verifiedNote = await fetchNoteBlobWithCache(
@@ -269,6 +285,8 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
       mimeType,
       fileType,
       url: typeof target === "object" && target !== null ? target.url : undefined,
+      canonicalUrl: targetCanonicalUrl,
+      targetWindow,
     },
     undefined,
     onProgress ? (pct) => onProgress(pct) : undefined
@@ -297,6 +315,8 @@ export async function openNote(target: string | NoteOpeningTarget): Promise<stri
     fileName: verifiedNote.fileName,
     mimeType: verifiedNote.mimeType,
     objectUrl: verifiedNote.objectUrl,
+    canonicalUrl: targetCanonicalUrl,
+    targetWindow,
   });
 
   notesLogger.info("VIEW_OPEN", {

@@ -24,6 +24,27 @@ export function isCapacitorNative(): boolean {
 }
 
 /**
+ * Detects if running inside an installed Standalone PWA on iOS/iPadOS/Android/Desktop.
+ */
+export function isStandalonePWA(): boolean {
+  if (typeof window === "undefined") return false;
+  return Boolean(
+    window.matchMedia?.("(display-mode: standalone)").matches ||
+    (window.navigator as any).standalone === true ||
+    (typeof document !== "undefined" && document.referrer?.includes("android-app://"))
+  );
+}
+
+/**
+ * Detects if running on an Apple iPad (including modern iPadOS with MacIntel touch points).
+ */
+export function isIPad(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /iPad/i.test(navigator.userAgent) || 
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+/**
  * Converts a Blob to a base64 encoded string.
  */
 async function blobToBase64(blob: Blob): Promise<string> {
@@ -65,6 +86,8 @@ export interface LaunchNativeFileParams {
   fileName: string;
   mimeType: string;
   objectUrl?: string;
+  canonicalUrl?: string;
+  targetWindow?: Window | null;
 }
 
 /**
@@ -72,10 +95,11 @@ export interface LaunchNativeFileParams {
  * 
  * Flow:
  * 1. Capacitor Native (Android/iOS): Uses FileOpener to trigger ACTION_VIEW Intent.
- * 2. Browser / Android Chrome / Installed PWA: Opens directly in a clean external tab/viewer without triggering the Android Share Sheet or duplicate download dialogs.
+ * 2. Browser / iPad Safari / PWA: Seamlessly navigates pre-opened window, native window.open,
+ *    or anchor fallback using canonical HTTPS same-origin route for full Safari & WebKit compatibility.
  */
 export async function launchFileInNativeViewer(params: LaunchNativeFileParams): Promise<boolean> {
-  const { blob, fileName, mimeType } = params;
+  const { blob, fileName, mimeType, canonicalUrl } = params;
   const cleanName = sanitizeFileNameWithExtension(fileName, mimeType);
   const objectUrl = params.objectUrl || URL.createObjectURL(blob);
 
@@ -110,12 +134,32 @@ export async function launchFileInNativeViewer(params: LaunchNativeFileParams): 
     }
   }
 
-  // Strategy 2: Direct Native Window/Tab Launch (WITHOUT share sheet or download attribute!)
-  // Opening the blob URL in a new window/target allows the browser's built-in PDF/image viewer
-  // or OS default app to render it directly without opening any share sheets or asking "Download file again?"
+  // Determine preferred target URL for web browsers, iPad Safari, and PWA environments:
+  // On Safari and iPadOS, blob URLs in new windows/tabs fail with WebKitBlobResource error or show blank.
+  // The canonical backend route (/api/storage?action=download...) streams Content-Disposition: inline
+  // and Content-Type: application/pdf, allowing iPad Safari and browsers to natively render the document.
+  const viewUrl = canonicalUrl && canonicalUrl.trim().length > 0 ? canonicalUrl : objectUrl;
+
+  // Strategy 2A: Synchronously Pre-opened Window Navigation
+  // If targetWindow was opened during the user's initial click gesture, navigating it here
+  // completely bypasses Safari and browser popup blockers that expire after asynchronous operations.
+  if (params.targetWindow && !params.targetWindow.closed) {
+    try {
+      params.targetWindow.location.href = viewUrl;
+      console.log(`[NativeFileOpener] Navigated pre-opened window to: ${viewUrl}`);
+      return true;
+    } catch (winNavErr) {
+      console.warn("[NativeFileOpener] Failed to navigate pre-opened window, falling back:", winNavErr);
+    }
+  }
+
+  // Strategy 2B: Direct Native Window Launch (without restrictive "noopener" feature which forces null returns)
   try {
-    const win = window.open(objectUrl, "_blank", "noopener,noreferrer");
-    if (win && !win.closed) {
+    const win = window.open(viewUrl, "_blank");
+    if (win) {
+      try {
+        win.opener = null;
+      } catch {}
       console.log(`[NativeFileOpener] Launched file viewer via window.open: ${cleanName}`);
       return true;
     }
@@ -123,13 +167,12 @@ export async function launchFileInNativeViewer(params: LaunchNativeFileParams): 
     console.warn("[NativeFileOpener] window.open blocked/failed:", winErr);
   }
 
-  // Strategy 3: Anchor Click Fallback (Without download attribute or share sheet)
+  // Strategy 3: Dynamic Anchor Click Fallback (Without download attribute to keep inline reading experience)
   try {
     const a = document.createElement("a");
-    a.href = objectUrl;
+    a.href = viewUrl;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    // Strictly omit a.download to avoid triggering Chrome's "Download file again?" prompt!
     document.body.appendChild(a);
     a.click();
     setTimeout(() => {
@@ -141,6 +184,18 @@ export async function launchFileInNativeViewer(params: LaunchNativeFileParams): 
     return true;
   } catch (anchorErr) {
     console.error("[NativeFileOpener] Anchor fallback failed:", anchorErr);
+  }
+
+  // Strategy 4: Standalone PWA / iPad WebKit Navigation Fallback
+  // If popups are completely suppressed in standalone iOS PWA mode, navigate the location directly
+  if (isStandalonePWA() || isIPad()) {
+    try {
+      window.location.assign(viewUrl);
+      console.log(`[NativeFileOpener] Invoked PWA/iPad location navigation for: ${cleanName}`);
+      return true;
+    } catch (assignErr) {
+      console.error("[NativeFileOpener] Standalone PWA navigation fallback failed:", assignErr);
+    }
   }
 
   return false;
