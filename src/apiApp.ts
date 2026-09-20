@@ -54,6 +54,9 @@ import {
   handleHomeworkGeneration,
   handleAnalyticsGeneration,
   handleSemanticSearch,
+  handleAITestParsing,
+  evaluateSingleSubjectiveAnswer,
+  evaluateBatchSubjectiveAnswers,
   moderationService,
   costTracker,
   usageLimitManager,
@@ -290,6 +293,88 @@ router.get("/ai/limits", (req, res) => {
   const role = (req.query.role as string) || "student";
   const status = usageLimitManager.getUserQuotaStatus(userId, role);
   return res.json({ success: true, quota: status });
+});
+
+// 11. AI Universal Test Parser & Enhancer
+router.post("/ai/test-parser/parse", async (req, res) => {
+  try {
+    const { rawText, context, enrichMissingAnswers, generateRubrics, userId, userRole } = req.body;
+
+    if (!rawText || !rawText.trim()) {
+      return res.status(400).json({ error: "Missing rawText in request body" });
+    }
+    if (!context || !context.classGrade || !context.subject) {
+      return res.status(400).json({ error: "Missing required curriculum context (classGrade, subject)" });
+    }
+
+    const result = await handleAITestParsing({
+      rawText,
+      context,
+      enrichMissingAnswers: Boolean(enrichMissingAnswers),
+      generateRubrics: Boolean(generateRubrics),
+      userId,
+      userRole
+    });
+
+    return res.json({ success: true, result });
+  } catch (err: any) {
+    console.error("Error in AI test parsing:", err);
+    return res.status(500).json({ error: cleanAIErrorMessage(err) || "Failed to parse test." });
+  }
+});
+
+// 12. AI Subjective Answer Evaluation
+router.post("/ai/test-evaluation/evaluate-subjective", async (req, res) => {
+  try {
+    const { questionId, question, questionType, maximumMarks, commandWord, modelAnswer, evaluationCriteria, studentAnswer, curriculumContext, userId, userRole } = req.body;
+
+    if (!question || !curriculumContext) {
+      return res.status(400).json({ error: "Missing question or curriculumContext" });
+    }
+
+    const result = await evaluateSingleSubjectiveAnswer({
+      questionId: questionId || "q-temp",
+      question,
+      questionType: questionType || "short_answer",
+      maximumMarks: Number(maximumMarks) || 2,
+      commandWord,
+      modelAnswer,
+      evaluationCriteria,
+      studentAnswer: studentAnswer || "",
+      curriculumContext,
+      userId,
+      userRole
+    });
+
+    return res.json({ success: true, evaluation: result });
+  } catch (err: any) {
+    console.error("Error evaluating subjective answer:", err);
+    return res.status(500).json({ error: cleanAIErrorMessage(err) || "Failed to evaluate answer." });
+  }
+});
+
+// 13. AI Batch Subjective Test Evaluation
+router.post("/ai/test-evaluation/evaluate-batch", async (req, res) => {
+  try {
+    const { testId, studentId, items, userId, userRole } = req.body;
+
+    if (!Array.isArray(items)) {
+      return res.status(400).json({ error: "Items array is required" });
+    }
+
+    const evaluations = await evaluateBatchSubjectiveAnswers({
+      testId: testId || "test-batch",
+      studentId: studentId || "student",
+      items,
+      userId,
+      userRole
+    });
+
+    return res.json({ success: true, evaluations });
+  } catch (err: any) {
+    console.error("Error in batch subjective evaluation:", err);
+    return res.status(500).json({ error: cleanAIErrorMessage(err) || "Failed to evaluate batch." });
+  }
 });
 
 // ========================================================

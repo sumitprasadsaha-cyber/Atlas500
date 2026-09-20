@@ -10,3 +10,5 @@ export * from "./practiceTests";
 export * from "./homework";
 export * from "./analytics";
 export * from "./search";
+export * from "./testParserAI";
+export * from "./testEvaluationAI";
