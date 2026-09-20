@@ -511,51 +511,54 @@ export default function SubjectNotes({
       (note as any).key ||
       url;
 
-    // On Capacitor native Android/iOS shell, invoke native OS FileOpener intent
-    if (isCapacitorNative()) {
-      try {
-        setOpeningNoteId(note.id);
-        const canonicalUrl = getCanonicalNoteDownloadUrl(
-          {
-            storageKey: finalStorageKey,
-            storagePath: finalStorageKey,
-            storage_path: (note as any).storage_path,
-            objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
-            url,
-            bucket,
-          },
-          bucket
-        );
-        await openNoteInNativeViewer({
+    // Save positions before opening note
+    try {
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("student_last_scroll_y", String(window.scrollY || 0));
+        const mainEl = document.getElementById("main-content-scroll");
+        if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainEl.scrollTop || 0));
+        const treeEl = document.getElementById("study-tree-scroll-container");
+        if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeEl.scrollTop || 0));
+      }
+    } catch {}
+
+    try {
+      setOpeningNoteId(note.id);
+      const canonicalUrl = getCanonicalNoteDownloadUrl(
+        {
           storageKey: finalStorageKey,
           storagePath: finalStorageKey,
           storage_path: (note as any).storage_path,
           objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
           url,
-          canonicalUrl,
-          title,
+          bucket,
           noteId: note.id,
-          bucket: bucket,
-          fileName: note.pdfFileName || note.fileName || (note as any).filename || `${note.chapterName || "Note"}.${note.fileType === "image" ? "jpg" : "pdf"}`,
-          pdfFileName: note.pdfFileName,
-          mimeType: note.mimeType || (note as any).mime_type,
-          fileType: note.fileType,
-          storageProvider: note.storageProvider,
-          studentId: studentId,
-          subject: subject,
-        });
-      } catch (err: any) {
-        console.warn("[SubjectNotes] Native opener fallback to in-app preview:", err);
-        setPreviewNote(note);
-      } finally {
-        setOpeningNoteId(null);
-      }
-      return;
+        },
+        bucket
+      );
+      await openNoteInNativeViewer({
+        storageKey: finalStorageKey,
+        storagePath: finalStorageKey,
+        storage_path: (note as any).storage_path,
+        objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
+        url,
+        canonicalUrl,
+        title,
+        noteId: note.id,
+        bucket: bucket,
+        fileName: note.pdfFileName || note.fileName || (note as any).filename || `${note.chapterName || "Note"}.${note.fileType === "image" ? "jpg" : "pdf"}`,
+        pdfFileName: note.pdfFileName,
+        mimeType: note.mimeType || (note as any).mime_type,
+        fileType: note.fileType,
+        storageProvider: note.storageProvider,
+        studentId: studentId,
+        subject: subject,
+      });
+    } catch (err: any) {
+      console.error("[SubjectNotes] Native opener failed:", err);
+    } finally {
+      setOpeningNoteId(null);
     }
-
-    // In PWA, iPad Safari, and standard web browsers:
-    // Open in-app preview modal so student remains in active session without app reload
-    setPreviewNote(note);
   };
 
   const handlePdfUploadChange = (e: React.ChangeEvent<HTMLInputElement>) => {

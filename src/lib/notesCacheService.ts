@@ -100,7 +100,18 @@ class NotesCacheService {
         };
 
         req.onsuccess = () => {
-          resolve(req.result);
+          const db = req.result;
+          try {
+            if (db.objectStoreNames.contains(STORE_BLOBS)) {
+              const tx = db.transaction(STORE_BLOBS, "readwrite");
+              const store = tx.objectStore(STORE_BLOBS);
+              store.delete("api/storage");
+              store.delete("note.pdf");
+              store.delete("document.pdf");
+              store.delete("notes.pdf");
+            }
+          } catch {}
+          resolve(db);
         };
 
         req.onerror = () => {
@@ -197,12 +208,53 @@ class NotesCacheService {
     "file.pdf",
     "note",
     "document",
+    "notes.pdf",
+    "topic.pdf",
+    "topic notes.pdf",
+    "topic notes",
+    "chapter.pdf",
+    "api/storage",
+    "api",
+    "storage",
+    "undefined",
+    "null",
   ]);
 
   public normalizeStorageKey(keyOrUrl: string): string {
     if (!keyOrUrl) return "";
-    const clean = keyOrUrl.replace(/^https?:\/\/[^\/]+/, "").replace(/^\/+/, "").split("?")[0].trim().toLowerCase();
-    if (NotesCacheService.GENERIC_KEYS.has(clean)) {
+    let candidate = (keyOrUrl || "").trim();
+
+    // If candidate contains query parameters (e.g., key=..., storageKey=..., storagePath=..., noteId=...), extract the real unique key!
+    if (candidate.includes("key=") || candidate.includes("storageKey=") || candidate.includes("storagePath=") || candidate.includes("noteId=")) {
+      try {
+        const fakeBase = "http://localhost";
+        const parsedUrl = new URL(candidate.startsWith("http") ? candidate : `${fakeBase}${candidate.startsWith("/") ? "" : "/"}${candidate}`);
+        const keyParam =
+          parsedUrl.searchParams.get("key") ||
+          parsedUrl.searchParams.get("storageKey") ||
+          parsedUrl.searchParams.get("storagePath") ||
+          parsedUrl.searchParams.get("noteId");
+        if (keyParam) {
+          candidate = decodeURIComponent(keyParam);
+        }
+      } catch {
+        const m = candidate.match(/[?&](?:key|storageKey|storagePath|noteId)=([^&]+)/);
+        if (m && m[1]) {
+          candidate = decodeURIComponent(m[1]);
+        }
+      }
+    }
+
+    const clean = candidate.replace(/^https?:\/\/[^\/]+/, "").replace(/^\/+/, "").split("?")[0].trim().toLowerCase();
+    if (
+      NotesCacheService.GENERIC_KEYS.has(clean) ||
+      clean === "api/storage" ||
+      clean.startsWith("api/storage") ||
+      clean === "api" ||
+      clean === "storage" ||
+      clean.startsWith("blob:") ||
+      clean.startsWith("data:")
+    ) {
       return "";
     }
     return clean;

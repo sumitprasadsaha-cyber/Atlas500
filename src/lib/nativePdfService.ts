@@ -296,9 +296,13 @@ export async function fetchNoteBlobWithCache(
     options.storagePath,
     (options as any).objectKey,
     (options as any).r2Key,
-    fileName,
-    options.url,
-  ].filter((k): k is string => typeof k === "string" && k.trim().length > 0);
+  ].filter((k): k is string => {
+    if (typeof k !== "string") return false;
+    const t = k.trim().toLowerCase();
+    if (!t) return false;
+    if (t === "note.pdf" || t === "document.pdf" || t === "notes.pdf" || t === "api/storage" || t === "storage" || t === "undefined" || t === "null") return false;
+    return true;
+  });
 
   // 1. Fast Cache Lookup: Return immediately if note is already cached locally
   try {
@@ -527,13 +531,16 @@ export async function fetchNoteBlobWithCache(
 
   // Persist to local cache for offline availability and fast repeat access
   try {
-    await notesCacheService.setCachedBlob({
-      key: canonicalStoragePath || options.noteId || fileName,
-      blob,
-      mimeType,
-      fileName,
-      aliases: candidateKeys,
-    });
+    const primaryKey = canonicalStoragePath || options.noteId;
+    if (primaryKey && !primaryKey.includes("api/storage")) {
+      await notesCacheService.setCachedBlob({
+        key: primaryKey,
+        blob,
+        mimeType,
+        fileName,
+        aliases: candidateKeys,
+      });
+    }
   } catch (saveErr) {
     console.warn("[NoteDeliveryPipeline] Failed to cache note blob:", saveErr);
   }

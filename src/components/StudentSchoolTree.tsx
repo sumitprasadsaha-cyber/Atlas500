@@ -82,7 +82,16 @@ export default function StudentSchoolTree({
   const [localErrorId, setLocalErrorId] = useState<string | null>(null);
   const [localErrorMsg, setLocalErrorMsg] = useState<string>("");
 
-  // Sync state to sessionStorage
+  // Sync state to sessionStorage and reload on prefix change
+  useEffect(() => {
+    try {
+      const savedMods = sessionStorage.getItem(`${storageKeyPrefix}_expanded`);
+      if (savedMods) {
+        setExpandedModules(JSON.parse(savedMods));
+      }
+    } catch {}
+  }, [storageKeyPrefix]);
+
   useEffect(() => {
     try {
       if (searchQuery) {
@@ -128,10 +137,16 @@ export default function StudentSchoolTree({
   }, [student?.id, student?.name, testBankTick]);
 
   const toggleModule = (moduleKey: string) => {
-    setExpandedModules((prev) => ({
-      ...prev,
-      [moduleKey]: !(prev[moduleKey] ?? true), // default expanded
-    }));
+    setExpandedModules((prev) => {
+      const next = {
+        ...prev,
+        [moduleKey]: !(prev[moduleKey] ?? true),
+      };
+      try {
+        sessionStorage.setItem(`${storageKeyPrefix}_expanded`, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
   };
 
   const cleanQuery = searchQuery.trim().toLowerCase();
@@ -389,7 +404,11 @@ export default function StudentSchoolTree({
 
                               try {
                                 if (typeof window !== "undefined") {
-                                  sessionStorage.setItem("student_last_scroll_y", String(window.scrollY));
+                                  sessionStorage.setItem("student_last_scroll_y", String(window.scrollY || 0));
+                                  const mainEl = document.getElementById("main-content-scroll");
+                                  if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainEl.scrollTop || 0));
+                                  const treeEl = document.getElementById("study-tree-scroll-container");
+                                  if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeEl.scrollTop || 0));
                                 }
                                 const result = onPreviewNote(topic.note);
                                 if (result && typeof result.then === "function") {

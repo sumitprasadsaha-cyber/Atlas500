@@ -1744,32 +1744,84 @@ export function StudentMyTab({
     return getStudentSubjects(localStudent, allClassNotes);
   }, [localStudent, allClassNotes]);
 
+  const isUPSC = isUPSCClass(localStudent?.classGrade);
   const subjectStorageKey = `student_selected_subject_${localStudent?.id || "anon"}`;
+  const paperStorageKey = `student_selected_paper_${localStudent?.id || "anon"}`;
 
   const [selectedSubject, setSelectedSubject] = useState<string | null>(() => {
     try {
-      const savedSubj = sessionStorage.getItem(subjectStorageKey);
-      const available = getStudentSubjects(localStudent, allClassNotes);
-      if (savedSubj && available.includes(savedSubj)) {
-        return savedSubj;
+      if (isUPSC) {
+        const savedPaper = sessionStorage.getItem(paperStorageKey);
+        if (savedPaper) return savedPaper;
       }
+      const savedSubj = sessionStorage.getItem(subjectStorageKey);
+      if (savedSubj) return savedSubj;
     } catch {}
-    return initialSubject || getStudentSubjects(localStudent, allClassNotes)[0] || null;
+    return initialSubject || (isUPSC ? "GS Paper 1" : getStudentSubjects(localStudent, allClassNotes)[0]) || null;
   });
 
   useEffect(() => {
     try {
       if (selectedSubject) {
         sessionStorage.setItem(subjectStorageKey, selectedSubject);
+        if (isUPSC && (selectedSubject.toLowerCase().includes("paper") || selectedSubject.toLowerCase().includes("gs"))) {
+          sessionStorage.setItem(paperStorageKey, selectedSubject);
+        }
       }
     } catch {}
-  }, [selectedSubject, subjectStorageKey]);
+  }, [selectedSubject, subjectStorageKey, paperStorageKey, isUPSC]);
 
-  // Restore scroll positions when mounting or returning from note preview
+  // Active scroll position tracking: continuously store scroll offsets for main scroll & tree scroll
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const timer = setTimeout(() => {
+    let ticking = false;
+    const updateScrollPositions = () => {
+      try {
+        sessionStorage.setItem("student_last_scroll_y", String(window.scrollY || 0));
+        const mainEl = document.getElementById("main-content-scroll");
+        if (mainEl) {
+          sessionStorage.setItem("student_main_scroll_top", String(mainEl.scrollTop || 0));
+        }
+        const treeEl = document.getElementById("study-tree-scroll-container");
+        if (treeEl) {
+          sessionStorage.setItem("student_tree_scroll_top", String(treeEl.scrollTop || 0));
+        }
+      } catch {}
+      ticking = false;
+    };
+
+    const handleScroll = () => {
+      if (!ticking) {
+        window.requestAnimationFrame(updateScrollPositions);
+        ticking = true;
+      }
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    const mainEl = document.getElementById("main-content-scroll");
+    if (mainEl) mainEl.addEventListener("scroll", handleScroll, { passive: true });
+    const treeEl = document.getElementById("study-tree-scroll-container");
+    if (treeEl) treeEl.addEventListener("scroll", handleScroll, { passive: true });
+
+    const handleBeforeUnload = () => updateScrollPositions();
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("pagehide", handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+      if (mainEl) mainEl.removeEventListener("scroll", handleScroll);
+      if (treeEl) treeEl.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("pagehide", handleBeforeUnload);
+    };
+  }, [selectedSubject]);
+
+  // Restore scroll positions when mounting, switching papers/subjects, or returning via back button / iPad gesture
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const restore = () => {
       try {
         const savedScrollY = sessionStorage.getItem("student_last_scroll_y");
         if (savedScrollY) {
@@ -1782,7 +1834,7 @@ export function StudentMyTab({
         const savedMainScroll = sessionStorage.getItem("student_main_scroll_top");
         if (savedMainScroll) {
           const mainEl = document.getElementById("main-content-scroll");
-          if (mainEl) {
+          if (mainEl && !isNaN(Number(savedMainScroll))) {
             mainEl.scrollTop = Number(savedMainScroll);
           }
         }
@@ -1790,14 +1842,30 @@ export function StudentMyTab({
         const savedTreeScroll = sessionStorage.getItem("student_tree_scroll_top");
         if (savedTreeScroll) {
           const treeEl = document.getElementById("study-tree-scroll-container");
-          if (treeEl) {
+          if (treeEl && !isNaN(Number(savedTreeScroll))) {
             treeEl.scrollTop = Number(savedTreeScroll);
           }
         }
       } catch {}
-    }, 80);
+    };
 
-    return () => clearTimeout(timer);
+    restore();
+    const t1 = setTimeout(restore, 50);
+    const t2 = setTimeout(restore, 180);
+    const t3 = setTimeout(restore, 400);
+
+    const handlePopState = () => restore();
+    const handlePageShow = () => restore();
+    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("pageshow", handlePageShow);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
   }, [selectedSubject]);
 
   const [editingRemarkId, setEditingRemarkId] = useState<string | null>(null);
@@ -1826,6 +1894,34 @@ export function StudentMyTab({
   } | null>(null);
 
   const [testBankVersion, setTestBankVersion] = useState(0);
+  const [curriculumVersion, setCurriculumVersion] = useState(0);
+
+  React.useEffect(() => {
+    const unsubCurriculum = subscribeToCurriculumHierarchy(() => {
+      setCurriculumVersion((v) => v + 1);
+    });
+    const unsubAccess = subscribeToSubjectAccess(() => {
+      setCurriculumVersion((v) => v + 1);
+    });
+    const handleCurriculumEvent = () => {
+      setCurriculumVersion((v) => v + 1);
+    };
+    window.addEventListener("curriculum-hierarchy-updated", handleCurriculumEvent);
+    window.addEventListener("subject-access-updated", handleCurriculumEvent);
+    window.addEventListener("notes-progress-updated", handleCurriculumEvent);
+    return () => {
+      if (unsubCurriculum) unsubCurriculum();
+      if (unsubAccess) unsubAccess();
+      window.removeEventListener("curriculum-hierarchy-updated", handleCurriculumEvent);
+      window.removeEventListener("subject-access-updated", handleCurriculumEvent);
+      window.removeEventListener("notes-progress-updated", handleCurriculumEvent);
+    };
+  }, []);
+
+  const upscHierarchy = useMemo(() => {
+    if (!isUPSC) return [];
+    return buildStudentUPSCHierarchy(localStudent, allClassNotes);
+  }, [isUPSC, localStudent, allClassNotes, curriculumVersion, testBankVersion]);
 
   useEffect(() => {
     if (isPracticeTestActive()) return;
@@ -1926,16 +2022,36 @@ export function StudentMyTab({
   };
 
   React.useEffect(() => {
-    if (initialSubject && sortedSubjects.includes(initialSubject)) {
+    if (initialSubject) {
       setSelectedSubject(initialSubject);
-    } else if (sortedSubjects.length > 0) {
-      if (!selectedSubject || !sortedSubjects.includes(selectedSubject)) {
-        setSelectedSubject(sortedSubjects[0]);
+      return;
+    }
+    if (isUPSC) {
+      if (selectedSubject) {
+        const isKnownPaper = upscHierarchy.some((p) => p.gsPaper.toLowerCase() === selectedSubject.toLowerCase());
+        const isKnownSubj = sortedSubjects.some((s) => s.toLowerCase() === selectedSubject.toLowerCase());
+        if (isKnownPaper || isKnownSubj) return;
+      }
+      try {
+        const savedPaper = sessionStorage.getItem(paperStorageKey);
+        if (savedPaper && upscHierarchy.some((p) => p.gsPaper.toLowerCase() === savedPaper.toLowerCase())) {
+          setSelectedSubject(savedPaper);
+          return;
+        }
+      } catch {}
+      if (upscHierarchy.length > 0) {
+        setSelectedSubject(upscHierarchy[0].gsPaper);
       }
     } else {
-      setSelectedSubject(null);
+      if (sortedSubjects.length > 0) {
+        if (!selectedSubject || !sortedSubjects.includes(selectedSubject)) {
+          setSelectedSubject(sortedSubjects[0]);
+        }
+      } else {
+        setSelectedSubject(null);
+      }
     }
-  }, [initialSubject, sortedSubjects]);
+  }, [initialSubject, sortedSubjects, isUPSC, upscHierarchy.length, paperStorageKey]);
 
   const [selectedOwnerClass, setSelectedOwnerClass] = useState<string | null>(() => {
     if (initialOwnerClass) return initialOwnerClass;
@@ -1969,6 +2085,10 @@ export function StudentMyTab({
     setSelectedSubject(subject);
     setSelectedOwnerClass(ownerClass || null);
     try {
+      sessionStorage.setItem(subjectStorageKey, subject);
+      if (isUPSC && (subject.toLowerCase().includes("paper") || subject.toLowerCase().includes("gs"))) {
+        sessionStorage.setItem(paperStorageKey, subject);
+      }
       if (ownerClass) {
         sessionStorage.setItem(`student_selected_owner_class_${localStudent.id}`, ownerClass);
       } else {
@@ -2127,52 +2247,63 @@ export function StudentMyTab({
     const topicFormatted = getFormattedTopicLabel(note);
     const title = topicFormatted || `Chapter ${note.chapterNo} – ${note.chapterName}`;
 
-    // On native Capacitor Android/iOS shell, invoke native OS FileOpener intent
-    if (isCapacitorNative()) {
-      try {
-        setOpeningNoteId(note.id);
-        const canonicalUrl = getCanonicalNoteDownloadUrl(
-          {
-            storageKey: finalStorageKey,
-            storagePath: finalStorageKey,
-            storage_path: (note as any).storage_path,
-            objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
-            url,
-            bucket,
-          },
-          bucket
-        );
-        await openNoteInNativeViewer({
+    // Save exact positions and state to sessionStorage before opening note
+    try {
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("student_last_scroll_y", String(window.scrollY || 0));
+        const mainEl = document.getElementById("main-content-scroll");
+        if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainEl.scrollTop || 0));
+        const treeEl = document.getElementById("study-tree-scroll-container");
+        if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeEl.scrollTop || 0));
+        if (selectedSubject) sessionStorage.setItem(`student_selected_subject_${localStudent?.id}`, selectedSubject);
+        if (activePaper?.gsPaper) sessionStorage.setItem(`student_selected_paper_${localStudent?.id}`, activePaper.gsPaper);
+        if (selectedOwnerClass) sessionStorage.setItem(`student_selected_owner_class_${localStudent?.id}`, selectedOwnerClass);
+      }
+    } catch {}
+
+    // Open the PDF using device / browser's native PDF handling
+    try {
+      setOpeningNoteId(note.id);
+      const canonicalUrl = getCanonicalNoteDownloadUrl(
+        {
           storageKey: finalStorageKey,
           storagePath: finalStorageKey,
           storage_path: (note as any).storage_path,
           objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
           url,
-          canonicalUrl,
-          title,
+          bucket,
           noteId: note.id,
-          bucket: bucket,
-          fileName: note.pdfFileName || note.fileName || (note as any).filename || `${note.chapterName || "Note"}.${note.fileType === "image" ? "jpg" : "pdf"}`,
-          pdfFileName: note.pdfFileName,
-          mimeType: note.mimeType || (note as any).mime_type,
-          fileType: note.fileType,
-          storageProvider: note.storageProvider,
-          studentId: localStudent?.id,
-          subject: selectedSubject || note.subject,
-        });
-      } catch (err: any) {
-        console.warn("[StudentMyTab] Native opener fallback to in-app preview:", err);
-        setPreviewNote(note);
-      } finally {
-        setOpeningNoteId(null);
-      }
-      return;
-    }
+        },
+        bucket
+      );
 
-    // In PWA, iPad Safari, and standard web browsers:
-    // Open the note inside the app using the in-app viewer so the student remains
-    // within the active Student Portal / My Study Space session without restarting or reloading the app.
-    setPreviewNote(note);
+      await openNoteInNativeViewer({
+        storageKey: finalStorageKey,
+        storagePath: finalStorageKey,
+        storage_path: (note as any).storage_path,
+        objectKey: (note as any).objectKey || (note as any).r2Key || finalStorageKey,
+        url,
+        canonicalUrl,
+        title,
+        noteId: note.id,
+        bucket: bucket,
+        fileName: note.pdfFileName || note.fileName || (note as any).filename || `${note.chapterName || "Note"}.${note.fileType === "image" ? "jpg" : "pdf"}`,
+        pdfFileName: note.pdfFileName,
+        mimeType: note.mimeType || (note as any).mime_type,
+        fileType: note.fileType,
+        storageProvider: note.storageProvider,
+        studentId: localStudent?.id,
+        subject: selectedSubject || note.subject,
+      });
+    } catch (err: any) {
+      console.error("[StudentDashboard] Native note opener error:", err);
+      setOpenErrorNoteId(note.id);
+      setTimeout(() => {
+        setOpenErrorNoteId((curr) => (curr === note.id ? null : curr));
+      }, 3500);
+    } finally {
+      setOpeningNoteId(null);
+    }
   };
 
   const getFileSizeStr = (pdfUrl: string, chapterNo: number) => {
@@ -2191,52 +2322,36 @@ export function StudentMyTab({
     return `${mockedKb} KB`;
   };
 
-  const [curriculumVersion, setCurriculumVersion] = useState(0);
-
-  React.useEffect(() => {
-    const unsubCurriculum = subscribeToCurriculumHierarchy(() => {
-      setCurriculumVersion((v) => v + 1);
-    });
-    const unsubAccess = subscribeToSubjectAccess(() => {
-      setCurriculumVersion((v) => v + 1);
-    });
-    const handleCurriculumEvent = () => {
-      setCurriculumVersion((v) => v + 1);
-    };
-    window.addEventListener("curriculum-hierarchy-updated", handleCurriculumEvent);
-    window.addEventListener("subject-access-updated", handleCurriculumEvent);
-    window.addEventListener("notes-progress-updated", handleCurriculumEvent);
-    return () => {
-      if (unsubCurriculum) unsubCurriculum();
-      if (unsubAccess) unsubAccess();
-      window.removeEventListener("curriculum-hierarchy-updated", handleCurriculumEvent);
-      window.removeEventListener("subject-access-updated", handleCurriculumEvent);
-      window.removeEventListener("notes-progress-updated", handleCurriculumEvent);
-    };
-  }, []);
-
-  const isUPSC = isUPSCClass(localStudent.classGrade);
-
-  const upscHierarchy = useMemo(() => {
-    if (!isUPSC) return [];
-    return buildStudentUPSCHierarchy(localStudent, allClassNotes);
-  }, [isUPSC, localStudent, allClassNotes, curriculumVersion, testBankVersion]);
-
   const enrolledPapers = useMemo(() => {
     return upscHierarchy.map((p) => p.gsPaper);
   }, [upscHierarchy]);
 
   const activePaper = useMemo(() => {
     if (!isUPSC || upscHierarchy.length === 0) return null;
-    if (!selectedSubject) return upscHierarchy[0];
-    const exact = upscHierarchy.find((p) => p.gsPaper.toLowerCase() === selectedSubject.toLowerCase());
-    if (exact) return exact;
-    const parent = upscHierarchy.find((p) =>
-      p.subjects.some((s) => s.subject.toLowerCase() === selectedSubject.toLowerCase())
-    );
-    if (parent) return parent;
+    let target = selectedSubject;
+    if (!target) {
+      try {
+        target = sessionStorage.getItem(paperStorageKey);
+      } catch {}
+    }
+    if (target) {
+      const exact = upscHierarchy.find((p) => p.gsPaper.toLowerCase() === target!.toLowerCase());
+      if (exact) return exact;
+      const parent = upscHierarchy.find((p) =>
+        p.subjects.some((s) => s.subject.toLowerCase() === target!.toLowerCase())
+      );
+      if (parent) return parent;
+    }
     return upscHierarchy[0];
-  }, [isUPSC, upscHierarchy, selectedSubject]);
+  }, [isUPSC, upscHierarchy, selectedSubject, paperStorageKey]);
+
+  useEffect(() => {
+    if (activePaper?.gsPaper && localStudent?.id) {
+      try {
+        sessionStorage.setItem(`student_selected_paper_${localStudent.id}`, activePaper.gsPaper);
+      } catch {}
+    }
+  }, [activePaper?.gsPaper, localStudent?.id]);
 
   const completeSchoolHierarchy = useMemo(() => {
     if (isUPSC) return null;

@@ -213,7 +213,13 @@ export function getCanonicalNoteDownloadUrl(
     return cleanKey;
   }
 
-  return `/api/storage?action=download&bucket=${encodeURIComponent(effectiveBucket)}&key=${encodeURIComponent(cleanKey)}`;
+  const noteId =
+    typeof storagePathOrTarget === "object" && storagePathOrTarget !== null
+      ? (storagePathOrTarget.noteId || storagePathOrTarget.id)
+      : undefined;
+
+  const noteParam = noteId ? `&noteId=${encodeURIComponent(String(noteId))}` : "";
+  return `/api/storage?action=download&bucket=${encodeURIComponent(effectiveBucket)}&key=${encodeURIComponent(cleanKey)}${noteParam}`;
 }
 
 /**
