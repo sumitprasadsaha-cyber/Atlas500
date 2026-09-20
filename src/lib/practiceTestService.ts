@@ -2861,27 +2861,29 @@ export async function deletePracticeTest(
         } catch (_) {}
       }
 
-      // Safe note unlinking (clearing practice test reference without deleting notes)
-      try {
-        const collectionsToCheck = ["class_notes", "upsc_notes"];
-        for (const colName of collectionsToCheck) {
-          const notesCol = collection(db, colName);
-          const snap = await getDocs(notesCol);
-          for (const docSnap of snap.docs) {
-            const n = docSnap.data() as ClassNote;
-            const pId = n.practiceTestId;
-            if (pId && candidateIds.has(pId)) {
-              await setDoc(
-                docSnap.ref,
-                { hasPracticeTest: false, hasTest: false, practiceTestId: null },
-                { merge: true }
-              ).catch(() => {});
+      // Non-blocking safe note unlinking (clearing practice test reference without blocking test deletion)
+      (async () => {
+        try {
+          const collectionsToCheck = ["class_notes", "upsc_notes"];
+          for (const colName of collectionsToCheck) {
+            const notesCol = collection(db, colName);
+            const snap = await getDocs(notesCol);
+            for (const docSnap of snap.docs) {
+              const n = docSnap.data() as ClassNote;
+              const pId = n.practiceTestId;
+              if (pId && candidateIds.has(pId)) {
+                await setDoc(
+                  docSnap.ref,
+                  { hasPracticeTest: false, hasTest: false, practiceTestId: null },
+                  { merge: true }
+                ).catch(() => {});
+              }
             }
           }
+        } catch (unlinkErr) {
+          console.warn("[PracticeTestService] Note unlinking warning:", unlinkErr);
         }
-      } catch (unlinkErr) {
-        console.warn("[PracticeTestService] Note unlinking warning:", unlinkErr);
-      }
+      })().catch(() => {});
     }
   } catch (dbErr: any) {
     console.error("[PracticeTestService] Firestore connection error during deletion:", dbErr);
@@ -2889,7 +2891,7 @@ export async function deletePracticeTest(
   }
 
   // If backend explicitly rejected due to permissions, return failure
-  if (firestoreError) {
+  if (firestoreError && (firestoreError?.code === "permission-denied" || firestoreError?.code === "unauthenticated")) {
     return {
       success: false,
       message: firestoreError?.message || "Permission denied or failed to communicate with Firestore.",
@@ -2897,15 +2899,27 @@ export async function deletePracticeTest(
     };
   }
 
-  // 5. Clean up from memory and local storage
+  // 5. Clean up from memory and local storage immediately
   for (const docId of Array.from(candidateIds)) {
-    delete bank[docId];
-    delete memoryTestBank[docId];
+    if (bank[docId]) {
+      (bank[docId] as any).isDeleted = true;
+      delete bank[docId];
+    }
+    if (memoryTestBank[docId]) {
+      (memoryTestBank[docId] as any).isDeleted = true;
+      delete memoryTestBank[docId];
+    }
     removeLocalTopicCache(docId);
   }
   for (const key of keysToRemove) {
-    delete bank[key];
-    delete memoryTestBank[key];
+    if (bank[key]) {
+      (bank[key] as any).isDeleted = true;
+      delete bank[key];
+    }
+    if (memoryTestBank[key]) {
+      (memoryTestBank[key] as any).isDeleted = true;
+      delete memoryTestBank[key];
+    }
     removeLocalTopicCache(key);
   }
 
@@ -2916,12 +2930,12 @@ export async function deletePracticeTest(
   clearAllQuestionCaches();
   notifyTestBankSubscribers();
 
-  // 6. Synchronize clean state to secondary R2 storage & trigger events
-  await syncTestBankToStorage(memoryTestBank, { allowEmpty: true }).catch(() => {});
-  await notifyPracticeTestRealtimeSync({
+  // 6. Synchronize clean state to secondary R2 storage & trigger events (non-blocking background)
+  syncTestBankToStorage(memoryTestBank, { allowEmpty: true }).catch(() => {});
+  notifyPracticeTestRealtimeSync({
     testId: primaryId || Array.from(candidateIds)[0] || "test",
     action: "delete_topic",
-  });
+  }).catch(() => {});
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("practice-tests-updated"));

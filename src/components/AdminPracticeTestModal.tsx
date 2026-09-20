@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
   X, 
   CheckCircle2, 
@@ -506,7 +506,10 @@ export default function AdminPracticeTestModal({
     setIsDeleteConfirmOpen(true);
   };
 
+  const isDeletingRef = useRef(false);
   const handleConfirmDeleteTest = async () => {
+    if (isDeletingRef.current || isSaving) return;
+    isDeletingRef.current = true;
     setDeleteToast(null);
     setIsSaving(true);
 
@@ -529,7 +532,7 @@ export default function AdminPracticeTestModal({
         console.error(`[AdminPracticeTestModal] Deletion failed for test:`, testInfo, errMsg);
         setDeleteToast(errMsg);
         setValidationErrorMsg([errMsg]);
-        // Do not close confirm modal on error so the admin can review the error
+        setIsDeleteConfirmOpen(false);
         return;
       }
 
@@ -545,18 +548,21 @@ export default function AdminPracticeTestModal({
       setValidationSuccess("Practice Test deleted successfully.");
       setValidationErrorMsg([]);
       setActiveTab("editor");
+      setIsDeleteConfirmOpen(false);
       notifyPracticeTestChanged();
       if (onPracticeTestChanged) {
         onPracticeTestChanged();
       }
-      setIsDeleteConfirmOpen(false);
+      onClose();
     } catch (err: any) {
       const errMsg = err?.message || "Unable to delete practice test.";
       console.error(`[AdminPracticeTestModal] Exception deleting practice test:`, testInfo, err);
       setDeleteToast(errMsg);
       setValidationErrorMsg([errMsg]);
+      setIsDeleteConfirmOpen(false);
     } finally {
       setIsSaving(false);
+      isDeletingRef.current = false;
     }
   };
 

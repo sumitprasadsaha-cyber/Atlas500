@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
   Trophy, 
   Plus, 
@@ -19,6 +19,8 @@ import {
   Award,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
+  Layers,
   Calendar,
   AlertTriangle,
   X,
@@ -327,48 +329,258 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
     });
   }, [filteredBaseTests, selectedType, attempts]);
 
-  // Deletion loading state
+  // Deletion loading state & atomic mutex ref to prevent duplicate requests
   const [isDeletingTest, setIsDeletingTest] = useState<boolean>(false);
+  const isDeletingRef = useRef<boolean>(false);
 
   // Handlers
   const handleDeleteTestConfirm = async () => {
-    if (!testToDelete || isDeletingTest) return;
+    if (!testToDelete || isDeletingRef.current || isDeletingTest) return;
+    isDeletingRef.current = true;
     setIsDeletingTest(true);
+
+    const targetTest = testToDelete;
+    const deletedId = targetTest.id || (targetTest as any).testId || (targetTest as any).docId;
+    const candidateIds = new Set<string>();
+    if (deletedId) candidateIds.add(String(deletedId).trim());
+    if (targetTest.id) candidateIds.add(String(targetTest.id).trim());
+    if ((targetTest as any).testId) candidateIds.add(String((targetTest as any).testId).trim());
+    if ((targetTest as any).docId) candidateIds.add(String((targetTest as any).docId).trim());
+    if ((targetTest as any).assessmentTestId) candidateIds.add(String((targetTest as any).assessmentTestId).trim());
+    const canonicalId = buildAssessmentTestId(
+      targetTest.classGrade,
+      targetTest.subject,
+      targetTest.chapterNo,
+      targetTest.topicName,
+      (targetTest as any).computedType || targetTest.testType
+    );
+    if (canonicalId) candidateIds.add(canonicalId.trim());
+
     try {
-      const result = await deletePracticeTest(testToDelete);
-      if (!result.success) {
-        setToastMessage(`Failed to delete test: ${result.message || "Unknown error"}`);
-        return;
+      // Race delete with strict 8-second safety timeout so UI never stays stuck on "Deleting..."
+      const result = await Promise.race([
+        deletePracticeTest(targetTest),
+        new Promise<{ success: boolean; message: string }>((_, reject) =>
+          setTimeout(() => reject(new Error("Deletion timed out. Please try again.")), 8000)
+        )
+      ]);
+
+      if (!result || !result.success) {
+        throw new Error(result?.message || "Failed to delete test.");
       }
-      setToastMessage("Test deleted successfully.");
-      const deletedId = testToDelete.id || (testToDelete as any).testId || (testToDelete as any).docId;
+
+      // 1. Stop loading state immediately
+      setIsDeletingTest(false);
+      isDeletingRef.current = false;
+
+      // 2. Close delete confirmation modal immediately
       setTestToDelete(null);
 
-      // Optimistic instant removal from local state
+      // 3. Optimistic instant removal from local state across all matching candidate keys
       setTestsBank((prev) => {
         const next = { ...prev };
-        if (deletedId) delete next[deletedId];
-        Object.keys(next).forEach((k) => {
-          if (
-            k === deletedId ||
-            next[k]?.id === deletedId ||
-            (next[k] as any)?.testId === deletedId ||
-            (next[k] as any)?.docId === deletedId
-          ) {
-            delete next[k];
+        for (const key of Object.keys(next)) {
+          const t = next[key];
+          if (!t) {
+            delete next[key];
+            continue;
           }
-        });
+          const tId = t.id ? String(t.id).trim() : "";
+          const tTestId = (t as any).testId ? String((t as any).testId).trim() : "";
+          const tDocId = (t as any).docId ? String((t as any).docId).trim() : "";
+          const tCanonical = buildAssessmentTestId(
+            t.classGrade,
+            t.subject,
+            t.chapterNo,
+            t.topicName,
+            (t as any).computedType || t.testType
+          );
+
+          if (
+            candidateIds.has(key) ||
+            (tId && candidateIds.has(tId)) ||
+            (tTestId && candidateIds.has(tTestId)) ||
+            (tDocId && candidateIds.has(tDocId)) ||
+            (tCanonical && candidateIds.has(tCanonical)) ||
+            key === deletedId
+          ) {
+            delete next[key];
+          }
+        }
         return next;
       });
 
-      await loadData();
+      setToastMessage("Test deleted successfully.");
+
+      // 4. Background re-sync with database (non-blocking)
+      loadData().catch(console.warn);
       if (onRefresh) onRefresh();
+
     } catch (err: any) {
       console.error("[AdminTestsView] Deletion error:", err);
+      // Stop loading state immediately
+      setIsDeletingTest(false);
+      isDeletingRef.current = false;
+      // Close confirmation modal appropriately so screen is NEVER stuck on "Deleting..."
+      setTestToDelete(null);
+      // Show clear error message
       setToastMessage(`Failed to delete test: ${err?.message || "Unknown error"}`);
     } finally {
       setIsDeletingTest(false);
+      isDeletingRef.current = false;
     }
+  };
+
+  // Helper to resolve chapter name with fallback to curriculum notes
+  const resolveChapterName = (classGrade: string, subject: string, chapterNo?: number, fallbackName?: string) => {
+    if (fallbackName && fallbackName.trim() && !fallbackName.toLowerCase().startsWith("chapter ")) {
+      return fallbackName.trim();
+    }
+    const num = Number(chapterNo);
+    if (!num) return fallbackName?.trim() || "Chapter Test";
+    const normClass = toStableClassId(classGrade);
+    const normSubj = subject.trim().toLowerCase();
+    for (const n of notes) {
+      const nClass = toStableClassId(n.classGrade || (n as any).className || "");
+      const nSubj = (n.subject || (n as any).subjectName || "").trim().toLowerCase();
+      if (nClass === normClass && nSubj === normSubj && Number(n.chapterNo) === num) {
+        if (n.chapterName && n.chapterName.trim()) {
+          return n.chapterName.trim();
+        }
+      }
+    }
+    return fallbackName?.trim() || `Chapter ${num}`;
+  };
+
+  // State for expanded chapters in Chapter Tests view
+  const [expandedChapterKeys, setExpandedChapterKeys] = useState<Set<string>>(new Set());
+
+  const toggleChapterExpanded = (chapterKey: string) => {
+    setExpandedChapterKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(chapterKey)) {
+        next.delete(chapterKey);
+      } else {
+        next.add(chapterKey);
+      }
+      return next;
+    });
+  };
+
+  // Group Chapter Tests by Class -> Subject -> Chapter dynamically
+  interface ChapterTestGroup {
+    key: string;
+    classGrade: string;
+    subject: string;
+    chapterNo: number;
+    chapterName: string;
+    tests: any[];
+    totalSubmissions: number;
+  }
+
+  interface SubjectChapterSection {
+    key: string;
+    classGrade: string;
+    subject: string;
+    chapters: ChapterTestGroup[];
+    totalTests: number;
+  }
+
+  const subjectChapterSections = useMemo(() => {
+    const chapterTests = testList.filter((t) => t.computedType === "CHAPTER");
+    if (chapterTests.length === 0) return [];
+
+    const sectionMap = new Map<string, SubjectChapterSection>();
+
+    chapterTests.forEach((test) => {
+      const cls = test.classGrade || "Class 10";
+      const subj = test.subject || "General";
+      const sectionKey = `${toStableClassId(cls)}__${subj.trim().toLowerCase()}`;
+
+      if (!sectionMap.has(sectionKey)) {
+        sectionMap.set(sectionKey, {
+          key: sectionKey,
+          classGrade: cls,
+          subject: subj,
+          chapters: [],
+          totalTests: 0,
+        });
+      }
+
+      const section = sectionMap.get(sectionKey)!;
+      section.totalTests++;
+
+      const chNo = Number(test.chapterNo) || 1;
+      const chName = resolveChapterName(cls, subj, chNo, test.chapterName);
+      const chapterKey = `${sectionKey}__ch_${chNo}`;
+
+      let chapterGroup = section.chapters.find((c) => c.key === chapterKey);
+      if (!chapterGroup) {
+        chapterGroup = {
+          key: chapterKey,
+          classGrade: cls,
+          subject: subj,
+          chapterNo: chNo,
+          chapterName: chName,
+          tests: [],
+          totalSubmissions: 0,
+        };
+        section.chapters.push(chapterGroup);
+      }
+
+      chapterGroup.tests.push(test);
+      chapterGroup.totalSubmissions += (test.attemptsCount || 0);
+    });
+
+    // Sort chapters within each section by chapterNo
+    sectionMap.forEach((sec) => {
+      sec.chapters.sort((a, b) => a.chapterNo - b.chapterNo);
+      sec.chapters.forEach((ch) => {
+        ch.tests.sort((a, b) => {
+          const titleA = a.title || a.topicName || "";
+          const titleB = b.title || b.topicName || "";
+          return titleA.localeCompare(titleB, undefined, { numeric: true });
+        });
+      });
+    });
+
+    // Sort sections: classGrade, then subject
+    return Array.from(sectionMap.values()).sort((a, b) => {
+      const classCompare = a.classGrade.localeCompare(b.classGrade, undefined, { numeric: true });
+      if (classCompare !== 0) return classCompare;
+      return a.subject.localeCompare(b.subject);
+    });
+  }, [testList, notes]);
+
+  const expandAllChapters = () => {
+    const allKeys = new Set<string>();
+    subjectChapterSections.forEach((sec) => {
+      sec.chapters.forEach((ch) => allKeys.add(ch.key));
+    });
+    setExpandedChapterKeys(allKeys);
+  };
+
+  const collapseAllChapters = () => {
+    setExpandedChapterKeys(new Set());
+  };
+
+  // Non-chapter tests for the ALL tab (Subject, Topic, PYQ)
+  const nonChapterTests = useMemo(() => {
+    return testList.filter((t) => t.computedType !== "CHAPTER");
+  }, [testList]);
+
+  // Determine if a chapter is open (either explicitly expanded or matches search query)
+  const isChapterOpen = (chKey: string, ch: ChapterTestGroup) => {
+    if (expandedChapterKeys.has(chKey)) return true;
+    if (searchQuery.trim().length > 0) {
+      const q = searchQuery.trim().toLowerCase();
+      if (ch.chapterName.toLowerCase().includes(q)) return true;
+      return ch.tests.some((t) => 
+        (t.title || "").toLowerCase().includes(q) || 
+        (t.topicName || "").toLowerCase().includes(q)
+      );
+    }
+    return false;
   };
 
   const handleLaunchCreate = (e: React.FormEvent) => {
@@ -388,6 +600,302 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
       testType: newTestType,
       isNewTest: true
     });
+  };
+
+  const renderTestCard = (test: any, isChapterSubCard: boolean = false) => {
+    const questionCount = Array.isArray(test.questions) ? test.questions.length : (test.questionCount || 0);
+    const totalMarks = test.totalMarks || questionCount;
+    const duration = test.durationMinutes || (test as any).duration_minutes || 0;
+
+    const typeColors = {
+      SUBJECT: "bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800",
+      CHAPTER: "bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800",
+      TOPIC: "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800",
+      PYQ: "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800"
+    };
+
+    const typeLabels = {
+      SUBJECT: "Subject Test",
+      CHAPTER: "Chapter Test",
+      TOPIC: "Topic Test",
+      PYQ: "PYQ"
+    };
+
+    const displayTitle = test.title || 
+      (test.computedType === "SUBJECT"
+        ? `${test.subject} Comprehensive Subject Test`
+        : test.computedType === "CHAPTER"
+        ? (test.chapterNo ? `Chapter ${test.chapterNo}: ${test.chapterName || "Full Chapter Test"}` : "Chapter Test")
+        : test.topicName || "Academic Practice Test");
+
+    return (
+      <div
+        key={test.id}
+        className={`bg-white dark:bg-slate-900 border ${
+          isChapterSubCard 
+            ? "border-amber-200/80 dark:border-amber-900/40 shadow-2xs hover:border-amber-400 dark:hover:border-amber-600" 
+            : "border-slate-200 dark:border-slate-800 shadow-2xs"
+        } rounded-2xl p-4 sm:p-5 hover:shadow-md transition-all flex flex-col justify-between group`}
+        id={`test-card-${test.id}`}
+      >
+        <div>
+          {/* Top Badges */}
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border uppercase tracking-wider ${typeColors[test.computedType as keyof typeof typeColors] || typeColors.CHAPTER}`}>
+              {typeLabels[test.computedType as keyof typeof typeLabels] || "Test"}
+            </span>
+            
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                {test.classGrade || "Class 10"}
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-900/40">
+                {test.subject || "General"}
+              </span>
+            </div>
+          </div>
+
+          {/* Test Title */}
+          <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white mb-2 leading-snug line-clamp-2">
+            {displayTitle}
+          </h3>
+
+          {/* Chapter / Topic Scope if applicable and not already in chapter subcard */}
+          {!isChapterSubCard && test.computedType !== "SUBJECT" && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-3 flex items-center gap-1.5 truncate">
+              <BookOpen className="w-3 h-3 shrink-0 text-slate-400" />
+              <span className="truncate">
+                {test.chapterNo ? `Ch ${test.chapterNo}: ` : ""}{test.chapterName || test.topicName}
+              </span>
+            </p>
+          )}
+
+          {/* Meta Tags: Duration, Questions, Marks */}
+          <div className="grid grid-cols-3 gap-2 py-2.5 px-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-100 dark:border-slate-800/80 mb-4 text-center">
+            <div>
+              <p className="text-[10px] text-slate-400 font-semibold uppercase">Questions</p>
+              <p className="text-xs font-bold text-slate-800 dark:text-slate-200">{questionCount} Qs</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-400 font-semibold uppercase">Marks</p>
+              <p className="text-xs font-bold text-slate-800 dark:text-slate-200">{totalMarks} Pts</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-400 font-semibold uppercase">Duration</p>
+              <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                {duration > 0 ? `${duration}m` : "Untimed"}
+              </p>
+            </div>
+          </div>
+
+          {/* Submissions summary */}
+          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <span className="flex items-center gap-1">
+              <Users className="w-3.5 h-3.5 text-slate-400" />
+              <span>{test.attemptsCount} {test.attemptsCount === 1 ? "submission" : "submissions"}</span>
+            </span>
+            {test.attemptsCount > 0 && (
+              <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                <Award className="w-3.5 h-3.5" />
+                <span>Avg: {test.avgScore}%</span>
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-1.5 pt-1">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveEditorTest({
+                testId: test.id || (test as any).testId,
+                classGrade: test.classGrade,
+                subject: test.subject,
+                chapterNo: test.chapterNo,
+                chapterName: test.chapterName,
+                topicName: test.topicName,
+                testType: test.computedType
+              });
+            }}
+            className="flex-1 py-1.5 px-2 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border border-blue-200 dark:border-blue-800/60"
+            title="Edit questions and test settings"
+          >
+            <Edit3 className="w-3.5 h-3.5" />
+            <span>Manage</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setTestToPreview(test)}
+            className="py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer"
+            title="Preview questions"
+          >
+            <Eye className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setTestForSubmissions(test)}
+            className="py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer"
+            title="View student submissions"
+          >
+            <Users className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            disabled={isDeletingTest}
+            onClick={() => setTestToDelete(test)}
+            className="py-1.5 px-2 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 text-rose-600 dark:text-rose-400 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer border border-rose-200 dark:border-rose-900/40 disabled:opacity-50"
+            title="Delete test"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderChapterSections = () => {
+    return (
+      <div className="space-y-6" id="chapter-tests-by-chapter-container">
+        {/* Controls Bar: Summary and Expand/Collapse All */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-600 dark:text-slate-300">
+              {subjectChapterSections.reduce((acc, s) => acc + s.chapters.length, 0)} Chapters with {subjectChapterSections.reduce((acc, s) => acc + s.totalTests, 0)} Tests
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={expandAllChapters}
+              className="text-xs font-semibold px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-lg transition-colors cursor-pointer"
+            >
+              Expand All
+            </button>
+            <button
+              type="button"
+              onClick={collapseAllChapters}
+              className="text-xs font-semibold px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-lg transition-colors cursor-pointer"
+            >
+              Collapse All
+            </button>
+          </div>
+        </div>
+
+        {subjectChapterSections.map((sec) => (
+          <div
+            key={sec.key}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs"
+            id={`section-${sec.key}`}
+          >
+            {/* Section Header: Class -> Subject */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-4 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+                  {sec.classGrade}
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-900/40">
+                  {sec.subject}
+                </span>
+              </div>
+              <span className="text-xs font-bold text-slate-400">
+                {sec.chapters.length} {sec.chapters.length === 1 ? "Chapter" : "Chapters"} • {sec.totalTests} {sec.totalTests === 1 ? "Test" : "Tests"}
+              </span>
+            </div>
+
+            {/* Chapters list under this Class & Subject */}
+            <div className="space-y-3">
+              {sec.chapters.map((ch) => {
+                const open = isChapterOpen(ch.key, ch);
+
+                return (
+                  <div
+                    key={ch.key}
+                    className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden transition-all bg-slate-50/40 dark:bg-slate-800/20"
+                    id={`chapter-group-${ch.key}`}
+                  >
+                    {/* Clickable Chapter Bar */}
+                    <div
+                      onClick={() => toggleChapterExpanded(ch.key)}
+                      className="p-3 sm:p-4 bg-white dark:bg-slate-900/90 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between gap-3 cursor-pointer select-none"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/20">
+                          <BookOpen className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                            Ch {ch.chapterNo}: {ch.chapterName}
+                          </h4>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300">
+                              {ch.tests.length} {ch.tests.length === 1 ? "Chapter Test" : "Chapter Tests"}
+                            </span>
+                            {ch.totalSubmissions > 0 && (
+                              <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                                • <Users className="w-3 h-3" /> {ch.totalSubmissions} submissions
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveEditorTest({
+                              classGrade: ch.classGrade,
+                              subject: ch.subject,
+                              chapterNo: ch.chapterNo,
+                              chapterName: ch.chapterName,
+                              topicName: `${ch.chapterName} Chapter Test`,
+                              testType: "CHAPTER",
+                              isNewTest: true,
+                            });
+                          }}
+                          className="py-1 px-2.5 bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 text-amber-700 dark:text-amber-300 rounded-lg text-xs font-bold transition-all border border-amber-200/80 dark:border-amber-900/40 flex items-center gap-1 cursor-pointer"
+                          title="Create another Chapter Test for this chapter"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Add Test</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleChapterExpanded(ch.key);
+                          }}
+                          className="py-1 px-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>{open ? "Hide Tests" : `View Tests (${ch.tests.length})`}</span>
+                          {open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Open / Expanded Tests Grid */}
+                    {open && (
+                      <div className="p-3 sm:p-4 border-t border-slate-200/80 dark:border-slate-800 bg-slate-100/50 dark:bg-slate-900/50">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                          {ch.tests.map((test) => renderTestCard(test, true))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   };
 
   return (
@@ -555,157 +1063,42 @@ export const AdminTestsView: React.FC<AdminTestsViewProps> = ({
                 <span>Create New Test</span>
               </button>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="tests-grid-container">
-              {testList.map((test: any) => {
-                const questionCount = Array.isArray(test.questions) ? test.questions.length : (test.questionCount || 0);
-                const totalMarks = test.totalMarks || questionCount;
-                const duration = test.durationMinutes || (test as any).duration_minutes || 0;
-
-                const typeColors = {
-                  SUBJECT: "bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800",
-                  CHAPTER: "bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800",
-                  TOPIC: "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800",
-                  PYQ: "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800"
-                };
-
-                const typeLabels = {
-                  SUBJECT: "Subject Test",
-                  CHAPTER: "Chapter Test",
-                  TOPIC: "Topic Test",
-                  PYQ: "PYQ"
-                };
-
-                const displayTitle = test.title || 
-                  (test.computedType === "SUBJECT"
-                    ? `${test.subject} Comprehensive Subject Test`
-                    : test.computedType === "CHAPTER"
-                    ? `Chapter ${test.chapterNo}: ${test.chapterName || "Full Chapter Test"}`
-                    : test.topicName || "Academic Practice Test");
-
-                return (
-                  <div
-                    key={test.id}
-                    className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between group"
-                    id={`test-card-${test.id}`}
-                  >
-                    <div>
-                      {/* Top Badges */}
-                      <div className="flex items-center justify-between gap-2 mb-3">
-                        <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border uppercase tracking-wider ${typeColors[test.computedType as keyof typeof typeColors]}`}>
-                          {typeLabels[test.computedType as keyof typeof typeLabels]}
-                        </span>
-                        
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                            {test.classGrade || "Class 10"}
-                          </span>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-900/40">
-                            {test.subject || "General"}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Test Title */}
-                      <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white mb-2 leading-snug line-clamp-2">
-                        {displayTitle}
-                      </h3>
-
-                      {/* Chapter / Topic Scope if applicable */}
-                      {test.computedType !== "SUBJECT" && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mb-3 flex items-center gap-1.5 truncate">
-                          <BookOpen className="w-3 h-3 shrink-0 text-slate-400" />
-                          <span className="truncate">
-                            {test.chapterNo ? `Ch ${test.chapterNo}: ` : ""}{test.chapterName || test.topicName}
-                          </span>
-                        </p>
-                      )}
-
-                      {/* Meta Tags: Duration, Questions, Marks */}
-                      <div className="grid grid-cols-3 gap-2 py-2.5 px-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-100 dark:border-slate-800/80 mb-4 text-center">
-                        <div>
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Questions</p>
-                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200">{questionCount} Qs</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Marks</p>
-                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200">{totalMarks} Pts</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Duration</p>
-                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                            {duration > 0 ? `${duration}m` : "Untimed"}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Submissions summary */}
-                      <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
-                        <span className="flex items-center gap-1">
-                          <Users className="w-3.5 h-3.5 text-slate-400" />
-                          <span>{test.attemptsCount} {test.attemptsCount === 1 ? "submission" : "submissions"}</span>
-                        </span>
-                        {test.attemptsCount > 0 && (
-                          <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                            <Award className="w-3.5 h-3.5" />
-                            <span>Avg: {test.avgScore}%</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Action buttons */}
-                    <div className="flex items-center gap-1.5 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveEditorTest({
-                            testId: test.id || (test as any).testId,
-                            classGrade: test.classGrade,
-                            subject: test.subject,
-                            chapterNo: test.chapterNo,
-                            chapterName: test.chapterName,
-                            topicName: test.topicName,
-                            testType: test.computedType
-                          });
-                        }}
-                        className="flex-1 py-1.5 px-2 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border border-blue-200 dark:border-blue-800/60"
-                        title="Edit questions and test settings"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        <span>Manage</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setTestToPreview(test)}
-                        className="py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer"
-                        title="Preview questions"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setTestForSubmissions(test)}
-                        className="py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer"
-                        title="View student submissions"
-                      >
-                        <Users className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setTestToDelete(test)}
-                        className="py-1.5 px-2 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 text-rose-600 dark:text-rose-400 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer border border-rose-200 dark:border-rose-900/40"
-                        title="Delete test"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+          ) : selectedType === "CHAPTER" ? (
+            /* CHAPTER TAB: Organized by Chapter dynamically across all classes, subjects, and chapters */
+            renderChapterSections()
+          ) : selectedType === "ALL" ? (
+            /* ALL TAB: Chapter Tests grouped by chapter, followed by Subject/Topic/PYQ tests */
+            <div className="space-y-8">
+              {subjectChapterSections.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="px-2.5 py-1 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-xs font-extrabold border border-amber-200 dark:border-amber-800 uppercase tracking-wider">
+                      Chapter Tests (Grouped by Chapter)
+                    </span>
                   </div>
-                );
-              })}
+                  {renderChapterSections()}
+                </div>
+              )}
+
+              {nonChapterTests.length > 0 && (
+                <div>
+                  {subjectChapterSections.length > 0 && (
+                    <div className="flex items-center gap-2 mb-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+                      <span className="text-xs font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                        Other Tests ({nonChapterTests.length})
+                      </span>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="non-chapter-tests-grid">
+                    {nonChapterTests.map((test) => renderTestCard(test))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* TOPIC, SUBJECT, PYQ TABS: Unchanged existing card grid */
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="tests-grid-container">
+              {testList.map((test: any) => renderTestCard(test))}
             </div>
           )}
         </div>
