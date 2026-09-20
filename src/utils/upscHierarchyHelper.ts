@@ -81,7 +81,7 @@ export function canonicalGSPaperName(rawPaper?: string, subject?: string): strin
   }
   const clean = rawPaper.trim();
   const romanMap: Record<string, string> = { "1": "I", "2": "II", "3": "III", "4": "IV" };
-  const m = clean.match(/^(?:General\s+Studies\s+Paper|GS\s+Paper|Paper)\s*([IVXivx\d]+)/i);
+  const m = clean.match(/^(?:General\s+Studies(?:\s+Paper)?|GS(?:\s*[-_]?\s*Paper)?|Paper)\s*([IVXivx\d]+)/i);
   if (m) {
     const numOrRoman = m[1].toUpperCase();
     const roman = romanMap[numOrRoman] || numOrRoman;

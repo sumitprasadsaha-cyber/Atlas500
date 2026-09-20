@@ -301,7 +301,7 @@ export default function StudentSchoolTree({
 
                     {/* Level 3: Compact Topic Rows */}
                     {isModExpanded && (
-                      <div className="p-1.5 space-y-1 bg-white dark:bg-slate-900">
+                      <div className="p-2 sm:p-1.5 space-y-1.5 sm:space-y-1 bg-white dark:bg-slate-900">
                         {mod.topics.length === 0 ? (
                           <div className="py-2.5 px-3 text-center text-xs text-slate-400 italic">
                             No topic notes available in this chapter yet.
