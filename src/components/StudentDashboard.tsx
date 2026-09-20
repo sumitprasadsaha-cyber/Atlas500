@@ -109,6 +109,7 @@ import {
 import { subscribeToSubjectAccess, normalizeClassId } from "../lib/curriculumAccessService";
 import StudentUPSCTree from "./StudentUPSCTree";
 import StudentSchoolTree from "./StudentSchoolTree";
+import { getStudentPortalHistoryState, saveStudentPortalHistoryState, restoreScrollPositionWithRetry } from "../lib/navigationState";
 import { subscribeToCurriculumHierarchy } from "../lib/curriculumService";
 import StudentPracticeTestModal from "./StudentPracticeTestModal";
 import { getTopicPracticeTest, getStudentTestAttempts, getAllTestAttempts, fetchAllPracticeTests } from "../utils/assessmentParser";
@@ -1747,17 +1748,33 @@ export function StudentMyTab({
   const isUPSC = isUPSCClass(localStudent?.classGrade);
   const subjectStorageKey = `student_selected_subject_${localStudent?.id || "anon"}`;
   const paperStorageKey = `student_selected_paper_${localStudent?.id || "anon"}`;
+  const moduleStorageKey = `student_selected_module_${localStudent?.id || "anon"}`;
 
   const [selectedSubject, setSelectedSubject] = useState<string | null>(() => {
     try {
+      const navState = getStudentPortalHistoryState();
       if (isUPSC) {
+        if (navState?.selectedPaper) return navState.selectedPaper;
+        if (navState?.selectedSubject) return navState.selectedSubject;
         const savedPaper = sessionStorage.getItem(paperStorageKey);
         if (savedPaper) return savedPaper;
+      } else {
+        if (navState?.selectedSubject) return navState.selectedSubject;
       }
       const savedSubj = sessionStorage.getItem(subjectStorageKey);
       if (savedSubj) return savedSubj;
     } catch {}
     return initialSubject || (isUPSC ? "GS Paper 1" : getStudentSubjects(localStudent, allClassNotes)[0]) || null;
+  });
+
+  const [selectedModuleKey, setSelectedModuleKey] = useState<string | null>(() => {
+    try {
+      const navState = getStudentPortalHistoryState();
+      if (navState?.selectedModuleKey) return navState.selectedModuleKey;
+      return sessionStorage.getItem(moduleStorageKey) || null;
+    } catch {
+      return null;
+    }
   });
 
   useEffect(() => {
@@ -1768,8 +1785,11 @@ export function StudentMyTab({
           sessionStorage.setItem(paperStorageKey, selectedSubject);
         }
       }
+      if (selectedModuleKey) {
+        sessionStorage.setItem(moduleStorageKey, selectedModuleKey);
+      }
     } catch {}
-  }, [selectedSubject, subjectStorageKey, paperStorageKey, isUPSC]);
+  }, [selectedSubject, selectedModuleKey, subjectStorageKey, paperStorageKey, moduleStorageKey, isUPSC]);
 
   // Active scroll position tracking: continuously store scroll offsets for main scroll & tree scroll
   useEffect(() => {
@@ -1823,27 +1843,28 @@ export function StudentMyTab({
 
     const restore = () => {
       try {
-        const savedScrollY = sessionStorage.getItem("student_last_scroll_y");
-        if (savedScrollY) {
+        const navState = getStudentPortalHistoryState();
+        const savedScrollY = navState?.scrollPositions?.windowY ?? sessionStorage.getItem("student_last_scroll_y");
+        if (savedScrollY !== null && savedScrollY !== undefined) {
           const y = Number(savedScrollY);
           if (!isNaN(y) && y > 0) {
-            window.scrollTo({ top: y, behavior: "instant" as any });
+            restoreScrollPositionWithRetry(null, y);
           }
         }
 
-        const savedMainScroll = sessionStorage.getItem("student_main_scroll_top");
-        if (savedMainScroll) {
-          const mainEl = document.getElementById("main-content-scroll");
-          if (mainEl && !isNaN(Number(savedMainScroll))) {
-            mainEl.scrollTop = Number(savedMainScroll);
+        const savedMainScroll = navState?.scrollPositions?.mainScrollTop ?? sessionStorage.getItem("student_main_scroll_top");
+        if (savedMainScroll !== null && savedMainScroll !== undefined) {
+          const top = Number(savedMainScroll);
+          if (!isNaN(top) && top > 0) {
+            restoreScrollPositionWithRetry("main-content-scroll", top);
           }
         }
 
-        const savedTreeScroll = sessionStorage.getItem("student_tree_scroll_top");
-        if (savedTreeScroll) {
-          const treeEl = document.getElementById("study-tree-scroll-container");
-          if (treeEl && !isNaN(Number(savedTreeScroll))) {
-            treeEl.scrollTop = Number(savedTreeScroll);
+        const savedTreeScroll = navState?.scrollPositions?.treeScrollTop ?? sessionStorage.getItem("student_tree_scroll_top");
+        if (savedTreeScroll !== null && savedTreeScroll !== undefined) {
+          const top = Number(savedTreeScroll);
+          if (!isNaN(top) && top > 0) {
+            restoreScrollPositionWithRetry("study-tree-scroll-container", top);
           }
         }
       } catch {}
@@ -1853,6 +1874,7 @@ export function StudentMyTab({
     const t1 = setTimeout(restore, 50);
     const t2 = setTimeout(restore, 180);
     const t3 = setTimeout(restore, 400);
+    const t4 = setTimeout(restore, 850);
 
     const handlePopState = () => restore();
     const handlePageShow = () => restore();
@@ -1863,6 +1885,7 @@ export function StudentMyTab({
       clearTimeout(t1);
       clearTimeout(t2);
       clearTimeout(t3);
+      clearTimeout(t4);
       window.removeEventListener("popstate", handlePopState);
       window.removeEventListener("pageshow", handlePageShow);
     };
@@ -2033,6 +2056,11 @@ export function StudentMyTab({
         if (isKnownPaper || isKnownSubj) return;
       }
       try {
+        const navState = getStudentPortalHistoryState();
+        if (navState?.selectedPaper && upscHierarchy.some((p) => p.gsPaper.toLowerCase() === navState.selectedPaper!.toLowerCase())) {
+          setSelectedSubject(navState.selectedPaper);
+          return;
+        }
         const savedPaper = sessionStorage.getItem(paperStorageKey);
         if (savedPaper && upscHierarchy.some((p) => p.gsPaper.toLowerCase() === savedPaper.toLowerCase())) {
           setSelectedSubject(savedPaper);
@@ -2045,7 +2073,12 @@ export function StudentMyTab({
     } else {
       if (sortedSubjects.length > 0) {
         if (!selectedSubject || !sortedSubjects.includes(selectedSubject)) {
-          setSelectedSubject(sortedSubjects[0]);
+          const navState = getStudentPortalHistoryState();
+          if (navState?.selectedSubject && sortedSubjects.includes(navState.selectedSubject)) {
+            setSelectedSubject(navState.selectedSubject);
+          } else {
+            setSelectedSubject(sortedSubjects[0]);
+          }
         }
       } else {
         setSelectedSubject(null);
@@ -2056,6 +2089,8 @@ export function StudentMyTab({
   const [selectedOwnerClass, setSelectedOwnerClass] = useState<string | null>(() => {
     if (initialOwnerClass) return initialOwnerClass;
     try {
+      const navState = getStudentPortalHistoryState();
+      if (navState?.selectedOwnerClass) return navState.selectedOwnerClass;
       return sessionStorage.getItem(`student_selected_owner_class_${student.id}`) || null;
     } catch {
       return null;
@@ -2247,17 +2282,37 @@ export function StudentMyTab({
     const topicFormatted = getFormattedTopicLabel(note);
     const title = topicFormatted || `Chapter ${note.chapterNo} – ${note.chapterName}`;
 
-    // Save exact positions and state to sessionStorage before opening note
+    // Save exact positions and state to sessionStorage and history before opening note
     try {
       if (typeof window !== "undefined") {
-        sessionStorage.setItem("student_last_scroll_y", String(window.scrollY || 0));
+        const scrollY = window.scrollY || 0;
         const mainEl = document.getElementById("main-content-scroll");
-        if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainEl.scrollTop || 0));
         const treeEl = document.getElementById("study-tree-scroll-container");
-        if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeEl.scrollTop || 0));
+        const mainScrollTop = mainEl?.scrollTop || 0;
+        const treeScrollTop = treeEl?.scrollTop || 0;
+
+        sessionStorage.setItem("student_last_scroll_y", String(scrollY));
+        if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainScrollTop));
+        if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeScrollTop));
         if (selectedSubject) sessionStorage.setItem(`student_selected_subject_${localStudent?.id}`, selectedSubject);
         if (activePaper?.gsPaper) sessionStorage.setItem(`student_selected_paper_${localStudent?.id}`, activePaper.gsPaper);
         if (selectedOwnerClass) sessionStorage.setItem(`student_selected_owner_class_${localStudent?.id}`, selectedOwnerClass);
+        if (selectedModuleKey) sessionStorage.setItem(`student_selected_module_${localStudent?.id}`, selectedModuleKey);
+
+        saveStudentPortalHistoryState({
+          portal_active_tab: "My",
+          studentId: localStudent?.id,
+          selectedPaper: activePaper?.gsPaper || null,
+          selectedSubject: selectedSubject,
+          selectedOwnerClass: selectedOwnerClass,
+          selectedModuleKey: selectedModuleKey,
+          scrollPositions: {
+            windowY: scrollY,
+            mainScrollTop: mainScrollTop,
+            treeScrollTop: treeScrollTop,
+          },
+          noteId: note.id,
+        });
       }
     } catch {}
 
@@ -2710,6 +2765,8 @@ export function StudentMyTab({
                     openingNoteId={openingNoteId}
                     openErrorNoteId={openErrorNoteId}
                     isAdmin={isAdmin}
+                    selectedModuleKey={selectedModuleKey}
+                    onSelectModule={setSelectedModuleKey}
                   />
                 </div>
               </div>
@@ -2782,6 +2839,8 @@ export function StudentMyTab({
                   openingNoteId={openingNoteId}
                   openErrorNoteId={openErrorNoteId}
                   isAdmin={isAdmin}
+                  selectedModuleKey={selectedModuleKey}
+                  onSelectModule={setSelectedModuleKey}
                 />
               </div>
             </div>

@@ -51,7 +51,8 @@ import { AuthLogger } from "./lib/authLogger";
 import { initPracticeTestsRealtimeSync, fetchAllPracticeTests } from "./lib/practiceTestService";
 import { migrateLegacyNotesToClassNotes, filterClassNotesForStudent, getStudentSubjects, isSubjectMatching } from "./utils/classNoteHelper";
 import { deleteFileFromStorage, uploadProfilePhoto } from "./lib/storageService";
-import { safeLocalStorageSetItem, safeLocalStorageGetItem, safeLocalStorageRemoveItem } from "./lib/safeStorage";
+import { safeLocalStorageSetItem, safeLocalStorageGetItem, safeLocalStorageRemoveItem, getUserScopedKey } from "./lib/safeStorage";
+import { getStudentPortalHistoryState } from "./lib/navigationState";
 import { APP_VERSION } from "./config";
 import { initializeAdminSync, initializeStudentSync, cleanupOnLogout } from "./lib/appSync";
 import { fetchStudentTestAttempts } from "./lib/testScorePersistence";
@@ -549,6 +550,10 @@ export default function App() {
   // --- Navigation States ---
   const [activeTab, setActiveTab] = useState<"Dashboard" | "LiveStudents" | "Notes" | "Tests" | "Students" | "My" | "Settings">(() => {
     try {
+      const navState = getStudentPortalHistoryState();
+      if (navState?.portal_active_tab && ["Dashboard", "LiveStudents", "Notes", "Tests", "Students", "My", "Settings"].includes(navState.portal_active_tab)) {
+        return navState.portal_active_tab;
+      }
       const saved = sessionStorage.getItem("portal_active_tab");
       if (saved && ["Dashboard", "LiveStudents", "Notes", "Tests", "Students", "My", "Settings"].includes(saved)) {
         return saved as any;
@@ -562,6 +567,35 @@ export default function App() {
       sessionStorage.setItem("portal_active_tab", activeTab);
     } catch {}
   }, [activeTab]);
+
+  // Synchronize navigation state with browser history popstate and pageshow events
+  useEffect(() => {
+    const handleNavPopState = () => {
+      try {
+        const navState = getStudentPortalHistoryState();
+        if (navState) {
+          if (navState.portal_active_tab && ["Dashboard", "LiveStudents", "Notes", "Tests", "Students", "My", "Settings"].includes(navState.portal_active_tab)) {
+            setActiveTab(navState.portal_active_tab);
+          }
+          if (navState.selectedSubject !== undefined && navState.selectedSubject !== null) {
+            setActiveSubject(navState.selectedSubject);
+          }
+          if (navState.selectedOwnerClass !== undefined) {
+            setActiveSubjectOwnerClass(navState.selectedOwnerClass);
+          }
+        }
+      } catch (err) {
+        console.warn("[App] Error restoring from popstate:", err);
+      }
+    };
+
+    window.addEventListener("popstate", handleNavPopState);
+    window.addEventListener("pageshow", handleNavPopState);
+    return () => {
+      window.removeEventListener("popstate", handleNavPopState);
+      window.removeEventListener("pageshow", handleNavPopState);
+    };
+  }, []);
 
   const [classNotes, setClassNotes] = useState<ClassNote[]>(() => getLocalClassNotes());
 
@@ -605,6 +639,8 @@ export default function App() {
   });
   const [activeSubject, setActiveSubject] = useState<string | null>(() => {
     try {
+      const navState = getStudentPortalHistoryState();
+      if (navState?.selectedSubject) return navState.selectedSubject;
       return sessionStorage.getItem("portal_active_subject") || null;
     } catch {
       return null;
@@ -612,6 +648,8 @@ export default function App() {
   });
   const [activeSubjectOwnerClass, setActiveSubjectOwnerClass] = useState<string | null>(() => {
     try {
+      const navState = getStudentPortalHistoryState();
+      if (navState?.selectedOwnerClass) return navState.selectedOwnerClass;
       return sessionStorage.getItem("portal_active_owner_class") || null;
     } catch {
       return null;
@@ -655,19 +693,48 @@ export default function App() {
 
   // --- Student State with local persistence ---
   const [students, setStudents] = useState<Student[]>(() => {
-    const cached = localStorage.getItem("tuition_students_data");
-    if (cached === null) {
-      return []; // Start clean with no students, no class tabs, and no names
-    }
-    
     let parsed: Student[] = [];
     try {
-      parsed = JSON.parse(cached);
+      const cachedSession = getCachedAuthSession();
+      const navState = getStudentPortalHistoryState();
+      const targetStudentId = navState?.studentId || (cachedSession?.role === "student" ? cachedSession.studentId : null);
+
+      if (targetStudentId) {
+        // 1. Synchronously check session-cached student profile
+        const sessionProfile = sessionStorage.getItem(`cached_student_profile_${targetStudentId}`);
+        if (sessionProfile) {
+          const profile = JSON.parse(sessionProfile);
+          if (profile && profile.id) {
+            parsed = [profile];
+          }
+        }
+        // 2. Check user-scoped persistent storage
+        if (parsed.length === 0) {
+          const scopedKey = getUserScopedKey(cachedSession?.uid || targetStudentId, "students_data");
+          const scoped = localStorage.getItem(scopedKey);
+          if (scoped) {
+            const list = JSON.parse(scoped);
+            if (Array.isArray(list) && list.length > 0) parsed = list;
+          }
+        }
+      }
+
+      // 3. Check legacy storage
+      if (parsed.length === 0) {
+        const cached = localStorage.getItem("tuition_students_data");
+        if (cached) {
+          parsed = JSON.parse(cached);
+        }
+      }
     } catch (e) {
       console.error("Failed parsing student cache:", e);
       return [];
     }
 
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return [];
+    }
+    
     // Initialize feeMonths for all students if not present
     return parsed.map((student) => {
       const normalized = normalizeStudent(student);
@@ -704,6 +771,15 @@ export default function App() {
     const found = students.find((s) => s.id === targetId);
     return found ? normalizeStudent(found) : null;
   }, [students, selectedStudentId, auth.role, auth.loggedInStudentId]);
+
+  // Synchronously cache active student in sessionStorage for instant back-navigation restoration
+  useEffect(() => {
+    if (activeStudent?.id) {
+      try {
+        sessionStorage.setItem(`cached_student_profile_${activeStudent.id}`, JSON.stringify(activeStudent));
+      } catch {}
+    }
+  }, [activeStudent]);
 
   useEffect(() => {
     if (auth.role === "student" && activeStudent?.id) {

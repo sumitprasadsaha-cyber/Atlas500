@@ -334,11 +334,14 @@ export function cleanupOnLogout(uid?: string | null): void {
 }
 
 /**
- * Cleanup all resources on app unload
+ * Cleanup transient timers on app unload without destroying user session
  */
 export function cleanupOnUnload(): void {
-  StructuredLogger.sync("App unloading, cleaning up all sync resources");
-  cleanupOnLogout();
+  StructuredLogger.sync("App unloading or transitioning, pausing sync intervals");
+  if (appState.syncInterval !== null) {
+    clearInterval(appState.syncInterval);
+    appState.syncInterval = null;
+  }
 }
 
 /**

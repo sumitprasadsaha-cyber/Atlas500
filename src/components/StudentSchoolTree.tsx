@@ -25,6 +25,7 @@ import StudentTestScoreButton from "./StudentTestScoreButton";
 import { notesLogger } from "../lib/notesLogger";
 import { TopicDownloadProgressBar } from "./notes/TopicDownloadProgressBar";
 import { topicDownloadProgress } from "../lib/topicDownloadProgress";
+import { getStudentPortalHistoryState, saveStudentPortalHistoryState } from "../lib/navigationState";
 
 interface StudentSchoolTreeProps {
   className: string;
@@ -45,6 +46,8 @@ interface StudentSchoolTreeProps {
   openingNoteId?: string | null;
   openErrorNoteId?: string | null;
   isAdmin?: boolean;
+  selectedModuleKey?: string | null;
+  onSelectModule?: (modKey: string) => void;
 }
 
 export default function StudentSchoolTree({
@@ -57,6 +60,8 @@ export default function StudentSchoolTree({
   openingNoteId,
   openErrorNoteId,
   isAdmin = false,
+  selectedModuleKey,
+  onSelectModule,
 }: StudentSchoolTreeProps) {
   const activeDownloadingId = downloadingNoteId || openingNoteId;
   const storageKeyPrefix = `school_tree_${className || student?.classGrade || "def"}_${student?.id || "anon"}`;
@@ -71,6 +76,10 @@ export default function StudentSchoolTree({
 
   const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>(() => {
     try {
+      const navState = getStudentPortalHistoryState();
+      if (navState?.expandedModules && Object.keys(navState.expandedModules).length > 0) {
+        return navState.expandedModules;
+      }
       const saved = sessionStorage.getItem(`${storageKeyPrefix}_expanded`);
       if (saved) return JSON.parse(saved);
     } catch {}
@@ -82,8 +91,13 @@ export default function StudentSchoolTree({
   const [localErrorId, setLocalErrorId] = useState<string | null>(null);
   const [localErrorMsg, setLocalErrorMsg] = useState<string>("");
 
-  // Sync state to sessionStorage and reload on prefix change
+  // Sync state from sessionStorage and reload on prefix change without overwriting
+  const isInitialMount = React.useRef(true);
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
     try {
       const savedMods = sessionStorage.getItem(`${storageKeyPrefix}_expanded`);
       if (savedMods) {
@@ -104,7 +118,9 @@ export default function StudentSchoolTree({
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(`${storageKeyPrefix}_expanded`, JSON.stringify(expandedModules));
+      if (Object.keys(expandedModules).length > 0) {
+        sessionStorage.setItem(`${storageKeyPrefix}_expanded`, JSON.stringify(expandedModules));
+      }
     } catch {}
   }, [expandedModules, storageKeyPrefix]);
 
@@ -136,7 +152,8 @@ export default function StudentSchoolTree({
     return getAllTestAttempts();
   }, [student?.id, student?.name, testBankTick]);
 
-  const toggleModule = (moduleKey: string) => {
+  const toggleModule = (moduleKey: string, moduleTitle?: string) => {
+    onSelectModule?.(moduleKey);
     setExpandedModules((prev) => {
       const next = {
         ...prev,
@@ -144,6 +161,11 @@ export default function StudentSchoolTree({
       };
       try {
         sessionStorage.setItem(`${storageKeyPrefix}_expanded`, JSON.stringify(next));
+        saveStudentPortalHistoryState({
+          selectedModuleKey: moduleKey,
+          selectedModuleTitle: moduleTitle,
+          expandedModules: next,
+        });
       } catch {}
       return next;
     });
@@ -295,8 +317,12 @@ export default function StudentSchoolTree({
                   >
                     {/* Chapter Header (Collapsible) */}
                     <div
-                      onClick={() => toggleModule(modKey)}
-                      className="flex items-center justify-between px-3.5 py-3 sm:py-2.5 min-h-[48px] sm:min-h-0 bg-slate-50/70 dark:bg-slate-855/50 hover:bg-slate-100/80 dark:hover:bg-slate-800/70 cursor-pointer select-none transition-colors border-b border-slate-100 dark:border-slate-800/60"
+                      onClick={() => toggleModule(modKey, mod.moduleTitle)}
+                      className={`flex items-center justify-between px-3.5 py-3 sm:py-2.5 min-h-[48px] sm:min-h-0 ${
+                        selectedModuleKey === modKey
+                          ? "bg-blue-50/70 dark:bg-blue-950/40 border-l-4 border-l-blue-600"
+                          : "bg-slate-50/70 dark:bg-slate-855/50"
+                      } hover:bg-slate-100/80 dark:hover:bg-slate-800/70 cursor-pointer select-none transition-colors border-b border-slate-100 dark:border-slate-800/60`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
                         <span className="text-slate-400 shrink-0">
@@ -403,12 +429,34 @@ export default function StudentSchoolTree({
                               }
 
                               try {
+                                const modKey = `${subj.subjectKey}_${mod.moduleKey}`;
+                                onSelectModule?.(modKey);
+                                const updatedModules = { ...expandedModules, [modKey]: true };
+                                setExpandedModules(updatedModules);
+
                                 if (typeof window !== "undefined") {
+                                  sessionStorage.setItem(`${storageKeyPrefix}_expanded`, JSON.stringify(updatedModules));
                                   sessionStorage.setItem("student_last_scroll_y", String(window.scrollY || 0));
                                   const mainEl = document.getElementById("main-content-scroll");
                                   if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainEl.scrollTop || 0));
                                   const treeEl = document.getElementById("study-tree-scroll-container");
                                   if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeEl.scrollTop || 0));
+
+                                  saveStudentPortalHistoryState({
+                                    portal_active_tab: "My",
+                                    studentId: student?.id,
+                                    selectedSubject: subj.subject || targetSubj,
+                                    selectedOwnerClass: className || student?.classGrade,
+                                    selectedModuleKey: modKey,
+                                    selectedModuleTitle: mod.moduleTitle,
+                                    expandedModules: updatedModules,
+                                    scrollPositions: {
+                                      windowY: window.scrollY || 0,
+                                      mainScrollTop: mainEl?.scrollTop || 0,
+                                      treeScrollTop: treeEl?.scrollTop || 0,
+                                    },
+                                    noteId: topic.id,
+                                  });
                                 }
                                 const result = onPreviewNote(topic.note);
                                 if (result && typeof result.then === "function") {
