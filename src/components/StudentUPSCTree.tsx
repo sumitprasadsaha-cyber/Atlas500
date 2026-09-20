@@ -295,13 +295,13 @@ export default function StudentUPSCTree({
             return (
               <div 
                 key={`upsc-subj-${subjKey}`} 
-                className="space-y-2.5 rounded-2xl border border-slate-200/90 dark:border-slate-800/90 bg-slate-50/50 dark:bg-slate-900/40 p-2.5 sm:p-3"
+                className="space-y-3.5 sm:space-y-2.5 rounded-2xl border border-slate-200/90 dark:border-slate-800/90 bg-slate-50/50 dark:bg-slate-900/40 p-3.5 sm:p-3 shadow-2xs transition-all"
                 id={`upsc-subject-section-${subjKey}`}
               >
                 {/* Subject Header (Collapsible & clearly identifies the Subject) */}
                 <div
                   onClick={() => toggleSubject(subjKey)}
-                  className="flex items-center justify-between gap-2.5 px-3.5 py-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs cursor-pointer select-none transition-all hover:border-indigo-300 dark:hover:border-indigo-800/60 flex-wrap sm:flex-nowrap"
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-2.5 p-3.5 sm:px-3.5 sm:py-2.5 min-h-[58px] sm:min-h-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs cursor-pointer select-none transition-all hover:border-indigo-300 dark:hover:border-indigo-800/60"
                   id={`upsc-subject-header-${subjKey}`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
@@ -312,26 +312,26 @@ export default function StudentUPSCTree({
                         <ChevronRight className="w-4 h-4 text-slate-500" />
                       )}
                     </span>
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shrink-0">
-                        <BookOpen className="w-4 h-4" />
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div className="p-2 sm:p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shrink-0">
+                        <BookOpen className="w-4.5 h-4.5 sm:w-4 sm:h-4" />
                       </div>
                       <div className="min-w-0 flex items-center gap-2 flex-wrap flex-1">
                         <span className="text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-900/50 shrink-0">
                           Subject
                         </span>
-                        <h4 className="text-xs sm:text-sm font-black text-slate-900 dark:text-slate-100 break-words whitespace-normal leading-tight">
+                        <h4 className="text-sm sm:text-sm font-black text-slate-900 dark:text-slate-100 break-words whitespace-normal leading-snug">
                           {subj.subject}
                         </h4>
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto sm:ml-2 self-center">
-                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                  <div className="flex items-center gap-2 shrink-0 pl-8 sm:pl-0 sm:ml-2 self-start sm:self-center">
+                    <span className="text-[11px] font-bold px-2.5 py-1 sm:px-2 sm:py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 whitespace-nowrap">
                       {subj.totalModules} {subj.totalModules === 1 ? "Module" : "Modules"}
                     </span>
-                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                    <span className="text-[11px] font-bold px-2.5 py-1 sm:px-2 sm:py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 whitespace-nowrap">
                       {subj.totalTopics} {subj.totalTopics === 1 ? "Topic Note" : "Topic Notes"}
                     </span>
                   </div>
@@ -339,7 +339,7 @@ export default function StudentUPSCTree({
 
                 {/* Modules list under this Subject */}
                 {isSubjExpanded && (
-                  <div className="space-y-2 pt-0.5 pl-1 sm:pl-2" id={`upsc-subject-modules-${subjKey}`}>
+                  <div className="space-y-3 sm:space-y-2 pt-1 sm:pt-0.5 pl-0 sm:pl-2" id={`upsc-subject-modules-${subjKey}`}>
                     {subj.modules.map((mod) => {
                 const modKey = `${subj.subjectKey}_${mod.moduleKey}`;
                 const isModExpanded = cleanQuery ? true : (expandedModules[modKey] ?? true);
@@ -356,19 +356,19 @@ export default function StudentUPSCTree({
                     {/* Module Header (Collapsible) */}
                     <div
                       onClick={() => toggleModule(modKey)}
-                      className="flex items-center justify-between px-3.5 py-2.5 bg-slate-50/70 dark:bg-slate-855/50 hover:bg-slate-100/80 dark:hover:bg-slate-800/70 cursor-pointer select-none transition-colors border-b border-slate-100 dark:border-slate-800/60"
+                      className="flex items-center justify-between px-3.5 py-3 sm:py-2.5 min-h-[48px] sm:min-h-0 bg-slate-50/70 dark:bg-slate-855/50 hover:bg-slate-100/80 dark:hover:bg-slate-800/70 cursor-pointer select-none transition-colors border-b border-slate-100 dark:border-slate-800/60"
                     >
                       <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
                         <span className="text-slate-400 shrink-0">
                           {isModExpanded ? <ChevronDown className="w-4 h-4 text-slate-600 dark:text-slate-300" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}
                         </span>
-                        <h5 className="text-xs font-bold text-slate-900 dark:text-slate-100 break-words whitespace-normal leading-snug">
+                        <h5 className="text-xs sm:text-xs font-bold text-slate-900 dark:text-slate-100 break-words whitespace-normal leading-snug">
                           {mod.moduleTitle}
                         </h5>
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0 ml-2 self-center flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
-                        <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                        <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
                           {mod.totalTopics} {mod.totalTopics === 1 ? "Topic" : "Topics"}
                         </span>
                       </div>
@@ -521,7 +521,7 @@ export default function StudentUPSCTree({
                                 title={isDownloading ? "Downloading note..." : hasError ? "Failed to load. Tap to try again" : "Tap to open note in browser"}
                               >
                                 {/* Main Topic Content Row */}
-                                <div className="flex items-start sm:items-center justify-between gap-2.5 px-3 py-2.5">
+                                <div className="flex items-start sm:items-center justify-between gap-2.5 px-3.5 py-3 sm:py-2.5 min-h-[44px] sm:min-h-0">
                                   {/* Left: Icon, Topic #, Name, Part, Format, and Progress */}
                                   <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
                                     <span className="mt-0.5 sm:mt-0 shrink-0">

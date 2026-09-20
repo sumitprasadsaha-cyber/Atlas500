@@ -7,6 +7,7 @@ import {
   isSubjectMatching 
 } from "./classNoteHelper";
 import { extractUPSCDetails, isUPSCClass } from "./upscHierarchyHelper";
+export { isUPSCClass, extractUPSCDetails } from "./upscHierarchyHelper";
 import { isNoteAccessibleToStudent } from "./noteAccessHelper";
 import { getChapterProgressRecord, getStatusConfig, normalizeStatusLabel } from "./chapterProgressHelper";
 import { getUpscHierarchy, ChapterInfo } from "../lib/curriculumService";

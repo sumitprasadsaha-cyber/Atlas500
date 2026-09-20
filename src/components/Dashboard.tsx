@@ -34,6 +34,7 @@ import {
 import { isEligibleForDailyAttendance, filterDailyAttendanceStudents } from "../utils/attendanceHelper";
 import { getInstitutionName, subscribeToAnnouncements, saveAnnouncementDoc, deleteAnnouncementDoc } from "../lib/firestoreService";
 import { progressService } from "../lib/progressService";
+import { isUPSCClass, getStudentEnrolledGSPapers } from "../utils/studentUPSCHierarchyHelper";
 
 interface DashboardProps {
   students: Student[];
@@ -730,7 +731,9 @@ export default function Dashboard({
                                       <div className="flex flex-col min-w-0">
                                         <span className="text-xs font-black text-slate-800 dark:text-slate-200 truncate">{s.name}</span>
                                         <span className="text-[10px] font-semibold text-slate-400 truncate">
-                                          {s.enrolledSubjects && s.enrolledSubjects.length > 0 ? s.enrolledSubjects.join(", ") : "All Subjects"}
+                                          {isUPSCClass(s.classGrade)
+                                            ? (getStudentEnrolledGSPapers(s).join(", ") || "All GS Papers")
+                                            : (s.enrolledSubjects && s.enrolledSubjects.length > 0 ? s.enrolledSubjects.join(", ") : "All Subjects")}
                                         </span>
                                       </div>
 
@@ -836,7 +839,9 @@ export default function Dashboard({
                                   <div className="flex flex-col min-w-0">
                                     <span className="text-xs font-black text-slate-800 dark:text-slate-200 truncate">{s.name}</span>
                                     <span className="text-[10px] text-slate-400 truncate">
-                                      Subjects: {s.enrolledSubjects?.join(", ") || "All"}
+                                      {isUPSCClass(s.classGrade)
+                                        ? `GS Papers: ${getStudentEnrolledGSPapers(s).join(", ") || "All"}`
+                                        : `Subjects: ${s.enrolledSubjects?.join(", ") || "All"}`}
                                     </span>
                                   </div>
                                   <span className="text-[10px] font-bold bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-full shrink-0">

@@ -281,7 +281,7 @@ export default function StudentSchoolTree({
                     {/* Chapter Header (Collapsible) */}
                     <div
                       onClick={() => toggleModule(modKey)}
-                      className="flex items-center justify-between px-3.5 py-2.5 bg-slate-50/70 dark:bg-slate-855/50 hover:bg-slate-100/80 dark:hover:bg-slate-800/70 cursor-pointer select-none transition-colors border-b border-slate-100 dark:border-slate-800/60"
+                      className="flex items-center justify-between px-3.5 py-3 sm:py-2.5 min-h-[48px] sm:min-h-0 bg-slate-50/70 dark:bg-slate-855/50 hover:bg-slate-100/80 dark:hover:bg-slate-800/70 cursor-pointer select-none transition-colors border-b border-slate-100 dark:border-slate-800/60"
                     >
                       <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
                         <span className="text-slate-400 shrink-0">

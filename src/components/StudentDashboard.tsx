@@ -94,7 +94,7 @@ import { FileCheck } from "lucide-react";
 import { filterNotesForStudent, filterSubjectsForStudent } from "../utils/noteAccessHelper";
 import { filterClassNotesForStudent, getStudentSubjects, isSubjectMatching, inferGSPaperFromSubject } from "../utils/classNoteHelper";
 import { isUPSCClass } from "../utils/upscHierarchyHelper";
-import { buildStudentUPSCHierarchy, StudentUPSCGSPaper } from "../utils/studentUPSCHierarchyHelper";
+import { buildStudentUPSCHierarchy, StudentUPSCGSPaper, getStudentEnrolledGSPapers } from "../utils/studentUPSCHierarchyHelper";
 import {
   buildStudentSchoolHierarchy,
   buildCompleteStudentSchoolHierarchy,
@@ -771,6 +771,9 @@ interface StudentDetailsModalProps {
 function StudentDetailsModal({ isOpen, onClose, student, formatDate }: StudentDetailsModalProps) {
   if (!isOpen) return null;
 
+  const isUPSC = isUPSCClass(student.classGrade);
+  const enrolledPapers = isUPSC ? getStudentEnrolledGSPapers(student) : (student.enrolledSubjects || []);
+
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 p-3 backdrop-blur-sm" onClick={onClose}>
       <div className="w-full max-w-lg max-h-[85vh] overflow-hidden rounded-[30px] border border-slate-200/70 bg-white p-4 shadow-2xl flex flex-col" onClick={(event) => event.stopPropagation()}>
@@ -815,12 +818,14 @@ function StudentDetailsModal({ isOpen, onClose, student, formatDate }: StudentDe
               <p className="mt-0.5 text-xs font-bold text-slate-700">{student.password || "N/A"}</p>
             </div>
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 col-span-2">
-              <p className="text-[9px] font-black uppercase tracking-[0.24em] text-slate-400 mb-1.5">Enrolled Subjects</p>
+              <p className="text-[9px] font-black uppercase tracking-[0.24em] text-slate-400 mb-1.5">
+                {isUPSC ? "Enrolled GS Papers" : "Enrolled Subjects"}
+              </p>
               <div className="flex flex-wrap gap-1.5">
-                {!student.enrolledSubjects || student.enrolledSubjects.length === 0 ? (
-                  <span className="text-xs text-slate-400 italic">No enrolled subjects</span>
+                {enrolledPapers.length === 0 ? (
+                  <span className="text-xs text-slate-400 italic">{isUPSC ? "No enrolled GS papers" : "No enrolled subjects"}</span>
                 ) : (
-                  student.enrolledSubjects.map((sub, idx) => (
+                  enrolledPapers.map((sub, idx) => (
                     <span
                       key={`${sub}_${idx}`}
                       className="text-xs font-bold px-3 py-1 bg-blue-50 text-blue-600 rounded-full border border-blue-100/20"

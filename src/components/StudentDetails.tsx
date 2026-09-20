@@ -39,6 +39,7 @@ import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import { getMonthsUpToCurrent, ALL_ACADEMIC_MONTHS } from "../utils/monthHelper";
 import { getChapterProgressRecord, getStatusConfig, calculateSubjectProgress } from "../utils/chapterProgressHelper";
 import { getStudentSubjects } from "../utils/classNoteHelper";
+import { buildStudentUPSCHierarchy, getStudentEnrolledGSPapers, isUPSCClass } from "../utils/studentUPSCHierarchyHelper";
 import {
   getEvaluatedFeeStatus,
   getPendingFeeMonths,
@@ -218,6 +219,19 @@ export default function StudentDetails({
   const sortedEnrolledSubjects = useMemo(() => {
     return getStudentSubjects(student, allClassNotes);
   }, [student, allClassNotes]);
+
+  const isUPSC = isUPSCClass(student.classGrade);
+
+  // For UPSC students, compute the enrolled GS Papers and full UPSC hierarchy: GS Paper → Subject → Module → Topic Notes
+  const enrolledGSPapers = useMemo(() => {
+    if (!isUPSC) return [];
+    return getStudentEnrolledGSPapers(student, allClassNotes);
+  }, [isUPSC, student, allClassNotes]);
+
+  const upscHierarchy = useMemo(() => {
+    if (!isUPSC) return [];
+    return buildStudentUPSCHierarchy(student, allClassNotes);
+  }, [isUPSC, student, allClassNotes]);
 
   // Selected progress subject (default is the first enrolled subject)
   const [selectedProgressSubject, setSelectedProgressSubject] = useState<string>(() => {
@@ -980,7 +994,14 @@ export default function StudentDetails({
                     <div className="p-2 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 rounded-xl">
                       <BookOpen className="w-4 h-4" />
                     </div>
-                    <div className="flex flex-col" />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-extrabold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+                        {isUPSC ? "Enrolled GS Papers" : "Enrolled Subjects"}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {isUPSC ? "UPSC General Studies Curriculum" : "Academic disciplines currently enrolled"}
+                      </span>
+                    </div>
                   </div>
                   {isAdmin && !isEditingSubjects && (
                     <button
@@ -1022,7 +1043,7 @@ export default function StudentDetails({
                     <div className="flex gap-2">
                       <input
                         type="text"
-                        placeholder="Type custom subject name..."
+                        placeholder={isUPSC ? "Type GS Paper name or subject..." : "Type custom subject name..."}
                         value={newSubjectInput}
                         onChange={(e) => setNewSubjectInput(e.target.value)}
                         className="flex-1 px-3 py-1.5 text-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-250 dark:border-slate-800 text-slate-800 dark:text-slate-100 focus:outline-none"
@@ -1042,11 +1063,16 @@ export default function StudentDetails({
                       </button>
                     </div>
 
-                    {/* Common Subjects Quick Picks */}
+                    {/* Common Subjects / GS Papers Quick Picks */}
                     <div className="flex flex-col gap-1">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Quick Add Common Course:</span>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+                        {isUPSC ? "Quick Add GS Papers:" : "Quick Add Common Course:"}
+                      </span>
                       <div className="flex flex-wrap gap-1 max-h-[100px] overflow-y-auto p-1.5 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-100 dark:border-slate-850">
-                        {["English", "Hindi", "Nepali", "Science", "Physics", "Chemistry", "Biology", "Mathematics", "Social Science", "Computer Science"].map((subj, idx) => {
+                        {(isUPSC
+                          ? ["General Studies Paper I", "General Studies Paper II", "General Studies Paper III", "General Studies Paper IV", "Essay", "CSAT"]
+                          : ["English", "Hindi", "Nepali", "Science", "Physics", "Chemistry", "Biology", "Mathematics", "Social Science", "Computer Science"]
+                        ).map((subj, idx) => {
                           const exists = tempSubjects.includes(subj);
                           return (
                             <button
@@ -1062,7 +1088,7 @@ export default function StudentDetails({
                               className={`px-2 py-1 text-[10px] font-semibold rounded-lg border transition-all ${
                                 exists
                                   ? "bg-blue-600 border-blue-600 text-white"
-                                  : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-850 text-slate-600 dark:text-slate-400"
+                                  : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-855 text-slate-600 dark:text-slate-400"
                               }`}
                             >
                               {subj}
@@ -1098,6 +1124,96 @@ export default function StudentDetails({
                         Save
                       </button>
                     </div>
+                  </div>
+                ) : isUPSC ? (
+                  <div className="flex flex-col gap-3">
+                    {/* Enrolled GS Papers Pills */}
+                    <div className="flex flex-wrap gap-2">
+                      {enrolledGSPapers.length > 0 ? (
+                        enrolledGSPapers.map((paperName, pIdx) => (
+                          <span
+                            key={`gs_paper_${pIdx}`}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 font-bold text-xs rounded-xl border border-indigo-200/60 dark:border-indigo-800/60 shadow-2xs"
+                          >
+                            <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
+                            {paperName}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-slate-500 dark:text-slate-400 font-semibold text-sm">
+                          {sortedEnrolledSubjects.length > 0 ? sortedEnrolledSubjects.join(", ") : "None Enrolled"}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 4-Tier UPSC Hierarchy: GS Paper → Subject → Module → Topic Notes */}
+                    {upscHierarchy.length > 0 && (
+                      <div className="mt-1 pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex flex-col gap-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                            Curriculum Hierarchy (GS Paper → Subject → Module → Topic Notes)
+                          </span>
+                          <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md">
+                            {upscHierarchy.length} {upscHierarchy.length === 1 ? "Paper" : "Papers"}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-col gap-2 max-h-[320px] overflow-y-auto pr-1">
+                          {upscHierarchy.map((paper) => (
+                            <div
+                              key={`upsc-hier-${paper.gsPaper}`}
+                              className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 p-2.5 flex flex-col gap-1.5"
+                            >
+                              {/* Level 1: GS Paper */}
+                              <div className="flex items-center justify-between font-bold text-xs text-indigo-900 dark:text-indigo-200">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
+                                    GS Paper
+                                  </span>
+                                  <span className="truncate">{paper.gsPaper}</span>
+                                </div>
+                                <span className="text-[10px] font-semibold text-slate-400 shrink-0">
+                                  {paper.totalSubjects} {paper.totalSubjects === 1 ? "Subject" : "Subjects"} • {paper.totalModules} {paper.totalModules === 1 ? "Module" : "Modules"}
+                                </span>
+                              </div>
+
+                              {/* Level 2: Subjects under this GS Paper */}
+                              <div className="flex flex-col gap-1 pl-2 border-l-2 border-indigo-200/60 dark:border-indigo-900/60 ml-1 mt-0.5">
+                                {paper.subjects.map((sub) => (
+                                  <div key={`sub-${sub.subjectKey}`} className="flex flex-col gap-0.5">
+                                    <div className="flex items-center justify-between text-[11px] font-semibold text-slate-800 dark:text-slate-200">
+                                      <span className="truncate flex items-center gap-1">
+                                        <span className="text-slate-400">↳ Subject:</span> {sub.subject}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 shrink-0">
+                                        {sub.totalModules} {sub.totalModules === 1 ? "Module" : "Modules"} • {sub.totalTopics} {sub.totalTopics === 1 ? "Note" : "Notes"}
+                                      </span>
+                                    </div>
+
+                                    {/* Level 3: Modules under this Subject */}
+                                    <div className="flex flex-col gap-0.5 pl-3 border-l border-slate-200 dark:border-slate-800 ml-1">
+                                      {sub.modules.map((mod) => (
+                                        <div
+                                          key={`mod-${mod.moduleKey}`}
+                                          className="flex items-center justify-between text-[10px] text-slate-600 dark:text-slate-400"
+                                        >
+                                          <span className="truncate flex items-center gap-1">
+                                            <span className="text-slate-400">↳ Module {mod.moduleNo}:</span> {mod.moduleTitle}
+                                          </span>
+                                          <span className="text-[9px] font-medium text-slate-400 shrink-0">
+                                            {mod.totalTopics} Topic {mod.totalTopics === 1 ? "Note" : "Notes"}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <span className="text-slate-850 dark:text-slate-100 font-semibold text-sm leading-relaxed">
@@ -1951,16 +2067,16 @@ export default function StudentDetails({
                 </div>
               </div>
 
-              {/* Academic Subjects */}
+              {/* Academic Subjects / UPSC Papers */}
               <div className="border border-slate-100 dark:border-slate-800/60 rounded-2xl p-4 flex flex-col gap-3">
                 <span className="text-[10px] font-extrabold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">
-                  Enrolled Subjects
+                  {isUPSC ? "Enrolled GS Papers" : "Enrolled Subjects"}
                 </span>
                 <div className="flex flex-wrap gap-1.5">
-                  {sortedEnrolledSubjects.length === 0 ? (
-                    <span className="text-xs text-slate-400 italic">No enrolled subjects</span>
+                  {(isUPSC ? (enrolledGSPapers.length > 0 ? enrolledGSPapers : sortedEnrolledSubjects) : sortedEnrolledSubjects).length === 0 ? (
+                    <span className="text-xs text-slate-400 italic">{isUPSC ? "No enrolled GS papers" : "No enrolled subjects"}</span>
                   ) : (
-                    sortedEnrolledSubjects.map((sub, idx) => (
+                    (isUPSC ? (enrolledGSPapers.length > 0 ? enrolledGSPapers : sortedEnrolledSubjects) : sortedEnrolledSubjects).map((sub, idx) => (
                       <span
                         key={`${sub}_${idx}`}
                         className="text-xs font-bold px-3 py-1 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 rounded-full border border-indigo-100/20"

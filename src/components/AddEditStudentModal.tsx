@@ -49,7 +49,19 @@ export const SUBJECT_CATEGORIES = [
   },
   {
     name: "Competitive Exams",
-    subjects: ["SSC", "UPSC", "Railways", "Banking (Competitive)", "Defence"]
+    subjects: [
+      "General Studies Paper I",
+      "General Studies Paper II",
+      "General Studies Paper III",
+      "General Studies Paper IV",
+      "Essay",
+      "CSAT",
+      "UPSC",
+      "SSC",
+      "Railways",
+      "Banking (Competitive)",
+      "Defence"
+    ]
   }
 ];
 
