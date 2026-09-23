@@ -63,6 +63,7 @@ export default function QuickAddTopicModal({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadStartTimeRef = useRef<number>(0);
+  const isCancelledRef = useRef<boolean>(false);
 
   // Live Topic Display Name Preview
   const formattedPreviewTitle = useMemo(() => {
@@ -82,6 +83,12 @@ export default function QuickAddTopicModal({
       setSelectedFile(initialFile);
       setPartNumber("");
       setTotalParts("");
+      isCancelledRef.current = false;
+      setUploadState({
+        isOpen: false,
+        isUploading: false,
+        progress: 0,
+      });
 
       // Auto-suggest next topic number
       const numbers = (parentContext.existingTopics || [])
@@ -202,6 +209,7 @@ export default function QuickAddTopicModal({
     }
 
     setErrorMsg("");
+    isCancelledRef.current = false;
     uploadStartTimeRef.current = Date.now();
 
     const totalBytes = selectedFile.size;
@@ -257,6 +265,7 @@ export default function QuickAddTopicModal({
         partName: cleanPart ? `Part ${cleanPart}` : undefined,
         totalParts: parsedTotal,
         onProgress: (pct) => {
+          if (isCancelledRef.current) return;
           const now = Date.now();
           const elapsedSec = (now - uploadStartTimeRef.current) / 1000;
           const currentUploaded = (pct / 100) * totalBytes;
@@ -274,6 +283,10 @@ export default function QuickAddTopicModal({
         },
       });
 
+      if (isCancelledRef.current) {
+        return;
+      }
+
       setUploadState((prev) => ({
         ...prev,
         isUploading: false,
@@ -287,6 +300,9 @@ export default function QuickAddTopicModal({
         onClose();
       }, 500);
     } catch (err: any) {
+      if (isCancelledRef.current) {
+        return;
+      }
       console.error("[QuickAddTopicModal] Upload failed:", err);
       setUploadState((prev) => ({
         ...prev,
@@ -295,6 +311,25 @@ export default function QuickAddTopicModal({
       }));
     }
   };
+
+  // When upload is active or showing result, render only the single upload modal to prevent duplicate UI or blurred backdrop
+  if (uploadState.isOpen) {
+    return (
+      <NotesUploadProgressModal
+        state={uploadState}
+        onCancel={() => {
+          isCancelledRef.current = true;
+          setUploadState((prev) => ({ ...prev, isOpen: false, isUploading: false, error: null }));
+        }}
+        onRetry={() => {
+          handleSaveTopic(true);
+        }}
+        onClose={() => {
+          setUploadState((prev) => ({ ...prev, isOpen: false, error: null }));
+        }}
+      />
+    );
+  }
 
   return (
     <div 
@@ -542,22 +577,6 @@ export default function QuickAddTopicModal({
               <span>{errorMsg}</span>
             </div>
           )}
-
-          {/* Upload Progress Display */}
-          {uploadState.isUploading && (
-            <div className="p-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-xl text-xs space-y-1.5">
-              <div className="flex justify-between text-[11px] font-bold text-blue-700 dark:text-blue-300">
-                <span>Uploading note...</span>
-                <span>{uploadState.progress}%</span>
-              </div>
-              <div className="w-full h-2 bg-blue-100 dark:bg-blue-900 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-blue-600 rounded-full transition-all duration-300"
-                  style={{ width: `${uploadState.progress}%` }}
-                />
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Modal Footer */}
@@ -583,20 +602,6 @@ export default function QuickAddTopicModal({
           </button>
         </div>
       </div>
-
-      {/* Real-time Upload Progress Modal */}
-      <NotesUploadProgressModal
-        state={uploadState}
-        onCancel={() => {
-          setUploadState((prev) => ({ ...prev, isOpen: false, isUploading: false }));
-        }}
-        onRetry={() => {
-          handleSaveTopic(true);
-        }}
-        onClose={() => {
-          setUploadState((prev) => ({ ...prev, isOpen: false }));
-        }}
-      />
     </div>
   );
 }
