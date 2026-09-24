@@ -30,8 +30,9 @@ const PRACTICE_TESTS_FILE_PATH = "practice_tests/test_bank.json";
 const PRACTICE_TEST_ATTEMPTS_FILE_PATH = "practice_tests/test_attempts.json";
 
 const IDB_DB_NAME = "tuition_practice_tests_db";
-const IDB_DB_VERSION = 1;
+const IDB_DB_VERSION = 2;
 const IDB_SYNC_QUEUE_STORE = "syncQueue";
+const IDB_TESTS_STORE = "fullTests";
 const MAX_SYNC_RETRIES = 3;
 const MAX_LOCAL_STORAGE_ITEM_BYTES = 50 * 1024;
 
@@ -39,9 +40,11 @@ export function loadFullTestsFromLocalStorage(): Record<string, TopicPracticeTes
   if (typeof window === "undefined" || !window.localStorage) return {};
   const bank: Record<string, TopicPracticeTest> = {};
   try {
+    const legacyKeysToPurge: string[] = [];
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i);
       if (key && key.startsWith(FULL_TEST_STORAGE_PREFIX)) {
+        legacyKeysToPurge.push(key);
         try {
           const raw = window.localStorage.getItem(key);
           if (raw) {
@@ -61,6 +64,12 @@ export function loadFullTestsFromLocalStorage(): Record<string, TopicPracticeTes
         }
       }
     }
+    // Clean up legacy localStorage items immediately to release quota
+    for (const k of legacyKeysToPurge) {
+      try {
+        window.localStorage.removeItem(k);
+      } catch {}
+    }
   } catch (err) {
     console.warn("[PracticeTestService] Error loading full tests from localStorage:", err);
   }
@@ -68,6 +77,17 @@ export function loadFullTestsFromLocalStorage(): Record<string, TopicPracticeTes
 }
 
 let memoryTestBank: Record<string, TopicPracticeTest> = typeof window !== "undefined" ? loadFullTestsFromLocalStorage() : {};
+// Asynchronously hydrate memory bank from IndexedDB
+if (typeof window !== "undefined") {
+  setTimeout(() => {
+    readFullTestsFromIDB().then((idbBank) => {
+      if (idbBank && Object.keys(idbBank).length > 0) {
+        memoryTestBank = { ...idbBank, ...memoryTestBank };
+        notifyTestBankSubscribers();
+      }
+    }).catch(() => {});
+  }, 0);
+}
 let memoryQuestionsCache: Map<string, ParsedAssessmentQuestion[]> = new Map();
 let inFlightTestFetches: Map<string, Promise<TopicPracticeTest | null>> = new Map();
 let inFlightSubjectPreloads: Set<string> = new Set();
@@ -693,6 +713,9 @@ async function openPracticeTestsDB(): Promise<IDBDatabase | null> {
       if (!db.objectStoreNames.contains(IDB_SYNC_QUEUE_STORE)) {
         db.createObjectStore(IDB_SYNC_QUEUE_STORE, { keyPath: "id" });
       }
+      if (!db.objectStoreNames.contains(IDB_TESTS_STORE)) {
+        db.createObjectStore(IDB_TESTS_STORE, { keyPath: "id" });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -701,6 +724,116 @@ async function openPracticeTestsDB(): Promise<IDBDatabase | null> {
       console.warn("[PracticeTestService] IndexedDB open blocked by another tab.");
     };
   });
+}
+
+export async function writeFullTestsToIDB(tests: TopicPracticeTest[]): Promise<void> {
+  try {
+    const db = await openPracticeTestsDB();
+    if (!db || !db.objectStoreNames.contains(IDB_TESTS_STORE)) return;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_TESTS_STORE, "readwrite");
+        const store = tx.objectStore(IDB_TESTS_STORE);
+        for (const test of tests) {
+          if (test && (test.id || (test as any).testId)) {
+            const cleanTest = { ...test, id: test.id || (test as any).testId };
+            store.put(cleanTest);
+          }
+        }
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  } catch {
+    // Ignore IndexedDB failures gracefully
+  }
+}
+
+export async function writeSingleTestToIDB(test: TopicPracticeTest): Promise<void> {
+  if (!test || (!test.id && !(test as any).testId)) return;
+  return writeFullTestsToIDB([test]);
+}
+
+export async function readFullTestsFromIDB(): Promise<Record<string, TopicPracticeTest>> {
+  try {
+    const db = await openPracticeTestsDB();
+    if (!db || !db.objectStoreNames.contains(IDB_TESTS_STORE)) return {};
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_TESTS_STORE, "readonly");
+        const store = tx.objectStore(IDB_TESTS_STORE);
+        const req = store.getAll();
+        req.onsuccess = () => {
+          const list = (req.result as TopicPracticeTest[]) || [];
+          const bank: Record<string, TopicPracticeTest> = {};
+          for (const t of list) {
+            if (t && (t.id || (t as any).testId)) {
+              const testId = t.id || (t as any).testId;
+              if (!t.isDeleted && !(t as any).deleted) {
+                bank[testId] = t;
+                if ((t as any).testId && (t as any).testId !== testId) {
+                  bank[(t as any).testId] = t;
+                }
+              }
+            }
+          }
+          resolve(bank);
+        };
+        req.onerror = () => resolve({});
+      } catch {
+        resolve({});
+      }
+    });
+  } catch {
+    return {};
+  }
+}
+
+export async function readSingleTestFromIDB(testId: string): Promise<TopicPracticeTest | null> {
+  if (!testId) return null;
+  try {
+    const db = await openPracticeTestsDB();
+    if (!db || !db.objectStoreNames.contains(IDB_TESTS_STORE)) return null;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_TESTS_STORE, "readonly");
+        const store = tx.objectStore(IDB_TESTS_STORE);
+        const req = store.get(testId);
+        req.onsuccess = () => {
+          resolve((req.result as TopicPracticeTest) || null);
+        };
+        req.onerror = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteTestFromIDB(testId: string): Promise<void> {
+  if (!testId) return;
+  try {
+    const db = await openPracticeTestsDB();
+    if (!db || !db.objectStoreNames.contains(IDB_TESTS_STORE)) return;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_TESTS_STORE, "readwrite");
+        const store = tx.objectStore(IDB_TESTS_STORE);
+        store.delete(testId);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  } catch {
+    // Ignore
+  }
 }
 
 async function readSyncQueueFromIDB(): Promise<SyncQueueItem[]> {
@@ -1236,19 +1369,21 @@ export function saveLocalTestBank(bank: Record<string, TopicPracticeTest>, optio
 
     safeLocalStorageSetItem(TESTS_CACHE_KEY, JSON.stringify(trimmedMap));
 
-    // Also persist full test documents containing stored questions
-    for (const key of Object.keys(bank)) {
-      const test = bank[key];
-      if (!test || test.isDeleted || (test as any).deleted) continue;
-      if (Array.isArray(test.questions) && test.questions.length > 0) {
+    // Persist full test documents containing stored questions into IndexedDB (quota-safe offline storage)
+    const validTests = Object.values(bank).filter(
+      (t) => t && !t.isDeleted && !(t as any).deleted && Array.isArray(t.questions) && t.questions.length > 0
+    );
+    if (validTests.length > 0) {
+      writeFullTestsToIDB(validTests).catch(() => {});
+    }
+
+    // Clean up any remaining legacy full test keys from localStorage to free browser storage quota
+    for (let i = window.localStorage.length - 1; i >= 0; i--) {
+      const k = window.localStorage.key(i);
+      if (k && k.startsWith(FULL_TEST_STORAGE_PREFIX)) {
         try {
-          safeLocalStorageSetItem(`${FULL_TEST_STORAGE_PREFIX}${test.id}`, JSON.stringify(test));
-          if ((test as any).testId && (test as any).testId !== test.id) {
-            safeLocalStorageSetItem(`${FULL_TEST_STORAGE_PREFIX}${(test as any).testId}`, JSON.stringify(test));
-          }
-        } catch {
-          // Ignore storage quota warnings
-        }
+          window.localStorage.removeItem(k);
+        } catch {}
       }
     }
   } catch (err: any) {
@@ -1266,10 +1401,11 @@ export function updateLocalTopicCache(test: TopicPracticeTest): void {
     memoryTestBank[(test as any).testId] = test;
   }
   if (Array.isArray(test.questions) && test.questions.length > 0 && typeof window !== "undefined") {
+    writeSingleTestToIDB(test).catch(() => {});
     try {
-      safeLocalStorageSetItem(`${FULL_TEST_STORAGE_PREFIX}${test.id}`, JSON.stringify(test));
-      if ((test as any).testId && (test as any).testId !== test.id) {
-        safeLocalStorageSetItem(`${FULL_TEST_STORAGE_PREFIX}${(test as any).testId}`, JSON.stringify(test));
+      safeLocalStorageRemoveItem(`${FULL_TEST_STORAGE_PREFIX}${test.id}`);
+      if ((test as any).testId) {
+        safeLocalStorageRemoveItem(`${FULL_TEST_STORAGE_PREFIX}${(test as any).testId}`);
       }
     } catch {}
   }
@@ -1280,6 +1416,7 @@ export function updateLocalTopicCache(test: TopicPracticeTest): void {
 export function removeLocalTopicCache(testId: string): void {
   delete memoryTestBank[testId];
   if (typeof window !== "undefined") {
+    deleteTestFromIDB(testId).catch(() => {});
     safeLocalStorageRemoveItem(`${FULL_TEST_STORAGE_PREFIX}${testId}`);
   }
 
@@ -1301,6 +1438,7 @@ export function removeLocalTopicCache(testId: string): void {
       ) {
         delete memoryTestBank[key];
         if (typeof window !== "undefined") {
+          deleteTestFromIDB(key).catch(() => {});
           safeLocalStorageRemoveItem(`${FULL_TEST_STORAGE_PREFIX}${key}`);
         }
       }
@@ -1908,6 +2046,11 @@ export async function getPracticeTestById(
 
   if (typeof window !== "undefined") {
     try {
+      const idbTest = await readSingleTestFromIDB(testId);
+      if (idbTest && Array.isArray(idbTest.questions) && idbTest.questions.length > 0) {
+        memoryTestBank[testId] = idbTest;
+        return idbTest;
+      }
       const raw = safeLocalStorageGetItem(`${FULL_TEST_STORAGE_PREFIX}${testId}`);
       if (raw) {
         const test = JSON.parse(raw) as TopicPracticeTest;

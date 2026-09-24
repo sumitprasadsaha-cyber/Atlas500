@@ -31,6 +31,7 @@ export function purgeObsoleteStorage(): void {
     const keysToRemove = [
       "tuition_topic_practice_tests_bank",
       "tuition_practice_tests_sync_queue",
+      "tuition_practice_test_full__",
       "uploaded_pdf_",
       "tuition_ai_report_",
       "mock_storage_meta_"
@@ -54,15 +55,18 @@ export function purgeObsoleteStorage(): void {
 export function autoCleanupStorageIfOverLimit(limitMB: number = 2): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
+    // 1. Immediately purge legacy heavy practice test full caches from localStorage
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith("tuition_practice_test_full__") || k.startsWith("tuition_topic_practice_tests_bank"))) {
+        try {
+          localStorage.removeItem(k);
+        } catch {}
+      }
+    }
+
     const { totalKB } = getStorageMetrics();
     const limitKB = limitMB * 1024;
-    
-    // Check if any legacy heavy test cache exists
-    const legacyTestsCache = localStorage.getItem("tuition_topic_practice_tests_bank");
-    if (legacyTestsCache && (legacyTestsCache.includes('"questions"') || legacyTestsCache.includes('"rawText"'))) {
-      console.warn("[SafeStorage] Legacy heavy practice test cache detected. Purging immediately.");
-      localStorage.removeItem("tuition_topic_practice_tests_bank");
-    }
 
     if (totalKB > limitKB) {
       console.warn(`[SafeStorage] Storage usage (${totalKB} KB) exceeds threshold (${limitKB} KB). Cleaning up non-essential caches.`);
@@ -80,6 +84,11 @@ function estimateBytes(value: string): number {
 export function safeLocalStorageSetItem(key: string, value: string): void {
   if (typeof window === "undefined" || !window.localStorage) return;
 
+  // Never write bulky full practice test objects to localStorage; IndexedDB handles large offline test caches
+  if (key.startsWith("tuition_practice_test_full__")) {
+    return;
+  }
+
   const itemBytes = estimateBytes(value);
   if (itemBytes > MAX_LOCAL_STORAGE_ITEM_BYTES) {
     console.warn(
@@ -93,12 +102,12 @@ export function safeLocalStorageSetItem(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
   } catch (err: any) {
-    console.warn(`[SafeStorage] QuotaExceededError or write failure for key "${key}". Executing storage recovery.`, err);
+    console.warn(`[SafeStorage] QuotaExceededError or write failure for key "${key}". Executing storage recovery.`);
     try {
       purgeObsoleteStorage();
       localStorage.setItem(key, value);
     } catch (retryErr) {
-      console.error(`[SafeStorage] Retry failed for key "${key}". Swallowing error to prevent crash.`, retryErr);
+      console.warn(`[SafeStorage] Skipped storing key "${key}" due to browser localStorage quota limits.`);
       try {
         localStorage.removeItem(key);
       } catch (_) {}
