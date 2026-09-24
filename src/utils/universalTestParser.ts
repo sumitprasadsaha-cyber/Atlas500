@@ -5,6 +5,14 @@ import {
   AssessmentCaseStudy,
   TestSectionConfig,
 } from "../types";
+import {
+  parseNumberOrDevanagari,
+  mapDevanagariOrAsciiOptionLetter,
+  matchQuestionNumber,
+  matchOptionLine,
+  identifySectionHeader,
+  extractMarks
+} from "../lib/testParser";
 
 export interface ParsedMetadata {
   chapter?: string;
@@ -47,14 +55,14 @@ export interface UniversalParseResult {
 }
 
 // ----------------------------------------------------
-// HELPER REGEX PATTERNS
+// HELPER REGEX PATTERNS WITH DEVANAGARI UNICODE SUPPORT
 // ----------------------------------------------------
 
-const QUESTION_START_REGEX = /^(?:(?:Q(?:uestion)?\.?\s*(\d+)|\b(\d+))[\.\)\:\-]\s*|\((\d+|\b(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\b)\)\s*|\[(\d+|\b(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\b)\]\s*)/i;
+const QUESTION_START_REGEX = /^(?:(?:Q(?:uestion)?\.?\s*(\d+|[०-९]+)|\b(\d+|[०-९]+)|(?:प्रश्न(?:\s*संख्या|\s*नं[\.]?)?|प्र[\.०]?)\s*[:\.\-—–।]?\s*(\d+|[०-९]+))[\.\)\:\-—–।]?\s*|\((\d+|[०-९]+|\b(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\b)\)\s*|\[(\d+|[०-९]+|\b(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\b)\]\s*)/i;
 
-const OPTION_LINE_REGEX = /^(?:(?:Option|Opt|Choice)\s*([A-Ea-e1-5])[\.\)\:\-]\s*|([A-Ea-e])[\.\)\:\-]\s*|\(([A-Ea-e])\)\s*|\[([A-Ea-e])\]\s*)(.+)$/i;
+const OPTION_LINE_REGEX = /^(?:(?:Option|Opt|Choice|विकल्प)\s*(?:[\(\[]([A-Ea-e1-5क-ङअ-द१-५])[\)\]]|([A-Ea-e1-5क-ङअ-द१-५]))[\.\)\:\-—–।\s]*|[\(\[]([A-Ea-e1-5क-ङअ-द१-५])[\)][\.\:\-—–।\s]*|\[([A-Ea-e1-5क-ङअ-द१-५])\][\.\:\-—–।\s]*|([A-Ea-eक-ङअ-द])[\.\)\:\-—–।]\s*)(.+)$/i;
 
-const MARKS_REGEX = /(?:\[|\()?\s*(?:Marks?\s*[:\-=]?\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:Marks?|M\b))\s*(?:\]|\))?/i;
+const MARKS_REGEX = /(?:\[|\()?\s*(?:(?:Marks?|अंक|मार्क्स|गुण)\s*[:\-=]?\s*(\d+(?:\.\d+)?|[०-९]+)|(\d+(?:\.\d+)?|[०-९]+)\s*(?:Marks?|M\b|अंक|मार्क्स|गुण))\s*(?:\]|\))?/i;
 
 const COMMAND_WORDS = [
   "define", "state", "list", "name", "mention", "identify", "give", "write",
@@ -78,32 +86,32 @@ function extractMetadata(lines: string[]): { metadata: ParsedMetadata; remaining
     }
 
     if (inHeader) {
-      const chMatch = trimmed.match(/^Chapter\s*[:\-=]\s*(.*)$/i);
+      const chMatch = trimmed.match(/^(?:Chapter|पाठ|अध्याय)\s*[:\-=—–।]\s*(.*)$/i);
       if (chMatch) {
         metadata.chapter = chMatch[1].trim();
         continue;
       }
-      const topMatch = trimmed.match(/^Topic\s*[:\-=]\s*(.*)$/i);
+      const topMatch = trimmed.match(/^(?:Topic|शीर्षक|प्रकरण)\s*[:\-=—–।]\s*(.*)$/i);
       if (topMatch) {
         metadata.topic = topMatch[1].trim();
         continue;
       }
-      const thMatch = trimmed.match(/^Theme\s*[:\-=]\s*(.*)$/i);
+      const thMatch = trimmed.match(/^Theme\s*[:\-=—–।]\s*(.*)$/i);
       if (thMatch) {
         metadata.theme = thMatch[1].trim();
         continue;
       }
-      const clMatch = trimmed.match(/^Class\s*[:\-=]\s*(.*)$/i);
+      const clMatch = trimmed.match(/^(?:Class|कक्षा)\s*[:\-=—–।]\s*(.*)$/i);
       if (clMatch) {
         metadata.classGrade = clMatch[1].trim();
         continue;
       }
-      const subMatch = trimmed.match(/^Subject\s*[:\-=]\s*(.*)$/i);
+      const subMatch = trimmed.match(/^(?:Subject|विषय)\s*[:\-=—–।]\s*(.*)$/i);
       if (subMatch) {
         metadata.subject = subMatch[1].trim();
         continue;
       }
-      if (/^(?:Sample\s+Test|Practice\s+Test|General\s+Instructions?|Time\s*:|Max\s*Marks\s*:|Total\s*Marks\s*:)/i.test(trimmed)) {
+      if (/^(?:Sample\s+Test|Practice\s+Test|General\s+Instructions?|Time\s*:|Max\s*Marks\s*:|Total\s*Marks\s*:|समय\s*[:—–।]|पूर्णांक\s*[:—–।]|कुल\s*अंक\s*[:—–।]|सामान्य\s*निर्देश\s*[:—–।])/i.test(trimmed)) {
         continue;
       }
     }
@@ -129,7 +137,7 @@ function extractEndAnswerKey(lines: string[]): {
 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
-    if (/^(?:Answer\s*Key|Solutions?|Answers?|Marking\s+Scheme|Answer\s+Sheet)\s*[:\-=]?$/i.test(trimmed)) {
+    if (/^(?:Answer\s*Key|Solutions?|Answers?|Marking\s+Scheme|Answer\s+Sheet|उत्तर\s*कुंजी|उत्तरमाला|समाधान|हल)\s*[:\-=—–।]?$/i.test(trimmed)) {
       keyStartIndex = i;
       break;
     }
@@ -146,14 +154,18 @@ function extractEndAnswerKey(lines: string[]): {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    // e.g. "1. B", "Q2: (A, C)", "3) True", "4. Photosynthesis is the..."
-    const match = trimmed.match(/^(?:Q(?:uestion)?\.?\s*)?(\d+|[A-Za-z]\b)[\.\)\:\-]\s*(.+)$/i);
+    // e.g. "1. B", "Q2: (A, C)", "3) True", "4. Photosynthesis is the...", "प्रश्न 1. B", "1. कुरूप"
+    const match = trimmed.match(/^(?:(?:Q(?:uestion)?\.?|प्रश्न(?:\s*संख्या|\s*नं[\.]?)?|प्र[\.०]?)\s*)?(\d+|[०-९]+|[A-Za-z]\b)[\.\)\:\-—–।]\s*(.+)$/i);
     if (match) {
-      const qNum = match[1].trim().toLowerCase();
+      const parsedNum = parseNumberOrDevanagari(match[1]);
+      const qNum = parsedNum !== null ? String(parsedNum) : match[1].trim().toLowerCase();
       const ansVal = match[2].trim();
 
       // Check if it's an objective letter/choice or full subjective text
-      if (/^(?:Option\s*)?[A-Ea-e](?:\s*,\s*[A-Ea-e])?$/i.test(ansVal) || /^(?:True|False|T|F)$/i.test(ansVal)) {
+      const isObjLetter = /^(?:(?:Option|Opt|Choice|विकल्प)\s*)?[A-Ea-eक-ङअ-द1-5१-५](?:\s*[,औरतथा]\s*[A-Ea-eक-ङअ-द1-5१-५])?$/i.test(ansVal);
+      const isTF = /^(?:True|False|T|F|सही|गलत|सत्य|असत्य|ठीक|बेठीक)$/i.test(ansVal);
+
+      if (isObjLetter || isTF) {
         answerKeyMap[qNum] = ansVal;
       } else {
         modelAnswerMap[qNum] = ansVal;
@@ -169,17 +181,38 @@ function extractEndAnswerKey(lines: string[]): {
 }
 
 /**
- * Checks if a line is a section header (Section A, B, Section: Short Answer, etc.)
+ * Checks if a line is a section header (Section A, B, Section: Short Answer, खण्ड क, etc.)
  */
 function detectSectionHeader(line: string): { isSection: boolean; title: string; defaultType?: AssessmentQuestionType } | null {
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
 
-  // e.g. "Section A: Multiple Choice Questions (1 Mark each)"
-  // "Section B - Short Answer Type"
-  // "PART 1: MCQs"
-  // "Section C (Long Answer)"
-  const secMatch = trimmed.match(/^(?:Section|Part)\s+([A-Za-z0-9]+)[\s\:\-]+(.+)?$/i);
+  // Lines that start with directions, instructions, alternatives are NOT section headers
+  if (/^(?:Directions?|Instructions?|Note|निर्देश|सूचना|अथवा|वा|या)\b/i.test(trimmed)) {
+    return null;
+  }
+
+  // 1. Try unified CBSE/Devanagari section header identification
+  const identified = identifySectionHeader(trimmed);
+  if (identified && identified.isSection) {
+    let defaultType: AssessmentQuestionType | undefined = undefined;
+    if (identified.type === "assertion_reason" || identified.type === "assertion_reasoning") defaultType = "assertion_reason";
+    else if (identified.type === "multiple_select" || identified.type === "msq") defaultType = "multiple_select";
+    else if (identified.type === "true_false") defaultType = "true_false";
+    else if (identified.type === "very_short_answer") defaultType = "very_short_answer";
+    else if (identified.type === "short_answer") defaultType = "short_answer";
+    else if (identified.type === "long_answer") defaultType = "long_answer";
+    else if (identified.type === "case_based") defaultType = "case_based";
+    else if (identified.type === "comprehension") defaultType = "comprehension";
+    else defaultType = "mcq";
+
+    const secLetter = identified.sectionLetter;
+    const fullTitle = secLetter ? `Section ${secLetter}: ${identified.sectionTitle}` : identified.sectionTitle;
+    return { isSection: true, title: fullTitle, defaultType };
+  }
+
+  // 2. Legacy English/Hindi section regex fallback
+  const secMatch = trimmed.match(/^(?:Section|Part|खण्ड|खंड|भाग|विभाग)\s+([A-Za-z0-9क-घअ-द]+)[\s\:\-]+(.+)?$/i);
   if (secMatch) {
     const partName = secMatch[1].toUpperCase();
     const rest = (secMatch[2] || "").trim();
@@ -187,43 +220,42 @@ function detectSectionHeader(line: string): { isSection: boolean; title: string;
 
     let defaultType: AssessmentQuestionType | undefined = undefined;
     const lower = trimmed.toLowerCase();
-    if (lower.includes("multiple choice") || lower.includes("mcq")) defaultType = "mcq";
-    else if (lower.includes("assertion") && lower.includes("reason")) defaultType = "assertion_reason";
-    else if (lower.includes("true") && lower.includes("false")) defaultType = "true_false";
-    else if (lower.includes("very short")) defaultType = "very_short_answer";
-    else if (lower.includes("short answer")) defaultType = "short_answer";
-    else if (lower.includes("long answer")) defaultType = "long_answer";
-    else if (lower.includes("case") || lower.includes("source")) defaultType = "case_based";
-    else if (lower.includes("comprehension")) defaultType = "comprehension";
+    if (lower.includes("multiple choice") || lower.includes("mcq") || lower.includes("बहुविकल्प")) defaultType = "mcq";
+    else if ((lower.includes("assertion") && lower.includes("reason")) || lower.includes("कथन") || lower.includes("अभिकथन")) defaultType = "assertion_reason";
+    else if ((lower.includes("true") && lower.includes("false")) || lower.includes("सही") || lower.includes("सत्य")) defaultType = "true_false";
+    else if (lower.includes("very short") || lower.includes("अति लघु")) defaultType = "very_short_answer";
+    else if (lower.includes("short answer") || lower.includes("लघु") || lower.includes("संवाद")) defaultType = "short_answer";
+    else if (lower.includes("long answer") || lower.includes("दीर्घ") || lower.includes("पत्र") || lower.includes("अनुच्छेद")) defaultType = "long_answer";
+    else if (lower.includes("case") || lower.includes("source") || lower.includes("केस")) defaultType = "case_based";
+    else if (lower.includes("comprehension") || lower.includes("गद्यांश")) defaultType = "comprehension";
 
     return { isSection: true, title: fullTitle, defaultType };
   }
 
-  // Standalone Type Headers (only if line DOES NOT start with a question number)
-  if (!QUESTION_START_REGEX.test(trimmed)) {
-    const lower = trimmed.toLowerCase();
-    if (/^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?)$/i.test(trimmed)) {
+  // 3. Standalone Type Headers (only if line DOES NOT start with a question number)
+  if (!matchQuestionNumber(trimmed) && !QUESTION_START_REGEX.test(trimmed)) {
+    if (/^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?|बहुविकल्पीय(?:\s*प्रश्न)?|वस्तुनिष्ठ(?:\s*प्रश्न)?)$/i.test(trimmed)) {
       return { isSection: true, title: "Multiple Choice Questions", defaultType: "mcq" };
     }
-    if (/^Assertion\s*(?:&|and|-)\s*Reasoning$/i.test(trimmed)) {
+    if (/^(?:Assertion\s*(?:&|and|-)\s*Reasoning|Assertion\s*&\s*Reasoning|कथन\s*(?:एवं|और|तथा)\s*कारण|अभिकथन\s*(?:एवं|और|तथा)\s*कारण)$/i.test(trimmed)) {
       return { isSection: true, title: "Assertion & Reasoning", defaultType: "assertion_reason" };
     }
-    if (/^(?:True\s*[\/\\]\s*False|True[\/\\]False|True\s+or\s+False)$/i.test(trimmed)) {
+    if (/^(?:True\s*[\/\\]\s*False|True[\/\\]False|True\s+or\s+False|सही\s*(?:या|\/|अथवा|वा)\s*गलत|सत्य\s*(?:या|\/|अथवा|वा)\s*असत्य|ठीक\s*(?:वा|\/)\s*बेठीक)$/i.test(trimmed)) {
       return { isSection: true, title: "True / False Questions", defaultType: "true_false" };
     }
-    if (/^(?:Very\s+Short\s+Answer(?:\s+Questions?)?|VSA)$/i.test(trimmed)) {
+    if (/^(?:Very\s+Short\s+Answer(?:\s+Questions?)?|VSA|अति\s*लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?)$/i.test(trimmed)) {
       return { isSection: true, title: "Very Short Answer Questions", defaultType: "very_short_answer" };
     }
-    if (/^(?:Short\s+Answer(?:\s+Questions?)?|SA)$/i.test(trimmed)) {
+    if (/^(?:Short\s+Answer(?:\s+Questions?)?|SA|लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|संवाद\s*लेखन)$/i.test(trimmed)) {
       return { isSection: true, title: "Short Answer Questions", defaultType: "short_answer" };
     }
-    if (/^(?:Long\s+Answer(?:\s+Questions?)?|LA)$/i.test(trimmed)) {
+    if (/^(?:Long\s+Answer(?:\s+Questions?)?|LA|दीर्घ(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|पत्र\s*लेखन|अनुच्छेद\s*लेखन|निबंध\s*लेखन)$/i.test(trimmed)) {
       return { isSection: true, title: "Long Answer Questions", defaultType: "long_answer" };
     }
-    if (/^(?:Case\s*Study|Case\s+Based(?:\s+Questions?)?|Source\s+Based)$/i.test(trimmed)) {
+    if (/^(?:Case\s*Study|Case\s+Based(?:\s+Questions?)?|Source\s+Based|केस\s*(?:आधारित|अध्ययन))$/i.test(trimmed)) {
       return { isSection: true, title: "Case Study / Source Based", defaultType: "case_based" };
     }
-    if (/^(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section))?$/i.test(trimmed)) {
+    if (/^(?:(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section))?|अपठित\s*गद्यांश|पठित\s*गद्यांश|गद्यांश)$/i.test(trimmed)) {
       return { isSection: true, title: "Reading Comprehension", defaultType: "comprehension" };
     }
   }
@@ -239,21 +271,21 @@ function detectParentGroupStart(line: string): { type: "comprehension" | "case_b
   if (!trimmed) return null;
 
   // Passage: "Read the following passage and answer the questions that follow:"
-  const isComprehensionPhrase = /^(?:Read|Study|Examine)\s+(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|poem|story)(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?[\.\:\-]?$/i.test(trimmed);
-  const isCaseStudyPhrase = /^(?:Read|Study|Examine)\s+(?:the\s+)?(?:following\s+)?(?:case\s*study|case|source|scenario|situation)(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?[\.\:\-]?$/i.test(trimmed);
+  const isComprehensionPhrase = /^(?:Read|Study|Examine|निम्नलिखित|दिएको|तलको)\s+(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|poem|story|गद्यांश|अनुच्छेद|पाठ|काव्यांश|पद्यांश)(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|to\s+answer|questions?|that\s+follow|ध्यानपूर्वक|पढ़कर|पढेर)[\w\s\.,\:\-\(\)]*)?[\.\:\-—–]?$/i.test(trimmed);
+  const isCaseStudyPhrase = /^(?:Read|Study|Examine|निम्नलिखित|दिएको|तलको)\s+(?:the\s+)?(?:following\s+)?(?:case\s*study|case|source|scenario|situation|केस|घटना|स्थिति)(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|to\s+answer|questions?|that\s+follow|ध्यानपूर्वक)[\w\s\.,\:\-\(\)]*)?[\.\:\-—–]?$/i.test(trimmed);
 
-  if (isCaseStudyPhrase || /^(?:Case\s*Study(?:\s*\d+)?|Case\s+Based\s+Question(?:\s*\d+)?|Source\s+Based\s+Study(?:\s*\d+)?)[\:\.]?$/i.test(trimmed)) {
+  if (isCaseStudyPhrase || /^(?:Case\s*Study(?:\s*(?:\d+|[०-९]+))?|Case\s+Based\s+Question(?:\s*(?:\d+|[०-९]+))?|Source\s+Based\s+Study(?:\s*(?:\d+|[०-९]+))?|केस\s*(?:आधारित|अध्ययन))[\:\.\-—–]?$/i.test(trimmed)) {
     return { type: "case_based", title: trimmed };
   }
 
-  if (isComprehensionPhrase || /^(?:Comprehension\s+Passage(?:\s*\d+)?|Reading\s+Passage(?:\s*\d+)?)[\:\.]?$/i.test(trimmed)) {
+  if (isComprehensionPhrase || /^(?:Comprehension\s+Passage(?:\s*(?:\d+|[०-९]+))?|Reading\s+Passage(?:\s*(?:\d+|[०-९]+))?|अपठित\s*गद्यांश|पठित\s*गद्यांश|गद्यांश|अपठित\s*काव्यांश)[\:\.\-—–]?$/i.test(trimmed)) {
     return { type: "comprehension", title: trimmed };
   }
 
   // Inline passage: "Read the following passage carefully: In 1859, Charles Darwin published..."
-  const inlinePassage = trimmed.match(/^((?:Read|Study)\s+(?:the\s+)?(?:following\s+)?(?:passage|case\s*study|case|text)[\w\s\.,\:\-\(\)]*?[\:\-])\s+(.+)$/i);
+  const inlinePassage = trimmed.match(/^((?:Read|Study|निम्नलिखित|दिएको)\s+(?:the\s+)?(?:following\s+)?(?:passage|case\s*study|case|text|गद्यांश|अनुच्छेद)?[\w\s\.,\:\-\(\)]*?[\:\-—–])\s+(.+)$/i);
   if (inlinePassage) {
-    const isCase = inlinePassage[1].toLowerCase().includes("case");
+    const isCase = inlinePassage[1].toLowerCase().includes("case") || inlinePassage[1].includes("केस");
     return {
       type: isCase ? "case_based" : "comprehension",
       title: inlinePassage[1].trim(),
@@ -379,17 +411,20 @@ export function parseUniversalTestText(
       continue;
     }
 
-    // If inside a question block and line is an option (A., B., C., D.), append to block
+    // If inside a question block and line is an option (A., B., C., D., (क), etc.), append to block
     if (currentBlock && OPTION_LINE_REGEX.test(trimmed)) {
       currentBlock.lines.push(line);
       continue;
     }
 
     // Check for Question start
-    const qMatch = trimmed.match(QUESTION_START_REGEX);
-    if (qMatch) {
+    const qMatchNum = matchQuestionNumber(trimmed);
+    const qMatch = qMatchNum ? null : trimmed.match(QUESTION_START_REGEX);
+    if (qMatchNum || qMatch) {
       // Determine question identifier string
-      const matchedNum = (qMatch[1] || qMatch[2] || qMatch[3] || qMatch[4] || qMatch[5] || "").trim();
+      const matchedNum = qMatchNum
+        ? String(qMatchNum.qNum)
+        : (qMatch ? (qMatch[1] || qMatch[2] || qMatch[3] || qMatch[4] || qMatch[5] || "").trim() : "");
       
       // If we were collecting group lines and haven't hit questions yet, finalize the reading passage text
       if (currentGroup && currentGroup.lines.length > 0 && !currentBlock) {
@@ -406,7 +441,7 @@ export function parseUniversalTestText(
       }
 
       // Strip leading number from question line if it has question text on same line
-      const restOfLine = trimmed.substring(qMatch[0].length).trim();
+      const restOfLine = qMatchNum ? qMatchNum.remainder : (qMatch ? trimmed.substring(qMatch[0].length).trim() : "");
 
       currentBlock = {
         qNumStr: matchedNum || String(rawBlocks.length + 1),
@@ -462,12 +497,13 @@ export function parseUniversalTestText(
       return;
     }
 
-    // Extract Marks if present: e.g. "[2 Marks]", "(5M)"
+    // Extract Marks if present: e.g. "[2 Marks]", "(5M)", "[1 अंक]", "(2 अंक)"
     let allocatedMarks: number | undefined = undefined;
     let fullQuestionText = cleanLines.join("\n");
     const marksMatch = fullQuestionText.match(MARKS_REGEX);
     if (marksMatch) {
-      allocatedMarks = parseFloat(marksMatch[1] || marksMatch[2] || "1");
+      const rawM = marksMatch[1] || marksMatch[2] || "1";
+      allocatedMarks = parseNumberOrDevanagari(rawM) ?? parseFloat(rawM);
       fullQuestionText = fullQuestionText.replace(marksMatch[0], "").trim();
     }
 
@@ -494,14 +530,14 @@ export function parseUniversalTestText(
 
     // Separate question text, options, and inline answers
     cleanLines.forEach((l) => {
-      const caMatch = l.match(/^(?:Correct\s+Answer|Ans(?:wer)?|Key)\s*[:\-=]\s*(.+)$/i);
-      const modelMatch = l.match(/^(?:Model\s+Answer|Expected\s+Answer|Solution)\s*[:\-=]\s*(.+)$/i);
+      const caMatch = l.match(/^(?:Correct\s+Answer|Ans(?:wer)?|Key|सही\s*उत्तर|उत्तर\s*कुंजी|उत्तरमाला|उत्तर|समाधान|हल|उ०|उ\.)\s*[:\-=—–।]?\s*(.+)$/i);
+      const modelMatch = l.match(/^(?:Model\s+Answer|Expected\s+Answer|Solution|मॉडल\s*उत्तर|अपेक्षित\s*उत्तर)\s*[:\-=—–।]?\s*(.+)$/i);
 
       if (caMatch) {
         inlineAnswer = caMatch[1].trim();
       } else if (modelMatch) {
         inlineModelAnswer = modelMatch[1].trim();
-      } else if (OPTION_LINE_REGEX.test(l)) {
+      } else if (OPTION_LINE_REGEX.test(l) || matchOptionLine(l)) {
         optionLines.push(l);
       } else {
         cleanQuestionLines.push(l);
@@ -509,18 +545,21 @@ export function parseUniversalTestText(
     });
 
     // Check for True/False detection
-    const joinedText = cleanQuestionLines.join(" ");
-    const hasTFLines = optionLines.some((o) => /^(?:(?:Option\s+)?[A-B][\.\)\:\-]\s*)?(?:True|False)\s*[✅❌]?$/i.test(o));
-    const isExplicitTF = block.sectionTitle?.toLowerCase().includes("true") && block.sectionTitle?.toLowerCase().includes("false");
-    const isAnswerTF = inlineAnswer.toLowerCase() === "true" || inlineAnswer.toLowerCase() === "false" || endKeyAnswer?.toLowerCase() === "true" || endKeyAnswer?.toLowerCase() === "false";
+    const hasTFLines = optionLines.some((o) => /^(?:(?:Option\s+)?[A-Bक-ख][\.\)\:\-—–।]\s*)?(?:True|False|सही|गलत|सत्य|असत्य|ठीक|बेठीक)\s*[✅❌]?$/i.test(o));
+    const isExplicitTF = (block.sectionTitle?.toLowerCase().includes("true") && block.sectionTitle?.toLowerCase().includes("false")) ||
+      /सही\s*(?:या|\/)\s*गलत|सत्य\s*(?:या|\/)\s*असत्य|ठीक\s*(?:वा|\/)\s*बेठीक/i.test(block.sectionTitle || "");
+    const lowerAns = (inlineAnswer || endKeyAnswer || "").toLowerCase().trim();
+    const isTrueHindi = lowerAns === "सही" || lowerAns === "सत्य" || lowerAns === "ठीक" || lowerAns.startsWith("सही") || lowerAns.startsWith("सत्य") || lowerAns.startsWith("ठीक");
+    const isFalseHindi = lowerAns === "गलत" || lowerAns === "असत्य" || lowerAns === "बेठीक" || lowerAns.startsWith("गलत") || lowerAns.startsWith("असत्य") || lowerAns.startsWith("बेठीक");
+    const isAnswerTF = lowerAns === "true" || lowerAns === "false" || lowerAns === "t" || lowerAns === "f" || isTrueHindi || isFalseHindi;
 
     if (hasTFLines || isExplicitTF || isAnswerTF) {
       isTrueFalse = true;
     }
 
     // Check for Assertion & Reasoning
-    const isAssertionExplicit = block.sectionTitle?.toLowerCase().includes("assertion");
-    const hasAssertionKeywords = /Assertion\s*\([A-Za-z]\)|Reason\s*\([A-Za-z]\)|^Assertion\s*:|^Reason\s*:/i.test(fullQuestionText);
+    const isAssertionExplicit = block.sectionTitle?.toLowerCase().includes("assertion") || /कथन\s*(?:एवं|और|तथा)\s*कारण|अभिकथन/i.test(block.sectionTitle || "");
+    const hasAssertionKeywords = /(?:Assertion|अभिकथन|कथन)\s*(?:\([A-Za-zक-ङ]\)|:|\-)|(?:Reason|तर्क|कारण)\s*(?:\([A-Za-zक-ङ]\)|:|\-)/i.test(fullQuestionText);
     if (isAssertionExplicit || hasAssertionKeywords) {
       isAssertionReason = true;
     }
@@ -544,13 +583,14 @@ export function parseUniversalTestText(
     if (isTrueFalse) {
       qType = "true_false";
       finalOptions = ["True", "False"];
-      if (!resolvedCorrectAnswer) {
-        // Try finding checkmarks in options
-        if (cleanLines.some((l) => l.includes("True ✅"))) resolvedCorrectAnswer = "True";
-        else if (cleanLines.some((l) => l.includes("False ✅"))) resolvedCorrectAnswer = "False";
+      if (isTrueHindi) resolvedCorrectAnswer = "True";
+      else if (isFalseHindi) resolvedCorrectAnswer = "False";
+      else if (resolvedCorrectAnswer.toLowerCase() === "t" || resolvedCorrectAnswer.toLowerCase().startsWith("true")) resolvedCorrectAnswer = "True";
+      else if (resolvedCorrectAnswer.toLowerCase() === "f" || resolvedCorrectAnswer.toLowerCase().startsWith("false")) resolvedCorrectAnswer = "False";
+      else if (!resolvedCorrectAnswer) {
+        if (cleanLines.some((l) => l.includes("True ✅") || l.includes("सही ✅") || l.includes("— सही") || l.includes("- सही"))) resolvedCorrectAnswer = "True";
+        else if (cleanLines.some((l) => l.includes("False ✅") || l.includes("गलत ✅") || l.includes("गलत ❌") || l.includes("— गलत") || l.includes("- गलत"))) resolvedCorrectAnswer = "False";
       }
-      if (resolvedCorrectAnswer.toLowerCase() === "t") resolvedCorrectAnswer = "True";
-      if (resolvedCorrectAnswer.toLowerCase() === "f") resolvedCorrectAnswer = "False";
       if (!resolvedCorrectAnswer) resolvedCorrectAnswer = "True"; // fallback
       if (!allocatedMarks) allocatedMarks = 1;
     } else if (isAssertionReason) {
@@ -589,7 +629,28 @@ export function parseUniversalTestText(
             resolvedCorrectAnswer = extractOptionLetter(checked);
           }
         }
-        resolvedCorrectAnswer = extractOptionLetter(resolvedCorrectAnswer || "A");
+        if (resolvedCorrectAnswer) {
+          const letterMatch = resolvedCorrectAnswer.match(
+            /^(?:(?:Option|Opt|Choice|विकल्प)\s*[\(\[]?([A-Ea-e1-5क-ङअ-द१-५])[\)\]]?|[\(\[]([A-Ea-e1-5क-ङअ-द१-५])[\)\]]|([A-Ea-e1-5क-ङअ-द१-५])[\.\)\:\-—–।]\s*|([A-Ea-e1-5क-ङअ-द१-५])$)/i
+          );
+          if (letterMatch) {
+            const sym = letterMatch[1] || letterMatch[2] || letterMatch[3] || letterMatch[4];
+            resolvedCorrectAnswer = mapDevanagariOrAsciiOptionLetter(sym);
+          } else {
+            const cleanAnswer = resolvedCorrectAnswer.trim().toLowerCase();
+            const matchedOpt = finalOptions.find((opt) => {
+              const optText = opt.replace(/^[A-Ea-e1-5क-ङअ-द१-५][\.\)\:\-—–।]\s*/i, "").trim().toLowerCase();
+              return optText && (optText === cleanAnswer || (cleanAnswer.length > 1 && optText.includes(cleanAnswer)));
+            });
+            if (matchedOpt) {
+              resolvedCorrectAnswer = matchedOpt.charAt(0);
+            } else {
+              resolvedCorrectAnswer = extractOptionLetter(resolvedCorrectAnswer || "A");
+            }
+          }
+        } else {
+          resolvedCorrectAnswer = "A";
+        }
         if (!allocatedMarks) allocatedMarks = 1;
       }
     } else {
@@ -597,14 +658,19 @@ export function parseUniversalTestText(
       const cleanQText = cleanQuestionLines.join("\n").trim();
       const wordCount = cleanQText.split(/\s+/).length;
 
-      const secTitleLower = (block.sectionTitle || "").toLowerCase();
-      if (secTitleLower.includes("very short") || (allocatedMarks && allocatedMarks === 1)) {
+      const secTitle = block.sectionTitle || "";
+      const secTitleLower = secTitle.toLowerCase();
+      const isVSA = secTitleLower.includes("very short") || /अति\s*लघु|अति\s*संक्षिप्त/i.test(secTitle) || (allocatedMarks && allocatedMarks === 1);
+      const isLA = secTitleLower.includes("long answer") || /दीर्घ\s*उत्तरीय|विस्तृत|निबंधात्मक|पत्र\s*लेखन|अनुच्छेद\s*लेखन|परिच्छेद\s*लेखन|निबंध\s*लेखन/i.test(secTitle) || (allocatedMarks && allocatedMarks >= 5);
+      const isSA = secTitleLower.includes("short answer") || /लघु\s*उत्तरीय|संक्षिप्त|संवाद\s*लेखन/i.test(secTitle) || (allocatedMarks && allocatedMarks >= 2 && allocatedMarks <= 4);
+
+      if (isVSA) {
         qType = "very_short_answer";
         if (!allocatedMarks) allocatedMarks = 1;
-      } else if (secTitleLower.includes("long answer") || (allocatedMarks && allocatedMarks >= 5)) {
+      } else if (isLA) {
         qType = "long_answer";
         if (!allocatedMarks) allocatedMarks = 5;
-      } else if (secTitleLower.includes("short answer") || (allocatedMarks && allocatedMarks >= 2 && allocatedMarks <= 4)) {
+      } else if (isSA) {
         qType = "short_answer";
         if (!allocatedMarks) allocatedMarks = 2;
       } else if (wordCount < 10) {
@@ -625,7 +691,7 @@ export function parseUniversalTestText(
     // Clean question text (remove inline tags, answer markers, checkmarks)
     let finalQuestionText = cleanQuestionLines
       .join("\n")
-      .replace(/—\s*(True|False)\s*[✅❌]?/gi, "")
+      .replace(/—\s*(True|False|सही|गलत|सत्य|असत्य)\s*[✅❌]?/gi, "")
       .replace(/[✅❌]/g, "")
       .replace(/\s*\(trap\)/gi, "")
       .replace(/\s*\(correct\)/gi, "")
@@ -715,20 +781,20 @@ export function parseUniversalTestText(
 // ----------------------------------------------------
 
 function extractOptionLetter(raw: string): string {
-  const match = raw.match(/([A-Ea-e1-5])/);
+  const match = raw.match(/([A-Ea-e1-5क-ङअ-द१-५])/);
   if (!match) return "A";
-  let letter = match[1].toUpperCase();
-  const numMap: Record<string, string> = { "1": "A", "2": "B", "3": "C", "4": "D", "5": "E" };
-  return numMap[letter] || letter;
+  return mapDevanagariOrAsciiOptionLetter(match[1]);
 }
 
 function normalizeOptions(optionLines: string[]): string[] {
   const letters = ["A", "B", "C", "D", "E"];
   return optionLines.map((line, idx) => {
     const match = line.match(OPTION_LINE_REGEX);
-    const letter = match ? extractOptionLetter(match[1] || match[2] || match[3] || match[4] || letters[idx] || "A") : letters[idx] || "A";
-    let text = match ? (match[5] || line) : line;
+    const rawLetter = match ? (match[1] || match[2] || match[3] || match[4] || match[5] || match[6]) : null;
+    const letter = rawLetter ? mapDevanagariOrAsciiOptionLetter(rawLetter) : letters[idx] || "A";
+    let text = match ? (match[7] || line) : line;
     text = text
+      .replace(/^[A-Ea-e1-5क-ङअ-द१-५][\.\)\:\-—–।]\s*/i, "")
       .replace(/[✅❌]/g, "")
       .replace(/\s*\(trap\)/gi, "")
       .replace(/\s*\(correct\)/gi, "")

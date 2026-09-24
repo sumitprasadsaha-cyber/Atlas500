@@ -6,6 +6,44 @@ import {
 } from "../types";
 
 /**
+ * Convert Devanagari numerals or ASCII digits into standard numbers
+ */
+export function parseNumberOrDevanagari(raw: string | number): number | null {
+  if (typeof raw === "number") return isNaN(raw) ? null : raw;
+  if (!raw) return null;
+  const devanagariDigits = "०१२३४५६७८९";
+  let asciiStr = "";
+  for (const ch of String(raw).trim()) {
+    const idx = devanagariDigits.indexOf(ch);
+    if (idx !== -1) {
+      asciiStr += idx;
+    } else if (/[0-9]/.test(ch)) {
+      asciiStr += ch;
+    }
+  }
+  if (!asciiStr) return null;
+  const parsed = parseInt(asciiStr, 10);
+  return isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Maps Devanagari, numeric, or ASCII option symbols to standardized uppercase letters ('A', 'B', 'C', 'D', 'E')
+ */
+export function mapDevanagariOrAsciiOptionLetter(charOrStr: string): string {
+  if (!charOrStr) return "A";
+  const trimmed = charOrStr.trim();
+  const map: Record<string, string> = {
+    "क": "A", "ख": "B", "ग": "C", "घ": "D", "ङ": "E",
+    "अ": "A", "ब": "B", "स": "C", "द": "D", "य": "E",
+    "1": "A", "2": "B", "3": "C", "4": "D", "5": "E",
+    "१": "A", "२": "B", "३": "C", "४": "D", "५": "E",
+    "A": "A", "B": "B", "C": "C", "D": "D", "E": "E",
+    "a": "A", "b": "B", "c": "C", "d": "D", "e": "E"
+  };
+  return map[trimmed] || (trimmed.length === 1 ? trimmed.toUpperCase() : "A");
+}
+
+/**
  * Supported 9+ CBSE-style Question Types and Grouping Types
  */
 export type ChapterTestQuestionType =
@@ -189,7 +227,7 @@ export function getQuestionTypeDisplayName(type: string, isChild = false): strin
 }
 
 /**
- * Extract CBSE section marks formula e.g. "5 × 1 = 5 Marks", "(4 x 1 = 4)", "2 * 5 = 10 Marks"
+ * Extract CBSE section marks formula e.g. "5 × 1 = 5 Marks", "(4 x 1 = 4)", "2 * 5 = 10 Marks", "5 × 1 = 5 अंक"
  */
 export function extractSectionMarksFormula(text: string): {
   count: number;
@@ -200,13 +238,13 @@ export function extractSectionMarksFormula(text: string): {
 } | null {
   if (!text) return null;
   const match = text.match(
-    /(?:\(|\{|\[)?\s*(\d+)\s*(?:[×\*xX]|times)\s*(\d+(?:\.\d+)?)\s*=\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)?\s*(?:\)|\}|\])?/i
+    /(?:\(|\{|\[)?\s*(\d+|[०-९]+)\s*(?:[×\*xX]|times)\s*(\d+(?:\.\d+)?|[०-९]+)\s*=\s*(\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)?\s*(?:\)|\}|\])?/i
   );
   if (match) {
-    const count = parseInt(match[1], 10);
-    const marksPerQuestion = parseFloat(match[2]);
-    const declaredSectionMarks = parseFloat(match[3]);
-    if (!isNaN(count) && !isNaN(marksPerQuestion) && !isNaN(declaredSectionMarks)) {
+    const count = parseNumberOrDevanagari(match[1]);
+    const marksPerQuestion = parseFloat(match[2].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
+    const declaredSectionMarks = parseFloat(match[3].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
+    if (count !== null && !isNaN(marksPerQuestion) && !isNaN(declaredSectionMarks)) {
       return {
         count,
         questionCount: count,
@@ -220,7 +258,7 @@ export function extractSectionMarksFormula(text: string): {
 }
 
 /**
- * Extract marks and negative marks from string
+ * Extract marks and negative marks from string (supports English, Hindi, and Nepali)
  */
 export function extractMarks(text: string): {
   marks: number;
@@ -230,7 +268,7 @@ export function extractMarks(text: string): {
 } | null {
   if (!text) return null;
 
-  // Formula check first: "5 × 1 = 5 Marks", "5 x 1 = 5", "3 * 3 = 9"
+  // Formula check first: "5 × 1 = 5 Marks", "5 x 1 = 5", "5 × 1 = 5 अंक"
   const formula = extractSectionMarksFormula(text);
   if (formula) {
     return {
@@ -242,49 +280,50 @@ export function extractMarks(text: string): {
 
   let negativeMarks: number | undefined;
   const negMatch =
-    text.match(/(?:negative|minus|deduction)\s*(?:marking|marks?)?[\:\s]+-?(\d+(?:\.\d+)?)/i) ||
-    text.match(/\[\s*-(?:mark|marks)?\s*(\d+(?:\.\d+)?)\s*\]/i) ||
-    text.match(/\(\s*-(\d+(?:\.\d+)?)\s*(?:marks?|pts?)?\s*\)/i);
+    text.match(/(?:negative|minus|deduction|ऋणात्मक)\s*(?:marking|marks?|अंक)?[\:\s]+-?(\d+(?:\.\d+)?|[०-९]+)/i) ||
+    text.match(/\[\s*-(?:mark|marks|अंक)?\s*(\d+(?:\.\d+)?|[०-९]+)\s*\]/i) ||
+    text.match(/\(\s*-(\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|अंक)?\s*\)/i);
   if (negMatch) {
-    negativeMarks = parseFloat(negMatch[1]);
+    const parsedNeg = parseFloat(negMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
+    if (!isNaN(parsedNeg)) negativeMarks = parsedNeg;
   }
 
-  // 1. Explicit "(2 marks each)", "[3 Marks]", "(1 mark)", "(2 Marks)", "{3 marks}", "2 marks each"
+  // 1. Explicit "(2 marks each)", "[3 Marks]", "(1 mark)", "(2 Marks)", "[1 अंक]", "(2 अंक)", "[5 अंक]"
   const eachMatch = text.match(
-    /(?:\(|\{|\[)\s*(?:mark|marks)?\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)?\s*(?:each)?\s*(?:\)|\}|\])/i
+    /(?:\(|\{|\[)\s*(?:mark|marks|अंक|मार्क्स)?\s*(\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)?\s*(?:each|प्रत्येक)?\s*(?:\)|\}|\])/i
   );
   if (eachMatch) {
-    const val = parseFloat(eachMatch[1]);
+    const val = parseFloat(eachMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
     if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
         negativeMarks,
-        source: eachMatch[0].toLowerCase().includes("each") ? "section_instruction" : "question_label",
+        source: /each|प्रत्येक/i.test(eachMatch[0]) ? "section_instruction" : "question_label",
         confidence: 0.99
       };
     }
   }
 
-  // 2. Dash / separator followed by marks: "— 3 marks", "- 2 marks", "– 5 Marks", "— 1 mark each", ", 3 marks"
+  // 2. Dash / separator followed by marks: "— 3 marks", "- 2 marks", "– 5 Marks", "— 3 अंक", "– 5 अंक"
   const dashMatch = text.match(
-    /(?:[\—\–\-]|\,\s*)\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)(?:\s+each)?(?:\s*$|\s*[\r\n])/i
+    /(?:[\—\–\-]|\,\s*)\s*(\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)(?:\s+(?:each|प्रत्येक))?(?:\s*$|\s*[\r\n])/i
   );
   if (dashMatch) {
-    const val = parseFloat(dashMatch[1]);
+    const val = parseFloat(dashMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
     if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
         negativeMarks,
-        source: dashMatch[0].toLowerCase().includes("each") ? "section_instruction" : "question_label",
+        source: /each|प्रत्येक/i.test(dashMatch[0]) ? "section_instruction" : "question_label",
         confidence: 0.99
       };
     }
   }
 
-  // 3. Marks label: "Marks: 5", "Mark: 2", "Points: 3", "Score: 4", "[Marks: 3]"
-  const labelMatch = text.match(/(?:marks?|pts?|points?|score)[\:\s]+(\d+(?:\.\d+)?)/i);
+  // 3. Marks label: "Marks: 5", "Mark: 2", "अंक: 2", "अंक : 5", "[Marks: 3]"
+  const labelMatch = text.match(/(?:marks?|pts?|points?|score|अंक|मार्क्स)[\:\s]+(\d+(?:\.\d+)?|[०-९]+)/i);
   if (labelMatch) {
-    const val = parseFloat(labelMatch[1]);
+    const val = parseFloat(labelMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
     if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
@@ -296,23 +335,23 @@ export function extractMarks(text: string): {
   }
 
   // 4. "carries 2 marks", "carry 1 mark each", "worth 5 marks"
-  const carryMatch = text.match(/(?:carries|carry|worth)\s+(\d+(?:\.\d+)?)\s*(?:marks?|pts?)/i);
+  const carryMatch = text.match(/(?:carries|carry|worth)\s+(\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|अंक)/i);
   if (carryMatch) {
-    const val = parseFloat(carryMatch[1]);
+    const val = parseFloat(carryMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
     if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
         negativeMarks,
-        source: carryMatch[0].toLowerCase().includes("each") ? "section_instruction" : "question_label",
+        source: /each|प्रत्येक/i.test(carryMatch[0]) ? "section_instruction" : "question_label",
         confidence: 0.98
       };
     }
   }
 
-  // 5. Standalone bracketed/parenthesized number at end of string e.g. "(5)", "[3]", "(1)", "(2)"
-  const bracketMatch = text.match(/(?:^|\s)[\(\[]\s*(\d+(?:\.\d+)?)\s*[\)\]](?:\s*$|\s*[\r\n])/);
+  // 5. Standalone bracketed/parenthesized number at end of string e.g. "(5)", "[3]", "(1)", "(२)"
+  const bracketMatch = text.match(/(?:^|\s)[\(\[]\s*(\d+(?:\.\d+)?|[०-९]+)\s*[\)\]](?:\s*$|\s*[\r\n])/);
   if (bracketMatch) {
-    const val = parseFloat(bracketMatch[1]);
+    const val = parseFloat(bracketMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
     if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
@@ -323,12 +362,12 @@ export function extractMarks(text: string): {
     }
   }
 
-  // 6. Parenthesized marks right after question number: "1. (2) Explain...", "Q1. (5) Explain...", "(i) (1) What is..."
+  // 6. Parenthesized marks right after question number: "1. (2) Explain...", "Q1. (5) Explain...", "प्रश्न 1. [1 अंक] ..."
   const inlineAfterNumMatch = text.match(
-    /^(?:Q(?:uestion)?\s*\d+|\d+|[ivxlcdm]+|\([ivxlcdm]+\))\s*[\.\)\:\-]?\s*[\(\[]\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?)?\s*[\)\]]/i
+    /^(?:Q(?:uestion)?\s*\d+|\d+|[ivxlcdm]+|\([ivxlcdm]+\)|(?:प्रश्न(?:\s*संख्या|\s*नं[\.]?)?|प्र[\.०]?)\s*[:\.\-—–।]?\s*(?:\d+|[०-९]+))\s*[\.\)\:\-—–।]?\s*[\(\[]\s*(?:mark|marks|अंक|मार्क्स)?\s*(\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|अंक|मार्क्स)?\s*[\)\]]/i
   );
   if (inlineAfterNumMatch) {
-    const val = parseFloat(inlineAfterNumMatch[1]);
+    const val = parseFloat(inlineAfterNumMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
     if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
@@ -339,10 +378,10 @@ export function extractMarks(text: string): {
     }
   }
 
-  // 7. Dash followed by standalone number at end of line: "Q1. Explain photosynthesis — 3"
-  const dashNumMatch = text.match(/(?:[\—\–\-])\s*(\d+(?:\.\d+)?)\s*$/);
+  // 7. Dash followed by standalone number at end of line: "Q1. Explain photosynthesis — 3", "प्रश्न 1. ... — 1"
+  const dashNumMatch = text.match(/(?:[\—\–\-])\s*(\d+(?:\.\d+)?|[०-९]+)\s*$/);
   if (dashNumMatch) {
-    const val = parseFloat(dashNumMatch[1]);
+    const val = parseFloat(dashNumMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
     if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
@@ -353,15 +392,15 @@ export function extractMarks(text: string): {
     }
   }
 
-  // 8. General "X marks" or "X marks each"
-  const generalMarksMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?)(?:\s+each)?\b/i);
+  // 8. General "X marks" or "X marks each", "X अंक"
+  const generalMarksMatch = text.match(/\b(\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)(?:\s+(?:each|प्रत्येक))?/i);
   if (generalMarksMatch) {
-    const val = parseFloat(generalMarksMatch[1]);
+    const val = parseFloat(generalMarksMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
     if (!isNaN(val) && val > 0 && val <= 50) {
       return {
         marks: val,
         negativeMarks,
-        source: generalMarksMatch[0].toLowerCase().includes("each") ? "section_instruction" : "question_label",
+        source: /each|प्रत्येक/i.test(generalMarksMatch[0]) ? "section_instruction" : "question_label",
         confidence: 0.92
       };
     }
@@ -373,27 +412,26 @@ export function extractMarks(text: string): {
 /**
  * Strips marks tags from question text so question labels and prompts display cleanly.
  * e.g. "Explain photosynthesis. (2 Marks)" -> "Explain photosynthesis."
- * e.g. "Explain why RBI supervises banks — 3 marks" -> "Explain why RBI supervises banks"
- * e.g. "What is an MNC? (5)" -> "What is an MNC?"
+ * e.g. "‘सुंदर’ शब्द का विलोम क्या है? [1 अंक]" -> "‘सुंदर’ शब्द का विलोम क्या है?"
  */
 export function stripMarksFromQuestionText(text: string): string {
   if (!text) return text;
   let cleaned = text;
 
-  // 1. Trailing dash/separator with marks: " — 3 marks", " - 2 marks", " – 5 Marks", " — 5"
-  cleaned = cleaned.replace(/\s*(?:[\—\–\-]|\,\s*)\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)?\s*$/i, "");
+  // 1. Trailing dash/separator with marks: " — 3 marks", " — 1 अंक", " – 5 Marks", " — 5"
+  cleaned = cleaned.replace(/\s*(?:[\—\–\-]|\,\s*)\s*(?:\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)?\s*$/i, "");
 
-  // 2. Trailing bracketed/parenthesized marks or numbers: " (2 Marks)", " [3 Marks]", " (5)", " [1]"
-  cleaned = cleaned.replace(/\s*[\(\[]\s*(?:mark|marks)?\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)?\s*[\)\]]\s*$/i, "");
+  // 2. Trailing bracketed/parenthesized marks: " [1 अंक]", " (2 Marks)", " [3 Marks]", " (5)", " [1]"
+  cleaned = cleaned.replace(/\s*[\(\[]\s*(?:mark|marks|अंक|मार्क्स)?\s*(?:\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)?\s*[\)\]]\s*$/i, "");
 
-  // 3. Leading bracketed marks: "(2 Marks) Explain...", "(1) What is..."
-  cleaned = cleaned.replace(/^[\(\[]\s*(?:mark|marks)?\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)?\s*[\)\]]\s*/i, "");
+  // 3. Leading bracketed marks: "(2 Marks) Explain...", "[1 अंक] सुंदर..."
+  cleaned = cleaned.replace(/^[\(\[]\s*(?:mark|marks|अंक|मार्क्स)?\s*(?:\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)?\s*[\)\]]\s*/i, "");
 
-  // 4. Inline "(2 Marks)"
-  cleaned = cleaned.replace(/\s*[\(\[]\s*(?:mark|marks)?\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)\s*[\)\]]/gi, "");
+  // 4. Inline "(2 Marks)", "[1 अंक]"
+  cleaned = cleaned.replace(/\s*[\(\[]\s*(?:mark|marks|अंक|मार्क्स)?\s*(?:\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)\s*[\)\]]/gi, "");
 
-  // 5. Trailing label format: " Marks: 3", " Score: 5"
-  cleaned = cleaned.replace(/\s*(?:marks?|pts?|score)[\:\s]+\d+(?:\.\d+)?\s*$/i, "");
+  // 5. Trailing label format: " Marks: 3", " Score: 5", " अंक: 1"
+  cleaned = cleaned.replace(/\s*(?:marks?|pts?|score|अंक|मार्क्स)[\:\s]+(?:\d+(?:\.\d+)?|[०-९]+)\s*$/i, "");
 
   return cleaned.trim();
 }
@@ -431,29 +469,27 @@ export function inferDefaultMarks(type: ChapterTestQuestionType): {
 }
 
 /**
- * Matches option lines like "A. ...", "B) ...", "(A) ...", "Option A: ..."
+ * Matches option lines like "A. ...", "B) ...", "(A) ...", "Option A: ...", "A. अच्छा", "(क) कुरूप", "क. अच्छा"
  */
 export function matchOptionLine(line: string): { letter: string; text: string } | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
 
-  // Don't treat Assertion (A) or Reason (R) as an option
-  if (/^(?:Assertion|Reason)\b/i.test(trimmed)) return null;
-  if (/^[\(\[]?(?:A|R)[\)\]]?\s*[:\-]?\s*(?:Assertion|Reason)\b/i.test(trimmed)) return null;
-  if (/^Options?\s*[\:\-]?$/i.test(trimmed)) return null;
+  // Don't treat Assertion/Reason or keywords as an option
+  if (/^(?:Assertion|Reason|अभिकथन|कथन|तर्क|कारण)\b/i.test(trimmed)) return null;
+  if (/^[\(\[]?(?:A|R|क|ख)[\)\]]?\s*[:\-—–।]?\s*(?:Assertion|Reason|अभिकथन|कथन|तर्क|कारण)\b/i.test(trimmed)) return null;
+  if (/^(?:Options?|विकल्प)\s*[\:\-—–।]?$/i.test(trimmed)) return null;
+  if (/^(?:अथवा|वा|या)$/i.test(trimmed)) return null;
 
   const match = trimmed.match(
-    /^(?:Option\s+([A-Ea-e1-5])[\.\)\:\-\s]*|[\(\[]([A-Ea-e1-5])[\)][\.\:\s]*|([A-Ea-e1-5])[\.\)\:\-]\s*)(.*)$/i
+    /^(?:(?:Option|Opt|Choice|विकल्प)\s*(?:[\(\[]([A-Ea-e1-5क-ङअ-द१-५])[\)\]]|([A-Ea-e1-5क-ङअ-द१-५]))[\.\)\:\-—–।\s]*|[\(\[]([A-Ea-e1-5क-ङअ-द१-५])[\)][\.\:\-—–।\s]*|\[([A-Ea-e1-5क-ङअ-द१-५])\][\.\:\-—–।\s]*|([A-Ea-eक-ङअ-द])[\.\)\:\-—–।]\s*|([1-5१-५])[\.\)\:\-—–।]\s+)(.*)$/i
   );
   if (match) {
-    let rawLetter = (match[1] || match[2] || match[3] || "A").toUpperCase();
-    if (["1", "2", "3", "4", "5"].includes(rawLetter)) {
-      const numMap: Record<string, string> = { "1": "A", "2": "B", "3": "C", "4": "D", "5": "E" };
-      rawLetter = numMap[rawLetter] || "A";
-    }
+    const rawSym = (match[1] || match[2] || match[3] || match[4] || match[5] || match[6] || "A");
+    const rawLetter = mapDevanagariOrAsciiOptionLetter(rawSym);
     return {
       letter: rawLetter,
-      text: (match[4] || "").trim()
+      text: (match[7] || "").trim()
     };
   }
   return null;
@@ -476,12 +512,12 @@ export function normalizeOptions(options: string[]): {
   const merged: string[] = [];
   for (let i = 0; i < rawList.length; i++) {
     const item = rawList[i];
-    const isIsolatedLabel = /^[A-Ea-e1-5][\.\)]?$/.test(item);
+    const isIsolatedLabel = /^[A-Ea-e1-5क-ङअ-द१-५][\.\)]?$/.test(item);
 
     if (isIsolatedLabel && i + 1 < rawList.length) {
       const nextItem = rawList[i + 1];
-      const cleanLabel = item.replace(/[\.\)]/g, "").toUpperCase();
-      const cleanNext = nextItem.replace(/^[A-Ea-e1-5][\.\)]\s*/i, "").trim();
+      const cleanLabel = mapDevanagariOrAsciiOptionLetter(item.replace(/[\.\)]/g, ""));
+      const cleanNext = nextItem.replace(/^[A-Ea-e1-5क-ङअ-द१-५][\.\)\:\-—–।]\s*/i, "").trim();
       merged.push(`${cleanLabel}. ${cleanNext}`);
       i++;
     } else {
@@ -495,12 +531,12 @@ export function normalizeOptions(options: string[]): {
 
   merged.forEach((opt, idx) => {
     const expectedLetter = letters[idx] || String.fromCharCode(65 + idx);
-    const match = opt.match(/^(?:Option\s+([A-Ea-e1-5])|([A-Ea-e1-5]))[\.\)\:\-]?\s*(.*)$/i);
+    const match = opt.match(/^(?:(?:Option|Opt|विकल्प)\s*([A-Ea-e1-5क-ङअ-द१-५])|([A-Ea-e1-5क-ङअ-द१-५]))[\.\)\:\-—–।]?\s*(.*)$/i);
     let letter = expectedLetter;
     let optText = opt;
 
     if (match) {
-      letter = (match[1] || match[2] || expectedLetter).toUpperCase();
+      letter = mapDevanagariOrAsciiOptionLetter(match[1] || match[2] || expectedLetter);
       optText = (match[3] || "").trim();
     }
 
@@ -543,24 +579,26 @@ export function identifySectionHeader(line: string): {
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
 
-  // Lines that start with directions, instructions, notes, reading cues or questions are NOT section headers
-  if (/^(?:Directions?|Instructions?|Note|Read|Study|Examine|Consider|Answer|State\s+whether|Choose)\b/i.test(trimmed)) {
+  // Lines that start with directions, instructions, notes, reading cues or alternatives are NOT section headers
+  if (/^(?:Directions?|Instructions?|Note|Read|Study|Examine|Consider|Answer|State\s+whether|Choose|निर्देश|सूचना|अथवा|वा|या)\b/i.test(trimmed)) {
     return null;
   }
 
-  // Check for Section Letter prefix: "Section A — ...", "Section 1: ...", "Part A - ..."
-  const secLetterMatch = trimmed.match(/^(?:Section|Part)\s*[\-\:]?\s*([A-Za-z0-9]+)(?:[\s\—\–\-\:\.]+(.*))?$/i);
+  // Check for Section Letter prefix: "Section A — ...", "Section 1: ...", "Part A - ...", "खण्ड क — ...", "भाग 1: ..."
+  const secLetterMatch = trimmed.match(/^(?:Section|Part|खण्ड|खंड|भाग|विभाग)\s*[\'\"‘“]?\s*([A-Za-z0-9क-घअ-द]+)[\'\"’”]?[\s\—\–\-\:\.\,]*(.*)$/i);
   let sectionLetter: string | undefined;
   let candidateTitle = trimmed;
 
   if (secLetterMatch) {
-    sectionLetter = secLetterMatch[1].toUpperCase();
+    const rawSec = secLetterMatch[1].trim();
+    sectionLetter = mapDevanagariOrAsciiOptionLetter(rawSec);
     candidateTitle = (secLetterMatch[2] || "").trim();
   } else {
-    // Numbered header: "1. Multiple Choice Questions", "4. Comprehension"
-    const numPrefixMatch = trimmed.match(/^([A-Z]|\d+|[IVXLCDM]+)[\.\)\:\-]\s*(.*)$/i);
+    // Numbered header: "1. Multiple Choice Questions", "4. Comprehension", "१. बहुविकल्पीय प्रश्न"
+    const numPrefixMatch = trimmed.match(/^([A-Z]|\d+|[IVXLCDM]+|[०-९]+|[क-घअ-द])[\.\)\:\-—–।]\s*(.*)$/i);
     if (numPrefixMatch) {
-      sectionLetter = numPrefixMatch[1];
+      const rawPrefix = numPrefixMatch[1];
+      sectionLetter = mapDevanagariOrAsciiOptionLetter(rawPrefix);
       candidateTitle = (numPrefixMatch[2] || "").trim();
     }
   }
@@ -577,13 +615,13 @@ export function identifySectionHeader(line: string): {
 
   // Clean candidate title of formulas and bracketed marks for category detection
   const cleanTitle = candidateTitle
-    .replace(/(?:\(|\{|\[)?\s*\d+\s*(?:[×\*xX]|times)\s*\d+(?:\.\d+)?\s*=\s*\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)?\s*(?:\)|\}|\])?/gi, "")
+    .replace(/(?:[\s\—\–\-])*(?:\(|\{|\[)?\s*(?:\d+|[०-९]+)\s*(?:[×\*xX]|times)\s*(?:\d+(?:\.\d+)?|[०-९]+)\s*=\s*(?:\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)?\s*(?:\)|\}|\])?/gi, "")
     .replace(/\([^\)]*\)/g, "")
     .replace(/\[[^\]]*\]/g, "")
     .replace(/\{[^\}]*\}/g, "")
-    .replace(/(?:[\s\—\–\-])+\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)(?:\s+each)?/gi, "")
-    .replace(/\b\d+(?:\.\d+)?\s*(?:marks?|pts?|points?)(?:\s+each)?\b/gi, "")
-    .replace(/^[\s\—\–\-\:\.\,\_\#]+|[\s\—\–\-\:\.\,\_\#]+$/g, "")
+    .replace(/(?:[\s\—\–\-])+(?:\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)(?:\s+(?:each|प्रत्येक))?/gi, "")
+    .replace(/\b(?:\d+(?:\.\d+)?|[०-९]+)\s*(?:marks?|pts?|points?|अंक|मार्क्स)(?:\s+(?:each|प्रत्येक))?\b/gi, "")
+    .replace(/^[ \t\r\n\—\–\:\.\,\_\#-]+|[ \t\r\n\—\–\:\.\,\_\#-]+$/g, "")
     .trim();
 
   // Guard against full sentences
@@ -634,9 +672,9 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 2. MCQs / Multiple Choice
+    // 2. MCQs / Multiple Choice / बहुविकल्पीय प्रश्न
     if (
-      /^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?|Standalone\s+Questions?|General\s+Questions?|Independent\s+Questions?)$/i.test(str)
+      /^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?|Standalone\s+Questions?|General\s+Questions?|Independent\s+Questions?|बहुविकल्पीय(?:\s*प्रश्न)?|बहुविकल्प|वस्तुनिष्ठ(?:\s*प्रश्न)?|सही\s*विकल्प)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -649,9 +687,9 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 3. Assertion & Reasoning
+    // 3. Assertion & Reasoning / कथन एवं कारण
     if (
-      /^(?:Assertion\s*(?:&|and|-)\s*Reason(?:ing)?|Assertion\s*Reason)(?:\s+Questions?)?$/i.test(str)
+      /^(?:Assertion\s*(?:&|and|-)\s*Reason(?:ing)?|Assertion\s*Reason|कथन\s*(?:एवं|और|तथा)\s*कारण|अभिकथन\s*(?:एवं|और|तथा)\s*(?:कारण|तर्क))(?:\s+Questions?)?$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -664,9 +702,9 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 4. True and False
+    // 4. True and False / सही या गलत
     if (
-      /^(?:True\s*[\/\\]\s*False|True[\/\\]False|True\s+and\s+False|True\s+or\s+False|T\/F)$/i.test(str)
+      /^(?:True\s*[\/\\]\s*False|True[\/\\]False|True\s+and\s+False|True\s+or\s+False|T\/F|सही\s*(?:या|\/|अथवा|वा)\s*गलत|सत्य\s*(?:या|\/|अथवा|वा)\s*असत्य|ठीक\s*(?:वा|\/)\s*बेठीक)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -679,9 +717,9 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 5. Very Short Answer Questions
+    // 5. Very Short Answer Questions / अति लघु उत्तरीय प्रश्न
     if (
-      /^(?:Very\s+Short\s+Answer(?:\s+Questions?)?|VSA(?:\s+Questions?)?|1\s*Mark\s+Questions?)$/i.test(str)
+      /^(?:Very\s+Short\s+Answer(?:\s+Questions?)?|VSA(?:\s+Questions?)?|1\s*Mark\s+Questions?|अति\s*लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|अति\s*संक्षिप्त(?:\s*प्रश्न)?|एक\s*अंक\s*(?:वाले\s*)?प्रश्न)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -694,9 +732,9 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 6. Short Answer Questions
+    // 6. Short Answer Questions / लघु उत्तरीय प्रश्न / संवाद लेखन
     if (
-      /^(?:Short\s+Answer(?:\s+Questions?)?|SA(?:\s+Questions?)?|Short\s+Questions?)$/i.test(str)
+      /^(?:Short\s+Answer(?:\s+Questions?)?|SA(?:\s+Questions?)?|Short\s+Questions?|लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|संक्षिप्त(?:\s*उत्तर)?(?:\s*प्रश्न)?|लघु\s*प्रश्न|संवाद\s*लेखन)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -709,9 +747,9 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 7. Long Answer Questions
+    // 7. Long Answer Questions / दीर्घ उत्तरीय प्रश्न / पत्र लेखन / अनुच्छेद लेखन / निबंध लेखन
     if (
-      /^(?:Long\s+Answer(?:\s+Questions?)?|LA(?:\s+Questions?)?|Essay(?:\s+Questions?)?)$/i.test(str)
+      /^(?:Long\s+Answer(?:\s+Questions?)?|LA(?:\s+Questions?)?|Essay(?:\s+Questions?)?|दीर्घ(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|विस्तृत(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|निबंधात्मक(?:\s*प्रश्न)?|दीर्घ\s*प्रश्न|पत्र\s*लेखन|अनुच्छेद\s*लेखन|परिच्छेद\s*लेखन|निबंध\s*लेखन|रचनात्मक\s*लेखन)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -724,10 +762,10 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 8. Case-Based Questions
+    // 8. Case-Based Questions / केस आधारित प्रश्न
     if (
-      /^(?:Case[\s\-]Based(?:\s+Questions?)?|Case\s+Study\s+Questions?)$/i.test(str) ||
-      (secLetterMatch && /^Case\s+Study$/i.test(str))
+      /^(?:Case[\s\-]Based(?:\s+Questions?)?|Case\s+Study\s+Questions?|केस\s*(?:आधारित|अध्ययन)|घटना\s*आधारित|स्रोत\s*आधारित)$/i.test(str) ||
+      (secLetterMatch && /^(?:Case\s+Study|केस\s+अध्ययन)$/i.test(str))
     ) {
       return {
         isSection: true,
@@ -740,9 +778,9 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 9. Comprehension
+    // 9. Comprehension / अपठित गद्यांश
     if (
-      /^(?:(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section|Questions?))?|Passage(?:\s+Based)?(?:\s+Questions?)?)$/i.test(str)
+      /^(?:(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section|Questions?))?|Passage(?:\s+Based)?(?:\s+Questions?)?|अपठित\s*गद्यांश|पठित\s*गद्यांश|गद्यांश(?:\s*पर\s*आधारित)?|अपठित\s*काव्यांश|पद्यांश)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -813,31 +851,33 @@ export function detectPassageOrCaseStart(line: string): {
   const trimmed = line.trim().replace(/^[\*\#\_\-\s]+|[\*\#\_\-\s]+$/g, "");
   if (!trimmed) return null;
 
-  // Do not match general directions, instructions, or assertion & reason directions
+  // Do not match general directions, instructions, alternatives, or assertion & reason directions
   if (
-    /^(?:Directions?|Instructions?|Note)\s*[\:\-]/i.test(trimmed) ||
-    /^(?:Read|Study)\s+(?:the\s+)?(?:Assertion|Reason|Instructions|Directions)/i.test(trimmed)
+    /^(?:Directions?|Instructions?|Note|निर्देश|सूचना|अथवा|वा|या)\s*[\:\-—–।]/i.test(trimmed) ||
+    /^(?:Read|Study|निम्नलिखित|दिएको|तलको)\s+(?:the\s+)?(?:Assertion|Reason|Instructions|Directions|निर्देश|सूचना)/i.test(trimmed)
   ) {
     return null;
   }
 
-  const isCase = /case/i.test(trimmed);
+  const isCase = /case|केस|घटना|स्थिति/i.test(trimmed);
 
   // Standalone phrases:
   // "Read the following passage carefully."
   // "Read the passage carefully."
   // "Read the case carefully."
-  // "Study the case given below."
-  // "Case Study:" or "Passage:"
-  if (/^(?:Case\s+Study|Case)(?:\s+\d+)?\s*[\:\.\-]?$/i.test(trimmed)) {
+  // "Case Study:" or "Passage:" or "अपठित गद्यांश:"
+  if (/^(?:Case\s+Study|Case|केस\s+अध्ययन|केस\s+आधारित)(?:\s*(?:\d+|[०-९]+))?\s*[\:\.\-—–]?$/i.test(trimmed)) {
     return { title: trimmed, isCase: true };
   }
-  if (/^(?:Passage|Reading\s+Passage)(?:\s+\d+)?\s*[\:\.\-]?$/i.test(trimmed)) {
+  if (/^(?:Passage|Reading\s+Passage|अपठित\s+गद्यांश|पठित\s+गद्यांश|गद्यांश|अपठित\s+काव्यांश|पद्यांश)(?:\s*(?:\d+|[०-९]+))?\s*[\:\.\-—–]?$/i.test(trimmed)) {
     return { title: trimmed, isCase: false };
   }
 
   if (
     /^(?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|excerpt|case|case\s+study|information)(?:\s+carefully)?(?:\s*(?:below|given\s+below|and\s+answer|to\s+answer|questions?|that\s+follow)[\w\s\.,\:\-\(\)]*)?[\.\:\-]?$/i.test(
+      trimmed
+    ) ||
+    /^(?:निम्नलिखित|दिएको|तलको)\s+(?:गद्यांश|अनुच्छेद|पाठ|काव्यांश|पद्यांश|केस|विवरण)\s*(?:को\s+)?(?:ध्यानपूर्वक|ध्यानदिएर)?\s*(?:पढ़कर|पढेर|अध्ययन\s+गरि)?.*[\.\:\-—–]?$/i.test(
       trimmed
     )
   ) {
@@ -846,7 +886,7 @@ export function detectPassageOrCaseStart(line: string): {
 
   // Inline passage: "Read the passage carefully. Water is one of the most..."
   const inlineMatch = trimmed.match(
-    /^((?:Read|Study|Examine|Consider)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|case|case\s+study)?(?:\s+carefully)?[\.\:\-])\s+(.+)$/i
+    /^((?:Read|Study|Examine|Consider|निम्नलिखित|दिएको)\s+(?:carefully\s+)?(?:the\s+)?(?:following\s+)?(?:passage|text|case|case\s+study|गद्यांश|अनुच्छेद|पाठ)?(?:\s+carefully)?[\.\:\-—–])\s+(.+)$/i
   );
   if (inlineMatch) {
     return {
@@ -860,7 +900,7 @@ export function detectPassageOrCaseStart(line: string): {
 }
 
 /**
- * Question numbering matcher: Q1., Q.1, Question 1:, 1., 2)
+ * Question numbering matcher: Q1., Q.1, Question 1:, 1., 2), प्रश्न 1., प्रश्न 10., प्रश्न संख्या 1., प्र. 1.
  */
 export function matchQuestionNumber(line: string): {
   qNum: number;
@@ -869,26 +909,37 @@ export function matchQuestionNumber(line: string): {
   hasExplicitQPrefix: boolean;
 } | null {
   const trimmed = line.trim();
+  if (!trimmed) return null;
 
-  // "Q1. ", "Q1) ", "Question 1: ", "Q.1 "
-  const qMatch = trimmed.match(/^(?:Q(?:uestion)?[\.\:\-]?\s*|\bQ\b\s*)(\d+)[\.\):\-]?\s*(.*)$/i);
-  if (qMatch) {
-    const num = parseInt(qMatch[1], 10);
-    if (!isNaN(num)) {
+  // Never treat alternatives (अथवा, वा, या) as a question start
+  if (/^(?:अथवा|वा|या)(?:\s+|$)/i.test(trimmed)) {
+    return null;
+  }
+
+  // 1. Explicit Question prefix:
+  // English: Q1. , Q1) , Question 1: , Q.1 , Q 1.
+  // Hindi/Nepali: प्रश्न 1. , प्रश्न 1: , प्रश्न 1। , प्रश्न 10. , प्रश्न संख्या 1. , प्रश्न नं. 1. , प्रश्न नं 1: , प्र. 1. , प्र० 1. , प्र 1.
+  // Supporting both ASCII digits \d+ AND Devanagari digits [०-९]+
+  const qExplicitMatch = trimmed.match(
+    /^(?:Q(?:uestion)?[\.\:\-]?\s*|\bQ\b\s*|(?:प्रश्न(?:\s*संख्या|\s*नं[\.]?)?|प्र[\.०]?)\s*[:\.\-—–।]?\s*)(\d+|[०-९]+)[\.\):\-—–।]?\s*(.*)$/i
+  );
+  if (qExplicitMatch) {
+    const num = parseNumberOrDevanagari(qExplicitMatch[1]);
+    if (num !== null && !isNaN(num)) {
       return {
         qNum: num,
         label: `Q${num}`,
-        remainder: qMatch[2] ? qMatch[2].trim() : "",
+        remainder: qExplicitMatch[2] ? qExplicitMatch[2].trim() : "",
         hasExplicitQPrefix: true
       };
     }
   }
 
-  // "1. ", "2) ", "15: "
-  const plainMatch = trimmed.match(/^(\d+)[\.\):\-]\s+(.*)$/);
+  // 2. Plain digits followed by delimiter: "1. ", "2) ", "15: ", "1। ", "१०. "
+  const plainMatch = trimmed.match(/^(\d+|[०-९]+)[\.\):\-—–।]\s+(.*)$/);
   if (plainMatch) {
-    const num = parseInt(plainMatch[1], 10);
-    if (!isNaN(num)) {
+    const num = parseNumberOrDevanagari(plainMatch[1]);
+    if (num !== null && !isNaN(num)) {
       return {
         qNum: num,
         label: `Q${num}`,
@@ -898,11 +949,11 @@ export function matchQuestionNumber(line: string): {
     }
   }
 
-  // "(1) ", "[1] "
-  const parenNumMatch = trimmed.match(/^[\(\[](\d+)[\)\]][\.\:\-]?\s+(.*)$/);
+  // 3. Parenthesized or bracketed numbers: "(1) ", "[1] ", "(१) ", "[१] "
+  const parenNumMatch = trimmed.match(/^[\(\[](\d+|[०-९]+)[\)\]][\.\:\-—–।]?\s+(.*)$/);
   if (parenNumMatch) {
-    const num = parseInt(parenNumMatch[1], 10);
-    if (!isNaN(num)) {
+    const num = parseNumberOrDevanagari(parenNumMatch[1]);
+    if (num !== null && !isNaN(num)) {
       return {
         qNum: num,
         label: `Q${num}`,
@@ -912,8 +963,8 @@ export function matchQuestionNumber(line: string): {
     }
   }
 
-  // Roman numeral sub-questions: "(i) ", "(ii) ", "i. ", "ii) ", "(iv) "
-  const romanMatch = trimmed.match(/^(?:\(?([ivxlcdm]+)\)[\.\:\-]?|([ivxlcdm]+)[\.\):])\s+(.*)$/i);
+  // 4. Roman numeral sub-questions: "(i) ", "(ii) ", "i. ", "ii) ", "(iv) "
+  const romanMatch = trimmed.match(/^(?:\(?([ivxlcdm]+)\)[\.\:\-—–।]?|([ivxlcdm]+)[\.\):])\s+(.*)$/i);
   if (romanMatch) {
     const romanStr = (romanMatch[1] || romanMatch[2]).toLowerCase();
     const romanMap: Record<string, number> = {
@@ -1092,19 +1143,30 @@ export function parseChapterTest(
     // Metadata & Title Extraction (Top of Test)
     if (!currentSectionObj && questionCandidates.length === 0) {
       // "Class 10 — Social Science | Economics"
-      const classMatch = trimmed.match(/^(Class\s+\d+|UPSC[^\—\-]*)\s*[—\-]\s*([^\|]+)(?:\|\s*(.*))?$/i);
+      const classMatch = trimmed.match(/^(?:Class\s+\d+|UPSC[^\—\-]*|कक्षा\s*(?:\d+|[०-९]+))\s*[—\-]\s*([^\|]+)(?:\|\s*(.*))?$/i);
       if (classMatch) {
         metadata.classGrade = metadata.classGrade || classMatch[1].trim();
-        metadata.subject = metadata.subject || classMatch[2].trim();
+        if (classMatch[2]) {
+          metadata.subject = metadata.subject || classMatch[2].trim();
+        } else {
+          metadata.subject = metadata.subject || classMatch[1].trim();
+        }
         metadata.title = metadata.title || trimmed;
         continue;
       }
 
-      // "Chapter: Globalisation and the Indian Economy" or "Chapter 4: ..."
-      const chMatch = trimmed.match(/^Chapter(?:\s+(\d+))?\s*[\:\-]\s*(.*)$/i);
+      // "Chapter: Globalisation and the Indian Economy" or "Chapter 4: ..." or "पाठ: ..." or "अध्याय: ..."
+      const chMatch = trimmed.match(/^(?:Chapter|पाठ|अध्याय)(?:\s+(\d+|[०-९]+))?\s*[\:\-—–।=]\s*(.*)$/i);
       if (chMatch) {
-        if (chMatch[1]) metadata.chapterNo = parseInt(chMatch[1], 10);
+        if (chMatch[1]) metadata.chapterNo = parseNumberOrDevanagari(chMatch[1]) || undefined;
         if (chMatch[2]) metadata.chapterName = chMatch[2].trim();
+        continue;
+      }
+
+      // "Subject: Hindi" or "विषय: हिंदी"
+      const subMatch = trimmed.match(/^(?:Subject|विषय)\s*[\:\-—–।=]\s*(.*)$/i);
+      if (subMatch) {
+        metadata.subject = subMatch[1].trim();
         continue;
       }
 
@@ -1122,22 +1184,22 @@ export function parseChapterTest(
         continue;
       }
 
-      // "Time Allowed: 3 Hours", "Time: 90 Minutes"
-      const timeMatch = trimmed.match(/(?:Time\s+Allowed|Time)\s*[\:\-]\s*(.*)$/i);
+      // "Time Allowed: 3 Hours", "Time: 90 Minutes", "समय: 1 घंटा"
+      const timeMatch = trimmed.match(/^(?:Time\s+Allowed|Time|समय)\s*[\:\-—–।=]\s*(.*)$/i);
       if (timeMatch) {
         metadata.timeAllowed = timeMatch[1].trim();
         continue;
       }
 
-      // "Maximum Marks: 80", "Max. Marks: 50", "Total Marks: 50"
-      const maxMarksMatch = trimmed.match(/(?:Max(?:imum)?\s*Marks|Total\s*Marks)\s*[\:\-]\s*(\d+(?:\.\d+)?)/i);
+      // "Maximum Marks: 80", "Max. Marks: 50", "Total Marks: 50", "पूर्णांक: 25", "कुल अंक: 25"
+      const maxMarksMatch = trimmed.match(/(?:Max(?:imum)?\s*Marks|Total\s*Marks|पूर्णांक|कुल\s*अंक|कुल\s*पूर्णांक)\s*[\:\-—–।=]\s*(\d+(?:\.\d+)?|[०-९]+)/i);
       if (maxMarksMatch) {
-        metadata.declaredTotalMarks = parseFloat(maxMarksMatch[1]);
+        metadata.declaredTotalMarks = parseFloat(maxMarksMatch[1].replace(/[०-९]/g, (d) => String("०१२३४५६७८९".indexOf(d))));
         continue;
       }
 
-      // "General Instructions:"
-      if (/^General\s+Instructions?\s*[\:\-]?$/i.test(trimmed)) {
+      // "General Instructions:" or "सामान्य निर्देश:"
+      if (/^(?:General\s+Instructions?|सामान्य\s+निर्देश|निर्देश)\s*[\:\-—–।]?$/i.test(trimmed)) {
         isInGeneralInstructions = true;
         continue;
       }
@@ -1419,7 +1481,9 @@ export function parseChapterTest(
       const trimmed = l.trim();
       if (trimmed && isDivider(trimmed)) return;
 
-      const caMatch = trimmed.match(/^(?:Correct\s*)?Ans(?:wer)?\s*[:\-]\s*(.*)$/i);
+      const caMatch =
+        trimmed.match(/^(?:Correct\s*)?Ans(?:wer)?\s*[:\-—–।=]\s*(.*)$/i) ||
+        trimmed.match(/^(?:सही\s*उत्तर|उत्तर\s*कुंजी|उत्तरमाला|मॉडल\s*उत्तर|अपेक्षित\s*उत्तर|समाधान|हल|उत्तर|उ०|उ\.)\s*[:\-—–।=]?\s*(.*)$/i);
       if (caMatch) {
         isReadingMultiLineAnswer = true;
         const inlineAns = caMatch[1].trim();
@@ -1495,31 +1559,41 @@ export function parseChapterTest(
       candidate.sectionType === "assertion_reason" ||
       candidate.sectionType === "assertion_reasoning" ||
       /Assertion\s*(?:\([A-Za-z]\)|:|\-)/i.test(fullBlockText) ||
-      /Reason\s*(?:\([A-Za-z]\)|:|\-)/i.test(fullBlockText);
+      /Reason\s*(?:\([A-Za-z]\)|:|\-)/i.test(fullBlockText) ||
+      /अभिकथन\s*(?:\([A-Za-zक-ङ]\)|:|\-)/i.test(fullBlockText) ||
+      /तर्क\s*(?:\([A-Za-zक-ङ]\)|:|\-)/i.test(fullBlockText) ||
+      /कथन\s*(?:\([A-Za-zक-ङ]\)|:|\-)/i.test(fullBlockText) ||
+      /कारण\s*(?:\([A-Za-zक-ङ]\)|:|\-)/i.test(fullBlockText);
 
     let assertionText = "";
     let reasonText = "";
     if (isAssertion) {
-      const aMatch = fullBlockText.match(/Assertion\s*(?:\([A-Za-z]\)|:|\-)\s*[:\-]?\s*([^\n]+)/i);
+      const aMatch = fullBlockText.match(/(?:Assertion|अभिकथन|कथन)\s*(?:\([A-Za-zक-ङ]\)|:|\-)\s*[:\-]?\s*([^\n]+)/i);
       if (aMatch) assertionText = aMatch[1].trim();
-      const rMatch = fullBlockText.match(/Reason\s*(?:\([A-Za-z]\)|:|\-)\s*[:\-]?\s*([^\n]+)/i);
+      const rMatch = fullBlockText.match(/(?:Reason|तर्क|कारण)\s*(?:\([A-Za-zक-ङ]\)|:|\-)\s*[:\-]?\s*([^\n]+)/i);
       if (rMatch) reasonText = rMatch[1].trim();
     }
 
     // True/False Checking
+    const lowerAns = explicitAnswer.toLowerCase().trim();
+    const isTrueHindi = lowerAns === "सही" || lowerAns === "सत्य" || lowerAns === "ठीक" || lowerAns.startsWith("सही") || lowerAns.startsWith("सत्य") || lowerAns.startsWith("ठीक");
+    const isFalseHindi = lowerAns === "गलत" || lowerAns === "असत्य" || lowerAns === "बेठीक" || lowerAns.startsWith("गलत") || lowerAns.startsWith("असत्य") || lowerAns.startsWith("बेठीक");
+
     const hasTFAnswer =
-      explicitAnswer.toLowerCase() === "true" ||
-      explicitAnswer.toLowerCase() === "false" ||
-      explicitAnswer.toLowerCase() === "t" ||
-      explicitAnswer.toLowerCase() === "f";
+      lowerAns === "true" ||
+      lowerAns === "false" ||
+      lowerAns === "t" ||
+      lowerAns === "f" ||
+      isTrueHindi ||
+      isFalseHindi;
     const isTFQuestion = candidate.sectionType === "true_false" || (!hasOptions && hasTFAnswer);
 
     // Multiple Select Checking
     const isMultipleSelect =
       candidate.sectionType === "multiple_select" ||
       candidate.sectionType === "msq" ||
-      /^[A-E]\s*,\s*[A-E]/i.test(explicitAnswer) ||
-      /^[A-E]\s*,\s*[A-E]\s*(?:and|&)\s*[A-E]/i.test(explicitAnswer);
+      /^[A-Ea-eक-ङ]\s*,\s*[A-Ea-eक-ङ]/i.test(explicitAnswer) ||
+      /^[A-Ea-eक-ङ]\s*,\s*[A-Ea-eक-ङ]\s*(?:and|&|और|तथा)\s*[A-Ea-eक-ङ]/i.test(explicitAnswer);
 
     // Fill in the blanks checking
     const isFillBlank =
@@ -1529,7 +1603,7 @@ export function parseChapterTest(
     // Match the following checking
     const isMatchFollowing =
       candidate.sectionType === "match_following" ||
-      (/Column\s+I\b/i.test(fullBlockText) && /Column\s+II\b/i.test(fullBlockText));
+      ((/Column\s+I\b/i.test(fullBlockText) || /स्तम्भ\s*I\b/i.test(fullBlockText)) && (/Column\s+II\b/i.test(fullBlockText) || /स्तम्भ\s*II\b/i.test(fullBlockText)));
 
     // Subjective Checking (VSA, SA, LA, or subjective child question)
     const isSubjectiveType =
@@ -1597,26 +1671,25 @@ export function parseChapterTest(
     if (resolvedType === "true_false") {
       const statementLines = linesAfterImage.filter(
         (l) =>
-          !/^(?:True|False)\s*[✅❌]?$/i.test(l) &&
-          !/^[A-B][\.\)]\s*(?:True|False)/i.test(l) &&
+          !/^(?:True|False|सही|गलत|सत्य|असत्य|ठीक|बेठीक)\s*[✅❌]?$/i.test(l) &&
+          !/^[A-Ba-bक-ख][\.\)]\s*(?:True|False|सही|गलत|सत्य|असत्य|ठीक|बेठीक)/i.test(l) &&
           !/^(?:Option\s+[A-B]|[A-B][\.\)\:\-])$/i.test(l) &&
-          !/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False)[\:\.]?$/i.test(l)
+          !/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False|सही\s*(?:या|\/)\s*गलत|सत्य\s*(?:या|\/)\s*असत्य)[\:\.]?$/i.test(l)
       );
       questionText = statementLines
         .join(" ")
-        .replace(/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False)[\:\.\-\s]*/gi, "")
-        .replace(/—\s*(True|False)\s*[✅❌]?/gi, "")
-        .replace(/-\s*(True|False)\s*[✅❌]?/gi, "")
-        .replace(/\b(True|False)\s*[✅❌]?$/gi, "")
+        .replace(/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False|सही\s*(?:या|\/)\s*गलत|सत्य\s*(?:या|\/)\s*असत्य)[\:\.\-\s]*/gi, "")
+        .replace(/—\s*(True|False|सही|गलत|सत्य|असत्य)\s*[✅❌]?/gi, "")
+        .replace(/-\s*(True|False|सही|गलत|सत्य|असत्य)\s*[✅❌]?/gi, "")
+        .replace(/\b(True|False|सही|गलत|सत्य|असत्य)\s*[✅❌]?$/gi, "")
         .replace(/[✅❌]/g, "")
         .trim();
 
       if (hasTFAnswer) {
-        const ca = explicitAnswer.toLowerCase();
-        finalAnswer = ca.startsWith("true") || ca === "t" ? "True" : "False";
-      } else if (fullBlockText.includes("True ✅") || fullBlockText.includes("— True") || fullBlockText.includes("- True")) {
+        finalAnswer = (isTrueHindi || lowerAns.startsWith("true") || lowerAns === "t") ? "True" : "False";
+      } else if (fullBlockText.includes("True ✅") || fullBlockText.includes("— True") || fullBlockText.includes("- True") || fullBlockText.includes("सही ✅") || fullBlockText.includes("— सही") || fullBlockText.includes("- सही")) {
         finalAnswer = "True";
-      } else if (fullBlockText.includes("False ❌") || fullBlockText.includes("False ✅") || fullBlockText.includes("— False") || fullBlockText.includes("- False")) {
+      } else if (fullBlockText.includes("False ❌") || fullBlockText.includes("False ✅") || fullBlockText.includes("— False") || fullBlockText.includes("- False") || fullBlockText.includes("गलत ❌") || fullBlockText.includes("— गलत") || fullBlockText.includes("- गलत")) {
         finalAnswer = "False";
       } else {
         warnings.push(`Question ${candidate.label} (True/False): Missing explicit True or False answer.`);
@@ -1647,7 +1720,8 @@ export function parseChapterTest(
           (l) =>
             l.toLowerCase() !== "question:" &&
             !/^Options?\s*[\:\-]?$/i.test(l) &&
-            !/^(?:Very\s+Short|Short|Long)\s+Answer[\:\.]?$/i.test(l)
+            !/^(?:Very\s+Short|Short|Long)\s+Answer[\:\.]?$/i.test(l) &&
+            !/^(?:अति\s*लघु|लघु|दीर्घ)\s*उत्तरीय[\:\.]?$/i.test(l)
         )
         .join("\n")
         .trim();
@@ -1713,7 +1787,7 @@ export function parseChapterTest(
       if (resolvedType === "multiple_select") {
         if (explicitAnswer) {
           const letters = Array.from(
-            new Set((explicitAnswer.match(/\b([A-Ea-e])\b/g) || []).map((l) => l.toUpperCase()))
+            new Set((explicitAnswer.match(/\b([A-Ea-eक-ङ])\b/g) || []).map((l) => mapDevanagariOrAsciiOptionLetter(l)))
           ).sort();
           if (letters.length > 0) finalAnswer = letters.join(", ");
         }
@@ -1730,14 +1804,23 @@ export function parseChapterTest(
           finalAnswer = Array.from(new Set(markedCheckmarks)).sort().join(", ");
         } else {
           if (explicitAnswer) {
-            const letterMatch = explicitAnswer.match(/(?:Option\s*)?([A-Ea-e1-5])/i);
+            const letterMatch = explicitAnswer.match(
+              /^(?:(?:Option|Opt|Choice|विकल्प)\s*[\(\[]?([A-Ea-e1-5क-ङअ-द१-५])[\)\]]?|[\(\[]([A-Ea-e1-5क-ङअ-द१-५])[\)\]]|([A-Ea-e1-5क-ङअ-द१-५])[\.\)\:\-—–।]\s*|([A-Ea-e1-5क-ङअ-द१-५])$)/i
+            );
             if (letterMatch) {
-              let letter = letterMatch[1].toUpperCase();
-              if (["1", "2", "3", "4", "5"].includes(letter)) {
-                const numMap: Record<string, string> = { "1": "A", "2": "B", "3": "C", "4": "D", "5": "E" };
-                letter = numMap[letter] || "A";
+              const matchedSymbol = letterMatch[1] || letterMatch[2] || letterMatch[3] || letterMatch[4];
+              finalAnswer = mapDevanagariOrAsciiOptionLetter(matchedSymbol);
+            }
+            // If letter not resolved directly, match explicitAnswer text against option texts
+            if (!finalAnswer && parsedOptions.length > 0) {
+              const cleanExp = explicitAnswer.trim().toLowerCase();
+              const matchedOpt = parsedOptions.find((opt) => {
+                const optText = opt.text.trim().toLowerCase();
+                return optText && (optText === cleanExp || cleanExp.includes(optText) || optText.includes(cleanExp));
+              });
+              if (matchedOpt) {
+                finalAnswer = matchedOpt.letter;
               }
-              finalAnswer = letter;
             }
           }
           if (!finalAnswer && markedCheckmarks.length === 1) {

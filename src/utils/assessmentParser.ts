@@ -20,6 +20,9 @@ import {
   extractMarks,
   stripMarksFromQuestionText,
   inferDefaultMarks,
+  matchQuestionNumber,
+  matchOptionLine as matchOptionLineFromTestParser,
+  mapDevanagariOrAsciiOptionLetter,
   type ParsedChapterTest,
   type ParsedSection,
   type ParsedQuestion,
@@ -488,64 +491,16 @@ function isIgnoredMarkerOrDivider(line: string): boolean {
 }
 
 /**
- * Helper to detect question start lines (e.g. "Q1.", "Q2.", "1.", "2)", "15:", "30.", "Q1")
+ * Helper to detect question start lines (e.g. "Q1.", "Q2.", "1.", "2)", "15:", "30.", "प्रश्न 1.", "प्रश्न 10.")
  */
 function matchQuestionHeader(line: string): { qNum: number; remainder: string; hasExplicitQPrefix: boolean } | null {
-  const trimmed = line.trim();
-  // Match "Q1. ", "Q.1 ", "Q1) ", "Question 1: ", "Q1: ", "Q1"
-  const qMatch = trimmed.match(/^(?:Q(?:uestion)?[\.\:\-]?\s*|\bQ\b\s*)(\d+)[\.\):\-]?\s*(.*)$/i);
-  if (qMatch) {
-    const num = parseInt(qMatch[1], 10);
-    if (!isNaN(num)) {
-      return {
-        qNum: num,
-        remainder: qMatch[2] ? qMatch[2].trim() : "",
-        hasExplicitQPrefix: true
-      };
-    }
-  }
-
-  // Match plain digits "1. ", "2) ", "15: "
-  const plainMatch = trimmed.match(/^(\d+)[\.\):\-]\s+(.*)$/);
-  if (plainMatch) {
-    const num = parseInt(plainMatch[1], 10);
-    if (!isNaN(num)) {
-      return {
-        qNum: num,
-        remainder: plainMatch[2] ? plainMatch[2].trim() : "",
-        hasExplicitQPrefix: false
-      };
-    }
-  }
-
-  // Match parenthesized digits "(1) ", "[1] "
-  const parenMatch = trimmed.match(/^[\(\[](\d+)[\)\]][\.\:\-]?\s+(.*)$/);
-  if (parenMatch) {
-    const num = parseInt(parenMatch[1], 10);
-    if (!isNaN(num)) {
-      return {
-        qNum: num,
-        remainder: parenMatch[2] ? parenMatch[2].trim() : "",
-        hasExplicitQPrefix: false
-      };
-    }
-  }
-
-  // Match Roman numerals "(i) ", "(ii) ", "i. ", "ii) "
-  const romanMatch = trimmed.match(/^(?:\(?([ivxlcdm]+)\)[\.\:\-]?|([ivxlcdm]+)[\.\):])\s+(.*)$/i);
-  if (romanMatch) {
-    const romanStr = (romanMatch[1] || romanMatch[2]).toLowerCase();
-    const romanMap: Record<string, number> = {
-      i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10
+  const res = matchQuestionNumber(line);
+  if (res) {
+    return {
+      qNum: res.qNum,
+      remainder: res.remainder,
+      hasExplicitQPrefix: res.hasExplicitQPrefix
     };
-    if (romanMap[romanStr]) {
-      const num = romanMap[romanStr];
-      return {
-        qNum: num,
-        remainder: romanMatch[3] ? romanMatch[3].trim() : "",
-        hasExplicitQPrefix: false
-      };
-    }
   }
   return null;
 }
@@ -554,33 +509,7 @@ function matchQuestionHeader(line: string): { qNum: number; remainder: string; h
  * Helper to match an MCQ or Multiple Select option line
  */
 function matchOptionLine(line: string): { letter: string; text: string } | null {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  // Ensure Assertion (A) or Reason (R) are not treated as option lines
-  if (/^(?:Assertion|Reason)\b/i.test(trimmed)) {
-    return null;
-  }
-  if (/^[\(\[]?(?:A|R)[\)\]]?\s*[:\-]?\s*(?:Assertion|Reason)\b/i.test(trimmed)) {
-    return null;
-  }
-  if (/^Options?\s*[\:\-]?$/i.test(trimmed)) {
-    return null;
-  }
-  const match = trimmed.match(
-    /^(?:Option\s+([A-Ea-e1-5])[\.\)\:\-\s]*|[\(\[]([A-Ea-e1-5])[\)][\.\:\s]*|([A-Ea-e1-5])[\.\)\:\-]\s*)(.*)$/i
-  );
-  if (match) {
-    let rawLetter = (match[1] || match[2] || match[3] || "A").toUpperCase();
-    if (["1", "2", "3", "4", "5"].includes(rawLetter)) {
-      const numMap: Record<string, string> = { "1": "A", "2": "B", "3": "C", "4": "D", "5": "E" };
-      rawLetter = numMap[rawLetter] || "A";
-    }
-    return {
-      letter: rawLetter,
-      text: (match[4] || "").trim()
-    };
-  }
-  return null;
+  return matchOptionLineFromTestParser(line);
 }
 
 /**
@@ -595,12 +524,12 @@ export function normalizeQuestionOptions(options: string[]): string[] {
   const merged: string[] = [];
   for (let i = 0; i < rawList.length; i++) {
     const item = rawList[i];
-    const isIsolatedLabel = /^[A-Ea-e1-5][\.\)]?$/.test(item);
+    const isIsolatedLabel = /^[A-Ea-e1-5क-ङअ-द१-५][\.\)]?$/.test(item);
 
     if (isIsolatedLabel && i + 1 < rawList.length) {
       const nextItem = rawList[i + 1];
-      const cleanLabel = item.replace(/[\.\)]/g, "").toUpperCase();
-      const cleanNext = nextItem.replace(/^[A-Ea-e1-5][\.\)]\s*/i, "").trim();
+      const cleanLabel = mapDevanagariOrAsciiOptionLetter(item.replace(/[\.\)]/g, ""));
+      const cleanNext = nextItem.replace(/^[A-Ea-e1-5क-ङअ-द१-५][\.\)\:\-—–।]\s*/i, "").trim();
       merged.push(`${cleanLabel}. ${cleanNext}`);
       i++;
     } else {
@@ -611,9 +540,9 @@ export function normalizeQuestionOptions(options: string[]): string[] {
   const letters = ["A", "B", "C", "D", "E"];
   return merged.map((opt, idx) => {
     const expectedLetter = letters[idx] || String.fromCharCode(65 + idx);
-    const match = opt.match(/^(?:Option\s+([A-Ea-e1-5])|([A-Ea-e1-5]))[\.\)\:\-]?\s*(.*)$/i);
+    const match = opt.match(/^(?:(?:Option|Opt|Choice|विकल्प)\s*([A-Ea-e1-5क-ङअ-द१-५])|([A-Ea-e1-5क-ङअ-द१-५]))[\.\)\:\-—–।]?\s*(.*)$/i);
     if (match) {
-      const rawLetter = (match[1] || match[2] || expectedLetter).toUpperCase();
+      const rawLetter = mapDevanagariOrAsciiOptionLetter(match[1] || match[2] || expectedLetter);
       const optText = (match[3] || "").trim();
       return `${rawLetter}. ${optText}`;
     } else {
@@ -722,60 +651,7 @@ export function parseAssessmentText(
       continue;
     }
 
-    // Check for marks formula lines: e.g. "5 × 1 = 5 Marks", "5 x 1 = 5", "4 × 1 = 4 Marks"
-    const formulaLine = extractSectionMarksFormula(trimmed);
-    if (formulaLine) {
-      currentSectionMarks = {
-        marks: formulaLine.marksPerQuestion,
-        source: "section_instruction",
-        confidence: 1.0
-      };
-      if (activePassage && activePassage.questionCount === 0) {
-        activePassage.sectionMarks = currentSectionMarks;
-      }
-      continue;
-    }
-
-    // Check for section question-count or structural directive lines: e.g. "5 questions", "(5 questions)", "1 passage followed by 4 sub-questions"
-    if (
-      /^\(?\s*\d+\s*(?:questions?|sub-questions?)\s*\)?$/i.test(trimmed) ||
-      /^\(?\s*\d+\s*passage\s+followed\s+by\s+\d+\s*sub-questions?\s*\)?$/i.test(trimmed)
-    ) {
-      continue;
-    }
-
-    // 2. Check for comprehension / case start heading
-    const compMatch = detectComprehensionStart(trimmed);
-    if (compMatch) {
-      if (activeBlock) {
-        rawBlocks.push(activeBlock);
-        activeBlock = null;
-      }
-      // If we already have an activePassage with no questions, update it instead of creating an orphaned passage
-      if (activePassage && activePassage.questionCount === 0) {
-        if (compMatch.isCase) {
-          activePassage.isCase = true;
-        }
-        if (compMatch.firstLine) {
-          activePassage.textLines.push(compMatch.firstLine);
-        }
-        continue;
-      }
-      const isCase = compMatch.isCase || currentSection === "case_based";
-      const pId = isCase ? `case_${caseCounter++}` : `passage_${passageCounter++}`;
-      activePassage = {
-        id: pId,
-        title: compMatch.title || (isCase ? "Case Study" : "Comprehension Passage"),
-        textLines: compMatch.firstLine ? [compMatch.firstLine] : [],
-        questionCount: 0,
-        isCase,
-        sectionMarks: currentSectionMarks
-      };
-      allPassages.set(pId, activePassage);
-      continue;
-    }
-
-    // 3. Check for section headers (e.g. "Section A — Multiple Choice Questions", "Section G — Case-Based Question")
+    // 2. Check for section headers (e.g. "Section A — Multiple Choice Questions", "Section G — Case-Based Question", "खण्ड क — ...")
     const secInfo = isSectionHeaderWithLookahead(trimmed, rawLines, i);
     if (secInfo) {
       if (activeBlock) {
@@ -813,6 +689,59 @@ export function parseAssessmentText(
       } else {
         activePassage = null;
       }
+      continue;
+    }
+
+    // Check for standalone marks formula lines: e.g. "5 × 1 = 5 Marks", "5 x 1 = 5", "4 × 1 = 4 Marks"
+    const formulaLine = extractSectionMarksFormula(trimmed);
+    if (formulaLine) {
+      currentSectionMarks = {
+        marks: formulaLine.marksPerQuestion,
+        source: "section_instruction",
+        confidence: 1.0
+      };
+      if (activePassage && activePassage.questionCount === 0) {
+        activePassage.sectionMarks = currentSectionMarks;
+      }
+      continue;
+    }
+
+    // Check for section question-count or structural directive lines: e.g. "5 questions", "(5 questions)", "1 passage followed by 4 sub-questions"
+    if (
+      /^\(?\s*\d+\s*(?:questions?|sub-questions?)\s*\)?$/i.test(trimmed) ||
+      /^\(?\s*\d+\s*passage\s+followed\s+by\s+\d+\s*sub-questions?\s*\)?$/i.test(trimmed)
+    ) {
+      continue;
+    }
+
+    // 3. Check for comprehension / case start heading
+    const compMatch = detectComprehensionStart(trimmed);
+    if (compMatch) {
+      if (activeBlock) {
+        rawBlocks.push(activeBlock);
+        activeBlock = null;
+      }
+      // If we already have an activePassage with no questions, update it instead of creating an orphaned passage
+      if (activePassage && activePassage.questionCount === 0) {
+        if (compMatch.isCase) {
+          activePassage.isCase = true;
+        }
+        if (compMatch.firstLine) {
+          activePassage.textLines.push(compMatch.firstLine);
+        }
+        continue;
+      }
+      const isCase = compMatch.isCase || currentSection === "case_based";
+      const pId = isCase ? `case_${caseCounter++}` : `passage_${passageCounter++}`;
+      activePassage = {
+        id: pId,
+        title: compMatch.title || (isCase ? "Case Study" : "Comprehension Passage"),
+        textLines: compMatch.firstLine ? [compMatch.firstLine] : [],
+        questionCount: 0,
+        isCase,
+        sectionMarks: currentSectionMarks
+      };
+      allPassages.set(pId, activePassage);
       continue;
     }
 
