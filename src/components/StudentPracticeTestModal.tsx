@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
   X, 
   CheckCircle2, 
@@ -671,6 +671,206 @@ export default function StudentPracticeTestModal({
 
   const currentQuestion = questions[currentQuestionIdx];
 
+  // ---------------------------------------------------------------------------
+  // Student Test Navigation & Progress Hierarchy
+  // Priority: Multiple Subjects -> Subjects Navigation
+  //           Single Subject + Multiple Sections -> Sections Navigation
+  //           Single Subject + Single Section -> No navigation control
+  // ---------------------------------------------------------------------------
+  const defaultSubjectName = (subject || testMeta?.subject || "General").trim();
+
+  const isQuestionAnswered = (qId: string): boolean => {
+    const ans = userAnswers[qId];
+    return ans !== undefined && ans !== null && String(ans).trim().length > 0;
+  };
+
+  const totalQuestionsCount = questions.length;
+  const totalAnsweredCount = useMemo(() => {
+    return questions.filter((q) => isQuestionAnswered(q.id)).length;
+  }, [questions, userAnswers]);
+  const totalNotAttemptedCount = Math.max(0, totalQuestionsCount - totalAnsweredCount);
+
+  interface NavigationSectionItem {
+    id: string;
+    rawTitle: string;
+    cleanTitle: string;
+    letter: string;
+    displayLabel: string;
+    questionIndices: number[];
+    firstQuestionIdx: number;
+    totalCount: number;
+    answeredCount: number;
+    isFullyAnswered: boolean;
+  }
+
+  interface NavigationSubjectItem {
+    name: string;
+    questionIndices: number[];
+    firstQuestionIdx: number;
+    totalCount: number;
+    answeredCount: number;
+    isFullyAnswered: boolean;
+    sections: NavigationSectionItem[];
+    hasMultipleSections: boolean;
+  }
+
+  const navigationHierarchy = useMemo(() => {
+    if (!questions || questions.length === 0) {
+      return {
+        subjects: [] as NavigationSubjectItem[],
+        hasMultipleSubjects: false,
+        singleSubjectHasMultipleSections: false
+      };
+    }
+
+    const parseCleanSectionName = (raw: string): string => {
+      if (!raw) return "";
+      const s = raw.trim();
+      // Match "Section A — Name", "Section A: Name", "खण्ड क — Name", etc.
+      const match = s.match(/^(?:Section|Part|खण्ड|खंड|भाग|विभाग)\s*['"‘“]?\s*([A-Za-z0-9\u0900-\u097F]+)['"’”]?\s*[—–\-:\.,]\s*(.+)$/i);
+      if (match && match[2]) {
+        return match[2].trim();
+      }
+      // Match numbered prefix "1. Name", "A. Name"
+      const numMatch = s.match(/^(?:\d+|[IVXLCDM]+|[०-९]+)[\.\)\:\-—–]\s*(.+)$/i);
+      if (numMatch && numMatch[1]) {
+        return numMatch[1].trim();
+      }
+      // If it is just "Section A" or "Part 1" without additional name
+      if (/^(?:Section|Part|खण्ड|खंड|भाग|विभाग)\s*['"‘“]?\s*([A-Za-z0-9\u0900-\u097F]+)['"’”]?$/i.test(s)) {
+        return "";
+      }
+      return s;
+    };
+
+    // 1. Group questions by subject preserving question sequence
+    const subjectMap = new Map<string, number[]>();
+    questions.forEach((q, idx) => {
+      const sName = (q.subject && q.subject.trim()) || defaultSubjectName;
+      if (!subjectMap.has(sName)) {
+        subjectMap.set(sName, []);
+      }
+      subjectMap.get(sName)!.push(idx);
+    });
+
+    const subjectList: NavigationSubjectItem[] = [];
+
+    for (const [subjName, qIndices] of subjectMap.entries()) {
+      let subjAnswered = 0;
+      qIndices.forEach((idx) => {
+        if (isQuestionAnswered(questions[idx].id)) {
+          subjAnswered++;
+        }
+      });
+
+      // 2. Group this subject's questions by section preserving order of appearance
+      const sectionMap = new Map<string, number[]>();
+      qIndices.forEach((idx) => {
+        const q = questions[idx];
+        const rawSec = (q.sectionTitle || q.section || q.sectionId || "").trim();
+        const secKey = rawSec || "__default__";
+        if (!sectionMap.has(secKey)) {
+          sectionMap.set(secKey, []);
+        }
+        sectionMap.get(secKey)!.push(idx);
+      });
+
+      // Multiple sections check: more than 1 distinct section in this subject
+      const rawKeys = Array.from(sectionMap.keys());
+      const hasMultipleSections = rawKeys.length > 1;
+
+      const sections: NavigationSectionItem[] = [];
+      let secLetterIdx = 0;
+
+      for (const [rawSecKey, secIndices] of sectionMap.entries()) {
+        const rawTitle = rawSecKey === "__default__" ? "" : rawSecKey;
+        const cleanTitle = parseCleanSectionName(rawTitle);
+        const letter = String.fromCharCode(65 + secLetterIdx); // 'A', 'B', 'C', ...
+        secLetterIdx++;
+
+        const displayLabel = cleanTitle 
+          ? `Section ${letter} — ${cleanTitle}` 
+          : `Section ${letter}`;
+
+        let secAnswered = 0;
+        secIndices.forEach((idx) => {
+          if (isQuestionAnswered(questions[idx].id)) {
+            secAnswered++;
+          }
+        });
+
+        sections.push({
+          id: `${subjName}_sec_${letter}`,
+          rawTitle,
+          cleanTitle,
+          letter,
+          displayLabel,
+          questionIndices: secIndices,
+          firstQuestionIdx: secIndices[0],
+          totalCount: secIndices.length,
+          answeredCount: secAnswered,
+          isFullyAnswered: secIndices.length > 0 && secAnswered === secIndices.length
+        });
+      }
+
+      subjectList.push({
+        name: subjName,
+        questionIndices: qIndices,
+        firstQuestionIdx: qIndices[0],
+        totalCount: qIndices.length,
+        answeredCount: subjAnswered,
+        isFullyAnswered: qIndices.length > 0 && subjAnswered === qIndices.length,
+        sections,
+        hasMultipleSections
+      });
+    }
+
+    const hasMultipleSubjects = subjectList.length > 1;
+    const singleSubjectHasMultipleSections = !hasMultipleSubjects && subjectList.length === 1 && subjectList[0].hasMultipleSections;
+
+    return {
+      subjects: subjectList,
+      hasMultipleSubjects,
+      singleSubjectHasMultipleSections
+    };
+  }, [questions, userAnswers, defaultSubjectName]);
+
+  // Current active subject & section derived from currentQuestionIdx
+  const currentSubjectName = (currentQuestion?.subject && currentQuestion.subject.trim()) || defaultSubjectName;
+  const activeSubject = navigationHierarchy.subjects.find(
+    (s) => s.name.toLowerCase() === currentSubjectName.toLowerCase()
+  ) || navigationHierarchy.subjects[0];
+
+  const activeSection = activeSubject?.sections.find((sec) =>
+    sec.questionIndices.includes(currentQuestionIdx)
+  );
+
+  const showSectionNavigation =
+    (navigationHierarchy.hasMultipleSubjects && Boolean(activeSubject?.hasMultipleSections)) ||
+    navigationHierarchy.singleSubjectHasMultipleSections;
+
+  const handleJumpToSubject = (subj: NavigationSubjectItem) => {
+    if (subj.firstQuestionIdx >= 0 && subj.firstQuestionIdx < questions.length) {
+      setCurrentQuestionIdx(subj.firstQuestionIdx);
+      updateTestDraft({
+        currentQuestionIdx: subj.firstQuestionIdx,
+        elapsedSeconds: timerSecondsRef.current
+      });
+      modalScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const handleJumpToSection = (sec: NavigationSectionItem) => {
+    if (sec.firstQuestionIdx >= 0 && sec.firstQuestionIdx < questions.length) {
+      setCurrentQuestionIdx(sec.firstQuestionIdx);
+      updateTestDraft({
+        currentQuestionIdx: sec.firstQuestionIdx,
+        elapsedSeconds: timerSecondsRef.current
+      });
+      modalScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/80 backdrop-blur-sm animate-fadeIn overflow-hidden">
       <div className="relative w-full max-w-3xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[92vh] sm:max-h-[90vh] overflow-hidden">
@@ -820,15 +1020,109 @@ export default function StudentPracticeTestModal({
           {/* ACTIVE TEST STAGE */}
           {testStage === "active" && currentQuestion && (
             <div className="space-y-4">
+
+              {/* 1. Subjects Navigation Control (Priority: Multiple Subjects) */}
+              {navigationHierarchy.hasMultipleSubjects && (
+                <div className="p-2 sm:p-2.5 rounded-xl bg-slate-50/90 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-1.5">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[10px] sm:text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Subjects
+                    </span>
+                    <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">
+                      Tap to switch subjects
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                    {navigationHierarchy.subjects.map((subj) => {
+                      const isActive = activeSubject?.name.toLowerCase() === subj.name.toLowerCase();
+                      const isComplete = subj.isFullyAnswered;
+
+                      let btnStyle = "";
+                      if (isActive) {
+                        btnStyle = isComplete
+                          ? "bg-emerald-600 text-white border-emerald-600 shadow-sm ring-2 ring-emerald-500/30"
+                          : "bg-blue-600 text-white border-blue-600 shadow-sm ring-2 ring-blue-500/30";
+                      } else {
+                        btnStyle = isComplete
+                          ? "bg-emerald-50 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                          : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800";
+                      }
+
+                      return (
+                        <button
+                          key={subj.name}
+                          type="button"
+                          onClick={() => handleJumpToSubject(subj)}
+                          className={`text-xs sm:text-sm font-bold py-1.5 px-3 rounded-xl border transition-all cursor-pointer flex items-center gap-1.5 ${btnStyle}`}
+                          title={`${subj.name} — ${subj.answeredCount}/${subj.totalCount} answered`}
+                        >
+                          {isComplete && (
+                            <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${isActive ? "text-white" : "text-emerald-600 dark:text-emerald-400"}`} />
+                          )}
+                          <span>{subj.name} — {subj.answeredCount}/{subj.totalCount} answered</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 2. Section Navigation Control (Priority: Multiple Subjects + Sections OR Single Subject + Multiple Sections) */}
+              {showSectionNavigation && activeSubject?.sections && (
+                <div className="p-2 sm:p-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-700/70 space-y-1.5">
+                  {navigationHierarchy.hasMultipleSubjects && (
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[10px] sm:text-[11px] font-black uppercase tracking-wider text-teal-700 dark:text-teal-300">
+                        {activeSubject.name} Sections
+                      </span>
+                      <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">
+                        Sections within {activeSubject.name}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                    {activeSubject.sections.map((sec) => {
+                      const isActive = activeSection?.id === sec.id;
+                      const isComplete = sec.isFullyAnswered;
+
+                      let btnStyle = "";
+                      if (isActive) {
+                        btnStyle = isComplete
+                          ? "bg-teal-600 text-white border-teal-600 shadow-sm ring-2 ring-teal-500/30"
+                          : "bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 border-slate-900 dark:border-slate-100 shadow-sm ring-2 ring-slate-400/30";
+                      } else {
+                        btnStyle = isComplete
+                          ? "bg-teal-50/80 dark:bg-teal-950/40 border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/40"
+                          : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800";
+                      }
+
+                      return (
+                        <button
+                          key={sec.id}
+                          type="button"
+                          onClick={() => handleJumpToSection(sec)}
+                          className={`text-[11px] sm:text-xs font-bold py-1.5 px-2.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1.5 ${btnStyle}`}
+                          title={`${sec.displayLabel} — ${sec.answeredCount}/${sec.totalCount} answered`}
+                        >
+                          {isComplete && (
+                            <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${isActive ? "text-white dark:text-slate-900" : "text-teal-600 dark:text-teal-400"}`} />
+                          )}
+                          <span>{sec.displayLabel} — {sec.answeredCount}/{sec.totalCount} answered</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               
               {/* Question Navigation Header - Wrapped to prevent overflow */}
               <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
                 <span className="text-[11px] sm:text-xs font-extrabold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/80 border border-blue-100 dark:border-blue-900/50 px-2.5 py-1 rounded-lg">
                   Question {currentQuestionIdx + 1} of {questions.length}
                 </span>
-                {currentQuestion.sectionTitle && (
+                {(activeSection ? activeSection.displayLabel : currentQuestion.sectionTitle) && (
                   <span className="text-[11px] sm:text-xs font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/80 border border-teal-200 dark:border-teal-800 px-2.5 py-1 rounded-lg">
-                    {currentQuestion.sectionTitle}
+                    {activeSection ? activeSection.displayLabel : currentQuestion.sectionTitle}
                   </span>
                 )}
                 <span className="text-[11px] sm:text-xs font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
@@ -837,8 +1131,8 @@ export default function StudentPracticeTestModal({
                 <span className="text-[11px] sm:text-xs font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 border border-indigo-200 dark:border-indigo-800 px-2.5 py-1 rounded-lg">
                   {currentQuestion.marks ?? 1} {((currentQuestion.marks ?? 1) === 1) ? "Mark" : "Marks"}
                 </span>
-                <span className="text-[11px] sm:text-xs font-extrabold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
-                  {Object.keys(userAnswers).length} / {questions.length} Answered
+                <span className="text-[11px] sm:text-xs font-extrabold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
+                  Answered: {totalAnsweredCount} | Not Attempted: {totalNotAttemptedCount} | Total: {totalQuestionsCount}
                 </span>
               </div>
 
