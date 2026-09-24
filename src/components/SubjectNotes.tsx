@@ -511,14 +511,37 @@ export default function SubjectNotes({
       (note as any).key ||
       url;
 
+    const noteModName = (note as any).moduleName || note.chapterName || (note as any).moduleTitle || "";
     // Save positions before opening note
     try {
       if (typeof window !== "undefined") {
-        sessionStorage.setItem("student_last_scroll_y", String(window.scrollY || 0));
+        const scrollY = window.scrollY || 0;
         const mainEl = document.getElementById("main-content-scroll");
-        if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainEl.scrollTop || 0));
         const treeEl = document.getElementById("study-tree-scroll-container");
-        if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeEl.scrollTop || 0));
+        const mainScrollTop = mainEl ? mainEl.scrollTop : 0;
+        const treeScrollTop = treeEl ? treeEl.scrollTop : 0;
+
+        sessionStorage.setItem("student_last_scroll_y", String(scrollY));
+        if (mainEl) sessionStorage.setItem("student_main_scroll_top", String(mainScrollTop));
+        if (treeEl) sessionStorage.setItem("student_tree_scroll_top", String(treeScrollTop));
+        if (subject) sessionStorage.setItem(`student_selected_subject_${studentId || "anon"}`, subject);
+        if (noteModName) sessionStorage.setItem(`student_selected_module_${studentId || "anon"}`, noteModName);
+
+        const navState = {
+          isStudySpace: true,
+          activeTab: "My",
+          role: "student",
+          studentId: studentId,
+          selectedSubject: subject,
+          selectedModule: noteModName,
+          lastOpenedNoteId: note.id,
+          scrollY,
+          mainScrollTop,
+          treeScrollTop,
+          timestamp: Date.now(),
+        };
+        window.history.replaceState(navState, document.title, window.location.href);
+        window.history.pushState({ ...navState, isNoteOpen: true }, document.title, window.location.href);
       }
     } catch {}
 

@@ -361,7 +361,11 @@ export function getSyncState() {
 
 // Set up cleanup on app unload
 if (typeof window !== "undefined") {
-  window.addEventListener("beforeunload", cleanupOnUnload);
+  window.addEventListener("pagehide", (e: PageTransitionEvent) => {
+    if (!e.persisted) {
+      cleanupOnUnload();
+    }
+  });
 }
 
 export default {

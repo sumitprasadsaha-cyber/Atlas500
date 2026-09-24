@@ -585,11 +585,11 @@ export function parseAssessmentText(
   // Pre-process inline options if multiple options were pasted on a single line
   const processedText = normalizedText
     .replace(
-      /(?<!\b(?:of|for|is|and|to|with|in|on|from|by|explanation|reason|assertion|both|neither|either|than|chapter|unit|part|section|grade|class|level|page|volume|act|scene))\s+([\(]?[B-Eb-e2-5][\.\)\:\-]\s+[^\n]+)/gi,
+      /(?<!\b(?:of|for|is|and|to|with|in|on|from|by|explanation|reason|assertion|both|neither|either|than|chapter|unit|part|section|grade|class|level|page|volume|act|scene|question|q|no)\b|[\s\b](?:प्रश्न|प्र|कक्षा|पाठ|अध्याय|संख्या|नं|भाग|खंड|खण्ड))\s+([\(]?(?:[B-Eb-eख-ङब-य]|\([2-5२-५]\))[[\.\)\:\-—–।]\s+[^\n]+)/gi,
       (match, p1) => "\n" + p1.trim()
     )
     .replace(
-      /([?:])\s+([\(]?[Aa1][\.\)\:\-]\s+[^\n]+)/g,
+      /([?:])\s+([\(]?[Aa1कअ१][\.\)\:\-—–।]\s+[^\n]+)/g,
       (match, p1, p2) => p1 + "\n" + p2.trim()
     );
 

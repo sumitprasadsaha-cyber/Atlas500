@@ -392,3 +392,152 @@ D. चमेली
   assert.ok(parsed.questions[2].question.includes("नेपालको राष्ट्रिय फूल"));
   assert.equal(parsed.questions[2].correctAnswer, "A");
 });
+
+test("Phase 1: Full 9-section Hindi paper (खंड A to खंड I) with Devanagari options and multiline answers", () => {
+  const hindi9SectionPaper = `
+कक्षा 10 — हिंदी
+पूर्णांक: 50
+समय: 2 घंटे
+
+खंड A — बहुविकल्पीय प्रश्न
+प्रश्न 1. ‘सुंदर’ शब्द का विलोम क्या है?
+A. अच्छा
+B. कुरूप
+C. मधुर
+D. सरल
+उत्तर: B. कुरूप
+
+खंड B — एक से अधिक सही उत्तर
+प्रश्न 2. निम्नलिखित में से कौन-से शब्द ‘सूर्य’ के पर्यायवाची हैं?
+A. दिनकर
+B. रजनी
+C. भास्कर
+D. राकेश
+उत्तर: A, C
+
+खंड C — कथन और कारण
+प्रश्न 3.
+कथन (A): कबीरदास जी समाज-सुधारक कवि थे।
+कारण (R): उन्होंने अपनी रचनाओं में सामाजिक कुरीतियों का विरोध किया।
+A. कथन (A) और कारण (R) दोनों सही हैं तथा कारण (R) कथन (A) की सही व्याख्या है।
+B. कथन (A) और कारण (R) दोनों सही हैं परंतु कारण (R) कथन (A) की सही व्याख्या नहीं है।
+C. कथन (A) सही है परंतु कारण (R) गलत है।
+D. कथन (A) गलत है परंतु कारण (R) सही है।
+उत्तर: A
+
+खंड D — गद्यांश
+सच्चा मित्र वही है जो विपत्ति के समय काम आए। मित्र के बिना जीवन सूना लगता है।
+प्रश्न 4. सच्चा मित्र कौन होता है?
+A. जो केवल सुख में साथ दे
+B. जो विपत्ति के समय काम आए
+C. जो धनवान हो
+D. जो बातें बनाए
+उत्तर: B
+
+खंड E — सही या गलत
+प्रश्न 5. ‘हिमालय’ एक व्यक्तिवाचक संज्ञा शब्द है।
+उत्तर: सही
+
+खंड F — अति लघु उत्तरीय प्रश्न
+प्रश्न 6. ‘अनुराग’ शब्द का विलोम शब्द लिखिए। [1 अंक]
+उत्तर: ‘अनुराग’ का विलोम शब्द ‘विराग’ होता है।
+
+खंड G — लघु उत्तरीय प्रश्न
+प्रश्न 7. उपसर्ग और प्रत्यय में मुख्य अंतर उदाहरण सहित स्पष्ट कीजिए। [2 अंक]
+उत्तर: उपसर्ग शब्द के आरंभ में जुड़ते हैं जबकि प्रत्यय शब्द के अंत में जुड़ते हैं।
+
+खंड H — लेखन
+प्रश्न 8. संवाद लेखन: दो मित्रों के बीच परीक्षा की तैयारी को लेकर हुई बातचीत लिखिए। [5 अंक]
+उत्तर:
+रोहन: नमस्ते सोहन! तुम्हारी परीक्षा की तैयारी कैसी चल रही है?
+सोहन: नमस्ते रोहन! मेरी तैयारी बहुत अच्छी चल रही है।
+रोहन: बहुत बढ़िया! सफलता की शुभकामनाएँ।
+
+खंड I — व्याकरण
+प्रश्न 9. संधि की परिभाषा उदाहरण सहित दीजिए। [2 अंक]
+उत्तर: दो वर्णों के परस्पर मेल से जो विकार उत्पन्न होता है, उसे संधि कहते हैं। जैसे: विद्या + आलय = विद्यालय।
+`;
+
+  const parsed = parseChapterTest(hindi9SectionPaper);
+
+  // 1. Verify all 9 sections recognized
+  assert.equal(parsed.sections.length, 9, "Must recognize all 9 sections (खंड A to खंड I)");
+  assert.equal(parsed.sections[0].type, "mcq");
+  assert.equal(parsed.sections[1].type, "multiple_select");
+  assert.equal(parsed.sections[2].type, "assertion_reason");
+  assert.equal(parsed.sections[3].type, "comprehension");
+  assert.equal(parsed.sections[4].type, "true_false");
+  assert.equal(parsed.sections[5].type, "very_short_answer");
+  assert.equal(parsed.sections[6].type, "short_answer");
+  assert.equal(parsed.sections[7].type, "long_answer");
+  assert.equal(parsed.sections[8].type, "short_answer");
+
+  // 2. Verify all 9 questions parsed
+  assert.equal(parsed.questions.length, 9, "Must parse all 9 questions");
+
+  // Q1: MCQ with Hindi options A. अच्छा, B. कुरूप, etc.
+  const q1 = parsed.questions[0];
+  assert.equal(q1.questionNumber, 1);
+  assert.ok(q1.question.includes("‘सुंदर’"));
+  assert.equal(q1.options.length, 4);
+  assert.equal(q1.correctAnswer, "B");
+
+  // Q2: Multiple Select with A, C
+  const q2 = parsed.questions[1];
+  assert.equal(q2.questionNumber, 2);
+  assert.equal(q2.type, "multiple_select");
+  assert.equal(q2.correctAnswer, "A, C");
+
+  // Q3: Assertion Reason
+  const q3 = parsed.questions[2];
+  assert.equal(q3.questionNumber, 3);
+  assert.equal(q3.type, "assertion_reason");
+  assert.equal(q3.correctAnswer, "A");
+
+  // Q4: Comprehension
+  const q4 = parsed.questions[3];
+  assert.equal(q4.questionNumber, 4);
+  assert.equal(q4.correctAnswer, "B");
+
+  // Q5: True/False
+  const q5 = parsed.questions[4];
+  assert.equal(q5.questionNumber, 5);
+  assert.equal(q5.type, "true_false");
+  assert.equal(q5.correctAnswer, "True");
+
+  // Q6: Very Short Answer
+  const q6 = parsed.questions[5];
+  assert.equal(q6.questionNumber, 6);
+  assert.equal(q6.type, "very_short_answer");
+  assert.ok(q6.modelAnswer?.includes("विराग"));
+
+  // Q7: Short Answer
+  const q7 = parsed.questions[6];
+  assert.equal(q7.questionNumber, 7);
+  assert.equal(q7.type, "short_answer");
+  assert.ok(q7.modelAnswer?.includes("उपसर्ग"));
+
+  // Q8: Writing with multiline answer
+  const q8 = parsed.questions[7];
+  assert.equal(q8.questionNumber, 8);
+  assert.equal(q8.type, "long_answer");
+  assert.ok(q8.modelAnswer?.includes("रोहन:"));
+  assert.ok(q8.modelAnswer?.includes("सोहन:"));
+  assert.ok(q8.modelAnswer?.includes("\n"));
+
+  // Q9: Grammar
+  const q9 = parsed.questions[8];
+  assert.equal(q9.questionNumber, 9);
+  assert.ok(q9.modelAnswer?.includes("संधि"));
+
+  // Also verify parseAssessmentText parses all 9 questions
+  const assessResult = parseAssessmentText(hindi9SectionPaper, mockContext);
+  assert.equal(assessResult.success, true);
+  assert.equal(assessResult.questions.length, 9);
+
+  // Also verify parseUniversalTestText parses all 9 questions
+  const uniResult = parseUniversalTestText(hindi9SectionPaper, mockContext);
+  assert.equal(uniResult.success, true);
+  assert.equal(uniResult.questions.length, 9);
+});
+

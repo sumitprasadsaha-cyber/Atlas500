@@ -212,20 +212,22 @@ function detectSectionHeader(line: string): { isSection: boolean; title: string;
   }
 
   // 2. Legacy English/Hindi section regex fallback
-  const secMatch = trimmed.match(/^(?:Section|Part|खण्ड|खंड|भाग|विभाग)\s+([A-Za-z0-9क-घअ-द]+)[\s\:\-]+(.+)?$/i);
+  const secMatch = trimmed.match(/^(?:Section|Part|खण्ड|खंड|भाग|विभाग)\s+([A-Za-z0-9\u0900-\u097F]+)[\s\:\-—–]+(.+)?$/i);
   if (secMatch) {
-    const partName = secMatch[1].toUpperCase();
+    const rawPart = secMatch[1].trim();
+    const partName = mapDevanagariOrAsciiOptionLetter(rawPart);
     const rest = (secMatch[2] || "").trim();
     const fullTitle = rest ? `Section ${partName}: ${rest}` : `Section ${partName}`;
 
     let defaultType: AssessmentQuestionType | undefined = undefined;
     const lower = trimmed.toLowerCase();
-    if (lower.includes("multiple choice") || lower.includes("mcq") || lower.includes("बहुविकल्प")) defaultType = "mcq";
+    if (lower.includes("multiple select") || lower.includes("एक से अधिक")) defaultType = "multiple_select";
+    else if (lower.includes("multiple choice") || lower.includes("mcq") || lower.includes("बहुविकल्प")) defaultType = "mcq";
     else if ((lower.includes("assertion") && lower.includes("reason")) || lower.includes("कथन") || lower.includes("अभिकथन")) defaultType = "assertion_reason";
-    else if ((lower.includes("true") && lower.includes("false")) || lower.includes("सही") || lower.includes("सत्य")) defaultType = "true_false";
+    else if ((lower.includes("true") && lower.includes("false")) || lower.includes("सही") || lower.includes("सत्य") || lower.includes("ठीक")) defaultType = "true_false";
     else if (lower.includes("very short") || lower.includes("अति लघु")) defaultType = "very_short_answer";
-    else if (lower.includes("short answer") || lower.includes("लघु") || lower.includes("संवाद")) defaultType = "short_answer";
-    else if (lower.includes("long answer") || lower.includes("दीर्घ") || lower.includes("पत्र") || lower.includes("अनुच्छेद")) defaultType = "long_answer";
+    else if (lower.includes("short answer") || lower.includes("लघु") || lower.includes("संवाद") || lower.includes("व्याकरण")) defaultType = "short_answer";
+    else if (lower.includes("long answer") || lower.includes("दीर्घ") || lower.includes("पत्र") || lower.includes("अनुच्छेद") || lower.includes("लेखन")) defaultType = "long_answer";
     else if (lower.includes("case") || lower.includes("source") || lower.includes("केस")) defaultType = "case_based";
     else if (lower.includes("comprehension") || lower.includes("गद्यांश")) defaultType = "comprehension";
 
@@ -234,23 +236,29 @@ function detectSectionHeader(line: string): { isSection: boolean; title: string;
 
   // 3. Standalone Type Headers (only if line DOES NOT start with a question number)
   if (!matchQuestionNumber(trimmed) && !QUESTION_START_REGEX.test(trimmed)) {
+    if (/^(?:Multiple\s+Select(?:\s+Questions?)?|MSQs?|एक\s*से\s*अधिक\s*(?:सही\s*)?(?:उत्तर|विकल्प)|बहु[\s\-]विकल्प\s*चयन|धेरै\s*उत्तर\s*छनौट)$/i.test(trimmed)) {
+      return { isSection: true, title: "Multiple Select Questions", defaultType: "multiple_select" };
+    }
     if (/^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?|बहुविकल्पीय(?:\s*प्रश्न)?|वस्तुनिष्ठ(?:\s*प्रश्न)?)$/i.test(trimmed)) {
       return { isSection: true, title: "Multiple Choice Questions", defaultType: "mcq" };
     }
-    if (/^(?:Assertion\s*(?:&|and|-)\s*Reasoning|Assertion\s*&\s*Reasoning|कथन\s*(?:एवं|और|तथा)\s*कारण|अभिकथन\s*(?:एवं|और|तथा)\s*कारण)$/i.test(trimmed)) {
+    if (/^(?:Assertion\s*(?:&|and|-)\s*Reasoning|Assertion\s*&\s*Reasoning|कथन\s*(?:एवं|और|तथा)\s*कारण|अभिकथन\s*(?:एवं|और|तथा)\s*कारण|दावी\s*र\s*कारण)$/i.test(trimmed)) {
       return { isSection: true, title: "Assertion & Reasoning", defaultType: "assertion_reason" };
     }
     if (/^(?:True\s*[\/\\]\s*False|True[\/\\]False|True\s+or\s+False|सही\s*(?:या|\/|अथवा|वा)\s*गलत|सत्य\s*(?:या|\/|अथवा|वा)\s*असत्य|ठीक\s*(?:वा|\/)\s*बेठीक)$/i.test(trimmed)) {
       return { isSection: true, title: "True / False Questions", defaultType: "true_false" };
     }
-    if (/^(?:Very\s+Short\s+Answer(?:\s+Questions?)?|VSA|अति\s*लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?)$/i.test(trimmed)) {
+    if (/^(?:Very\s+Short\s+Answer(?:\s+Questions?)?|VSA|अति\s*लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|धेरै\s*छोटो\s*उत्तर)$/i.test(trimmed)) {
       return { isSection: true, title: "Very Short Answer Questions", defaultType: "very_short_answer" };
     }
-    if (/^(?:Short\s+Answer(?:\s+Questions?)?|SA|लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|संवाद\s*लेखन)$/i.test(trimmed)) {
+    if (/^(?:Short\s+Answer(?:\s+Questions?)?|SA|लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|संवाद\s*लेखन|छोटो\s*उत्तर)$/i.test(trimmed)) {
       return { isSection: true, title: "Short Answer Questions", defaultType: "short_answer" };
     }
-    if (/^(?:Long\s+Answer(?:\s+Questions?)?|LA|दीर्घ(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|पत्र\s*लेखन|अनुच्छेद\s*लेखन|निबंध\s*लेखन)$/i.test(trimmed)) {
+    if (/^(?:Long\s+Answer(?:\s+Questions?)?|LA|दीर्घ(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|पत्र\s*लेखन|अनुच्छेद\s*लेखन|निबंध\s*लेखन|लेखन|रचनात्मक\s*लेखन|लामो\s*उत्तर)$/i.test(trimmed)) {
       return { isSection: true, title: "Long Answer Questions", defaultType: "long_answer" };
+    }
+    if (/^(?:Grammar|व्याकरण)$/i.test(trimmed)) {
+      return { isSection: true, title: "Grammar", defaultType: "short_answer" };
     }
     if (/^(?:Case\s*Study|Case\s+Based(?:\s+Questions?)?|Source\s+Based|केस\s*(?:आधारित|अध्ययन))$/i.test(trimmed)) {
       return { isSection: true, title: "Case Study / Source Based", defaultType: "case_based" };

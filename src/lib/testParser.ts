@@ -34,13 +34,17 @@ export function mapDevanagariOrAsciiOptionLetter(charOrStr: string): string {
   const trimmed = charOrStr.trim();
   const map: Record<string, string> = {
     "क": "A", "ख": "B", "ग": "C", "घ": "D", "ङ": "E",
+    "च": "F", "छ": "G", "ज": "H", "झ": "I", "ञ": "J",
+    "ट": "K", "ठ": "L", "ड": "M", "ढ": "N", "ण": "O",
+    "त": "P", "थ": "Q", "ध": "S", "न": "T",
+    "प": "U", "फ": "V", "भ": "X", "म": "Y",
     "अ": "A", "ब": "B", "स": "C", "द": "D", "य": "E",
     "1": "A", "2": "B", "3": "C", "4": "D", "5": "E",
     "१": "A", "२": "B", "३": "C", "४": "D", "५": "E",
     "A": "A", "B": "B", "C": "C", "D": "D", "E": "E",
     "a": "A", "b": "B", "c": "C", "d": "D", "e": "E"
   };
-  return map[trimmed] || (trimmed.length === 1 ? trimmed.toUpperCase() : "A");
+  return map[trimmed] || (trimmed.length === 1 && /[A-Za-z]/.test(trimmed) ? trimmed.toUpperCase() : (trimmed.length === 1 ? trimmed : "A"));
 }
 
 /**
@@ -585,7 +589,7 @@ export function identifySectionHeader(line: string): {
   }
 
   // Check for Section Letter prefix: "Section A — ...", "Section 1: ...", "Part A - ...", "खण्ड क — ...", "भाग 1: ..."
-  const secLetterMatch = trimmed.match(/^(?:Section|Part|खण्ड|खंड|भाग|विभाग)\s*[\'\"‘“]?\s*([A-Za-z0-9क-घअ-द]+)[\'\"’”]?[\s\—\–\-\:\.\,]*(.*)$/i);
+  const secLetterMatch = trimmed.match(/^(?:Section|Part|खण्ड|खंड|भाग|विभाग)\s*[\'\"‘“]?\s*([A-Za-z0-9\u0900-\u097F]+)[\'\"’”]?[\s\—\–\-\:\.\,]*(.*)$/i);
   let sectionLetter: string | undefined;
   let candidateTitle = trimmed;
 
@@ -595,7 +599,7 @@ export function identifySectionHeader(line: string): {
     candidateTitle = (secLetterMatch[2] || "").trim();
   } else {
     // Numbered header: "1. Multiple Choice Questions", "4. Comprehension", "१. बहुविकल्पीय प्रश्न"
-    const numPrefixMatch = trimmed.match(/^([A-Z]|\d+|[IVXLCDM]+|[०-९]+|[क-घअ-द])[\.\)\:\-—–।]\s*(.*)$/i);
+    const numPrefixMatch = trimmed.match(/^([A-Za-z]|\d+|[IVXLCDM]+|[०-९]+|[\u0900-\u097F])[\.\)\:\-—–।]\s*(.*)$/i);
     if (numPrefixMatch) {
       const rawPrefix = numPrefixMatch[1];
       sectionLetter = mapDevanagariOrAsciiOptionLetter(rawPrefix);
@@ -659,7 +663,7 @@ export function identifySectionHeader(line: string): {
 
     // 1. Multiple Select Questions
     if (
-      /^(?:Multiple\s+Select(?:\s+Questions?)?|MSQs?|Multi[\s\-]select(?:\s+questions?)?)$/i.test(str)
+      /^(?:Multiple\s+Select(?:\s+Questions?)?|MSQs?|Multi[\s\-]select(?:\s+questions?)?|एक\s*से\s*अधिक\s*(?:सही\s*)?(?:उत्तर|विकल्प)|बहु[\s\-]विकल्प\s*चयन|धेरै\s*उत्तर\s*छनौट)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -674,7 +678,7 @@ export function identifySectionHeader(line: string): {
 
     // 2. MCQs / Multiple Choice / बहुविकल्पीय प्रश्न
     if (
-      /^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?|Standalone\s+Questions?|General\s+Questions?|Independent\s+Questions?|बहुविकल्पीय(?:\s*प्रश्न)?|बहुविकल्प|वस्तुनिष्ठ(?:\s*प्रश्न)?|सही\s*विकल्प)$/i.test(str)
+      /^(?:MCQs?|Multiple\s+Choice(?:\s+Questions?)?|Standalone\s+Questions?|General\s+Questions?|Independent\s+Questions?|बहुविकल्पीय(?:\s*प्रश्न)?|बहुविकल्प|वस्तुनिष्ठ(?:\s*प्रश्न)?|सही\s*विकल्प|बहुवैकल्पिक(?:\s*प्रश्न)?)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -689,7 +693,7 @@ export function identifySectionHeader(line: string): {
 
     // 3. Assertion & Reasoning / कथन एवं कारण
     if (
-      /^(?:Assertion\s*(?:&|and|-)\s*Reason(?:ing)?|Assertion\s*Reason|कथन\s*(?:एवं|और|तथा)\s*कारण|अभिकथन\s*(?:एवं|और|तथा)\s*(?:कारण|तर्क))(?:\s+Questions?)?$/i.test(str)
+      /^(?:Assertion\s*(?:&|and|-)\s*Reason(?:ing)?|Assertion\s*Reason|कथन\s*(?:एवं|और|तथा|वा|र)\s*(?:कारण|तर्क)|अभिकथन\s*(?:एवं|और|तथा|वा|र)\s*(?:कारण|तर्क)|दावी\s*र\s*कारण)(?:\s+Questions?)?$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -704,7 +708,7 @@ export function identifySectionHeader(line: string): {
 
     // 4. True and False / सही या गलत
     if (
-      /^(?:True\s*[\/\\]\s*False|True[\/\\]False|True\s+and\s+False|True\s+or\s+False|T\/F|सही\s*(?:या|\/|अथवा|वा)\s*गलत|सत्य\s*(?:या|\/|अथवा|वा)\s*असत्य|ठीक\s*(?:वा|\/)\s*बेठीक)$/i.test(str)
+      /^(?:True\s*[\/\\]\s*False|True[\/\\]False|True\s+and\s+False|True\s+or\s+False|T\/F|सही\s*(?:या|\/|अथवा|वा|र)\s*गलत|सत्य\s*(?:या|\/|अथवा|वा|र)\s*असत्य|ठीक\s*(?:वा|\/|र)\s*बेठीक)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -719,7 +723,7 @@ export function identifySectionHeader(line: string): {
 
     // 5. Very Short Answer Questions / अति लघु उत्तरीय प्रश्न
     if (
-      /^(?:Very\s+Short\s+Answer(?:\s+Questions?)?|VSA(?:\s+Questions?)?|1\s*Mark\s+Questions?|अति\s*लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|अति\s*संक्षिप्त(?:\s*प्रश्न)?|एक\s*अंक\s*(?:वाले\s*)?प्रश्न)$/i.test(str)
+      /^(?:Very\s+Short\s+Answer(?:\s+Questions?)?|VSA(?:\s+Questions?)?|1\s*Mark\s+Questions?|अति\s*लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|अति\s*संक्षिप्त(?:\s*प्रश्न)?|एक\s*अंक\s*(?:वाले\s*)?प्रश्न|धेरै\s*छोटो\s*उत्तर)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -734,7 +738,7 @@ export function identifySectionHeader(line: string): {
 
     // 6. Short Answer Questions / लघु उत्तरीय प्रश्न / संवाद लेखन
     if (
-      /^(?:Short\s+Answer(?:\s+Questions?)?|SA(?:\s+Questions?)?|Short\s+Questions?|लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|संक्षिप्त(?:\s*उत्तर)?(?:\s*प्रश्न)?|लघु\s*प्रश्न|संवाद\s*लेखन)$/i.test(str)
+      /^(?:Short\s+Answer(?:\s+Questions?)?|SA(?:\s+Questions?)?|Short\s+Questions?|लघु(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|संक्षिप्त(?:\s*उत्तर)?(?:\s*प्रश्न)?|लघु\s*प्रश्न|संवाद\s*लेखन|छोटो\s*उत्तर)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -747,9 +751,9 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 7. Long Answer Questions / दीर्घ उत्तरीय प्रश्न / पत्र लेखन / अनुच्छेद लेखन / निबंध लेखन
+    // 7. Long Answer Questions / दीर्घ उत्तरीय प्रश्न / पत्र लेखन / अनुच्छेद लेखन / निबंध लेखन / लेखन
     if (
-      /^(?:Long\s+Answer(?:\s+Questions?)?|LA(?:\s+Questions?)?|Essay(?:\s+Questions?)?|दीर्घ(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|विस्तृत(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|निबंधात्मक(?:\s*प्रश्न)?|दीर्घ\s*प्रश्न|पत्र\s*लेखन|अनुच्छेद\s*लेखन|परिच्छेद\s*लेखन|निबंध\s*लेखन|रचनात्मक\s*लेखन)$/i.test(str)
+      /^(?:Long\s+Answer(?:\s+Questions?)?|LA(?:\s+Questions?)?|Essay(?:\s+Questions?)?|दीर्घ(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|विस्तृत(?:\s*उत्तरीय)?(?:\s*प्रश्न)?|निबंधात्मक(?:\s*प्रश्न)?|दीर्घ\s*प्रश्न|पत्र\s*लेखन|अनुच्छेद\s*लेखन|परिच्छेद\s*लेखन|निबंध\s*लेखन|रचनात्मक\s*लेखन|सिर्जनात्मक\s*लेखन|लेखन|लामो\s*उत्तर)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -778,9 +782,9 @@ export function identifySectionHeader(line: string): {
       };
     }
 
-    // 9. Comprehension / अपठित गद्यांश
+    // 9. Comprehension / अपठित गद्यांश / गद्यांश
     if (
-      /^(?:(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section|Questions?))?|Passage(?:\s+Based)?(?:\s+Questions?)?|अपठित\s*गद्यांश|पठित\s*गद्यांश|गद्यांश(?:\s*पर\s*आधारित)?|अपठित\s*काव्यांश|पद्यांश)$/i.test(str)
+      /^(?:(?:Reading\s+)?Comprehension(?:\s+(?:Passage|Section|Questions?))?|Passage(?:\s+Based)?(?:\s+Questions?)?|अपठित\s*गद्यांश|पठित\s*गद्यांश|गद्यांश(?:\s*पर\s*आधारित)?|अपठित\s*काव्यांश|पद्यांश|बोध|गद्यांश)$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -795,7 +799,7 @@ export function identifySectionHeader(line: string): {
 
     // 10. Fill in the Blanks
     if (
-      /^(?:Fill\s+(?:in\s+)?(?:the\s+)?(?:Blanks?|Blank)|Blanks?)(?:\s+Questions?)?$/i.test(str)
+      /^(?:Fill\s+(?:in\s+)?(?:the\s+)?(?:Blanks?|Blank)|Blanks?|खाली\s*ठाउँ|रिक्त\s*स्थान)(?:\s+Questions?)?$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -810,7 +814,7 @@ export function identifySectionHeader(line: string): {
 
     // 11. Match the Following
     if (
-      /^(?:Match\s+(?:the\s+)?(?:Following|Columns?)|Matching)(?:\s+Questions?)?$/i.test(str)
+      /^(?:Match\s+(?:the\s+)?(?:Following|Columns?)|Matching|जोडा\s*मिलाउनुहोस्|सुमेलित\s*कीजिए)(?:\s+Questions?)?$/i.test(str)
     ) {
       return {
         isSection: true,
@@ -819,6 +823,21 @@ export function identifySectionHeader(line: string): {
         rawHeading: trimmed,
         type: "match_following",
         marksInfo: getResolvedMarks("match_following"),
+        declaredMarks
+      };
+    }
+
+    // 12. Grammar / व्याकरण
+    if (
+      /^(?:Grammar|व्याकरण)(?:\s+(?:Questions?|विभाग|खंड|खण्ड))?$/i.test(str)
+    ) {
+      return {
+        isSection: true,
+        sectionLetter,
+        sectionTitle: finalTitle,
+        rawHeading: trimmed,
+        type: "short_answer",
+        marksInfo: getResolvedMarks("short_answer"),
         declaredMarks
       };
     }
@@ -1088,6 +1107,7 @@ export function parseChapterTest(
     sectionMarks?: { marks: number; negativeMarks?: number; source: string; confidence: number };
     passageId?: string;
     caseId?: string;
+    isSubQuestion?: boolean;
     lines: string[];
     rawBlockLines: string[];
   }
@@ -1703,9 +1723,11 @@ export function parseChapterTest(
       ];
     } else if (isSubjectiveType || resolvedType === "short_answer" || resolvedType === "long_answer" || resolvedType === "very_short_answer" || (!hasOptions && resolvedType !== "assertion_reason")) {
       isSubjective = true;
-      if (candidate.caseId || candidate.sectionType === "case_based") {
+      if (candidate.isSubQuestion || candidate.caseId || candidate.passageId) {
+        resolvedType = "short_answer";
+      } else if (candidate.sectionType === "case_based") {
         resolvedType = "case_based";
-      } else if (candidate.passageId || candidate.sectionType === "comprehension") {
+      } else if (candidate.sectionType === "comprehension") {
         resolvedType = "comprehension";
       } else if (candidate.sectionType === "very_short_answer") {
         resolvedType = "very_short_answer";

@@ -260,5 +260,4 @@ if (typeof window !== "undefined") {
     }
   });
   window.addEventListener("pagehide", handlePageUnloadOrHide);
-  window.addEventListener("beforeunload", handlePageUnloadOrHide);
 }

@@ -421,6 +421,75 @@ export interface ParsedAssessmentQuestion {
   modelAnswer?: string;
   keyPoints?: string[];
   rubric?: string;
+  correctAnswers?: string[];
+  commandWord?: string;
+  evaluationCriteria?: any;
+  scoringMode?: string;
+  parentGroupId?: string;
+  parentGroupType?: string;
+  parseConfidence?: number;
+  reviewStatus?: string;
+}
+
+export type AssessmentCaseStudy = CaseStudy;
+
+export interface TestSectionConfig {
+  id: string;
+  sectionLetter?: string;
+  title: string;
+  sectionType?: string;
+  marksPerQuestion?: number;
+  declaredMarks?: number;
+  calculatedMarks?: number;
+  instructions?: string[];
+}
+
+export interface StudentTestAnswer {
+  questionId: string;
+  questionNumber?: number | string;
+  type: string;
+  studentAnswer: string | string[];
+  marksAwarded: number;
+  maximumMarks: number;
+  feedback?: string;
+  isCorrect?: boolean;
+}
+
+export interface SubjectiveEvaluationResult {
+  questionId?: string;
+  correctness?: "correct" | "partially_correct" | "incorrect" | string;
+  completeness?: string;
+  relevance?: string;
+  conceptualUnderstanding?: string;
+  matchedPoints?: string[];
+  missingPoints?: string[];
+  confidence?: number;
+  needsReview?: boolean;
+  evaluatedAt?: string;
+  marksAwarded: number;
+  maximumMarks?: number;
+  feedback: string;
+  rubricScores?: Record<string, number>;
+  keyPointsCovered?: string[];
+  keyPointsMissed?: string[];
+}
+
+export interface StudentTestAttempt {
+  id: string;
+  testId: string;
+  studentId: string;
+  studentName?: string;
+  startedAt: string;
+  completedAt: string;
+  timeSpentSeconds: number;
+  totalQuestions: number;
+  attemptedQuestions: number;
+  score: number;
+  totalMarks: number;
+  percentage: number;
+  isPassed: boolean;
+  answers: StudentTestAnswer[];
+  subjectiveEvaluations?: Record<string, SubjectiveEvaluationResult>;
 }
 
 export interface TopicPracticeTest {
@@ -431,6 +500,7 @@ export interface TopicPracticeTest {
   hasTest?: boolean;
   hasPracticeTest?: boolean;
   questionCount?: number;
+  passingPercentage?: number;
   classGrade: string;
   subject: string;
   chapterNo: number;
