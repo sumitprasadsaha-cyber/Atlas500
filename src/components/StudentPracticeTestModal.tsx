@@ -56,6 +56,7 @@ import {
   saveTestDraftSync
 } from "../lib/testSessionManager";
 import { testDiagnostics } from "../lib/testDiagnostics";
+import { renderFormattedCorrectAnswer } from "../utils/testAnswerFormatter";
 
 const formatCorrectAnswerForDisplay = (val: unknown): string => {
   if (val === null || val === undefined) return "";
@@ -1758,58 +1759,31 @@ export default function StudentPracticeTestModal({
                           )}
                         </div>
 
-                        {/* Answer Details */}
-                        <div className="text-xs space-y-1.5 pt-1.5 border-t border-slate-200/50 dark:border-slate-800/50">
+                        {/* Answer Details - Review Screen */}
+                        <div className="text-xs sm:text-sm space-y-2 pt-2 border-t border-slate-200/50 dark:border-slate-800/50">
+                          {/* Your Answer */}
                           <div>
-                            <span className="text-slate-500 dark:text-slate-400 font-semibold">Your Answer: </span>
                             {!isAttempted ? (
-                              <span className="text-amber-700 dark:text-amber-400 italic font-bold">None</span>
+                              <p className="text-slate-600 dark:text-slate-400 font-semibold">
+                                Your Answer: <span className="font-normal text-slate-800 dark:text-slate-200">None</span>
+                              </p>
                             ) : (
-                              <span className={`font-bold ${isCorrect ? "text-emerald-700 dark:text-emerald-300" : marksAwarded > 0 ? "text-blue-700 dark:text-blue-300" : "text-rose-700 dark:text-rose-300"}`}>
-                                {userAns}
-                              </span>
+                              <>
+                                <p className="text-slate-600 dark:text-slate-400 font-semibold">Your Answer:</p>
+                                <p className="text-slate-800 dark:text-slate-200 font-normal whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed mt-0.5">
+                                  {userAns}
+                                </p>
+                              </>
                             )}
                           </div>
 
-                          {q.correctAnswer && (
-                            <div className="text-xs">
-                              {formatCorrectAnswerForDisplay(q.correctAnswer).includes("\n") ? (
-                                <div>
-                                  <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Correct Answer / Key:</span>
-                                  <div className="mt-1 font-bold text-emerald-800 dark:text-emerald-200 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                                    {formatCorrectAnswerForDisplay(q.correctAnswer)}
-                                  </div>
-                                </div>
-                              ) : (
-                                <p className="break-words [overflow-wrap:anywhere] leading-relaxed">
-                                  <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Correct Answer / Key: </span>
-                                  <span className="font-bold text-emerald-800 dark:text-emerald-200 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                                    {formatCorrectAnswerForDisplay(q.correctAnswer)}
-                                  </span>
-                                </p>
-                              )}
+                          {/* Correct Answer */}
+                          <div>
+                            <p className="text-slate-600 dark:text-slate-400 font-semibold">Correct Answer:</p>
+                            <div className="text-emerald-600 dark:text-emerald-400 font-normal whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed mt-0.5">
+                              {renderFormattedCorrectAnswer(q.correctAnswer)}
                             </div>
-                          )}
-
-                          {q.modelAnswer && (
-                            <div className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">
-                              <p className="text-[11px] font-bold text-indigo-700 dark:text-indigo-400 uppercase">Model Answer / Key Points:</p>
-                              <p className="text-xs font-medium mt-0.5 whitespace-pre-wrap leading-relaxed">{q.modelAnswer}</p>
-                            </div>
-                          )}
-
-                          {q.rubric && (
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
-                              <span className="font-semibold">Grading Rubric:</span> {q.rubric}
-                            </p>
-                          )}
-
-                          {q.explanation && (
-                            <p className="text-[11px] text-slate-600 dark:text-slate-300 pt-1 leading-relaxed">
-                              <strong className="text-slate-800 dark:text-slate-200">Explanation: </strong>
-                              {q.explanation}
-                            </p>
-                          )}
+                          </div>
                         </div>
                       </div>
                     </React.Fragment>

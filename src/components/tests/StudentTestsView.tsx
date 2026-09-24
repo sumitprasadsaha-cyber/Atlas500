@@ -41,6 +41,7 @@ import { getAllTestAttempts, subscribeToTestAttempts } from "../../utils/assessm
 import { toStableClassId, getAccessibleClassesGrantedToClass } from "../../lib/curriculumAccessService";
 import { loadTestDraft } from "../../lib/testSessionManager";
 import StudentPracticeTestModal from "../StudentPracticeTestModal";
+import { renderFormattedCorrectAnswer } from "../../utils/testAnswerFormatter";
 
 interface StudentTestsViewProps {
   student: Student;
@@ -1281,10 +1282,9 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                     Question-by-Question Solutions
                   </h4>
                   {activeScorecard.questions.map((q: any, qIdx: number) => {
-                    const studentAns = activeScorecard.attempt.userAnswers?.[q.id] || "Not answered";
+                    const studentAns = activeScorecard.attempt.userAnswers?.[q.id];
+                    const isAttempted = Boolean(studentAns && String(studentAns).trim());
                     const isCorrect = studentAns === q.correctAnswer;
-                    const formattedCorrectAns = formatCorrectAnswerForDisplay(q.correctAnswer);
-                    const isMultiLineAns = formattedCorrectAns.includes("\n");
 
                     return (
                       <div key={q.id || qIdx} className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-800">
@@ -1293,39 +1293,37 @@ export const StudentTestsView: React.FC<StudentTestsViewProps> = ({
                             Q{qIdx + 1}. {q.question}
                           </p>
                           <span className={`text-[10px] font-black px-2 py-0.5 rounded-md shrink-0 ${
-                            isCorrect
+                            !isAttempted
+                              ? "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300"
+                              : isCorrect
                               ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
                               : "bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300"
                           }`}>
-                            {isCorrect ? "Correct" : "Incorrect"}
+                            {!isAttempted ? "Not Attempted" : isCorrect ? "Correct" : "Incorrect"}
                           </span>
                         </div>
-                        <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
-                          <p className="break-words [overflow-wrap:anywhere]">
-                            Your Answer: <span className="font-bold text-slate-800 dark:text-slate-200">{studentAns}</span>
-                          </p>
-                          {isMultiLineAns ? (
-                            <div className="pt-0.5">
-                              <span className="text-slate-600 dark:text-slate-400">Correct Answer:</span>
-                              <div className="mt-1 font-bold text-emerald-600 dark:text-emerald-400 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                                {formattedCorrectAns}
-                              </div>
-                            </div>
-                          ) : (
-                            <p className="break-words [overflow-wrap:anywhere] leading-relaxed">
-                              Correct Answer:{" "}
-                              <span className="font-bold text-emerald-600 dark:text-emerald-400 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                                {formattedCorrectAns}
-                              </span>
-                            </p>
-                          )}
-                        </div>
-                        {q.explanation && (
-                          <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-100/80 dark:bg-slate-800/80 p-2.5 rounded-lg mt-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                            <span className="font-bold text-slate-700 dark:text-slate-300">Explanation: </span>
-                            {formatCorrectAnswerForDisplay(q.explanation)}
+                        <div className="text-xs space-y-2 pt-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
+                          <div>
+                            {!isAttempted ? (
+                              <p className="text-slate-600 dark:text-slate-400 font-semibold">
+                                Your Answer: <span className="font-normal text-slate-800 dark:text-slate-200">None</span>
+                              </p>
+                            ) : (
+                              <>
+                                <p className="text-slate-600 dark:text-slate-400 font-semibold">Your Answer:</p>
+                                <p className="text-slate-800 dark:text-slate-200 font-normal whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed mt-0.5">
+                                  {studentAns}
+                                </p>
+                              </>
+                            )}
                           </div>
-                        )}
+                          <div>
+                            <p className="text-slate-600 dark:text-slate-400 font-semibold">Correct Answer:</p>
+                            <div className="text-emerald-600 dark:text-emerald-400 font-normal whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed mt-0.5">
+                              {renderFormattedCorrectAnswer(q.correctAnswer)}
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     );
                   })}
