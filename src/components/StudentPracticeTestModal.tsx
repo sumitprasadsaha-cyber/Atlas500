@@ -19,7 +19,9 @@ import {
   AlertTriangle,
   Info,
   CheckSquare,
-  Square
+  Square,
+  Menu,
+  LayoutGrid
 } from "lucide-react";
 import ImageZoomModal from "./ImageZoomModal";
 import { ParsedAssessmentQuestion, TestAttemptRecord, ComprehensionPassage, CaseStudy, AssessmentTestType, TopicPracticeTest } from "../types";
@@ -871,6 +873,47 @@ export default function StudentPracticeTestModal({
     }
   };
 
+  const [isNavOpen, setIsNavOpen] = useState(false);
+  const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
+  const [navSelectedSubjectName, setNavSelectedSubjectName] = useState<string | null>(null);
+  const [navSelectedSectionId, setNavSelectedSectionId] = useState<string | null>(null);
+
+  const openNavMenu = () => {
+    setNavSelectedSubjectName(activeSubject?.name || null);
+    setNavSelectedSectionId(activeSection?.id || null);
+    setIsNavOpen(true);
+  };
+
+  const handleJumpToQuestion = (qIdx: number) => {
+    if (qIdx >= 0 && qIdx < questions.length) {
+      setCurrentQuestionIdx(qIdx);
+      updateTestDraft({
+        currentQuestionIdx: qIdx,
+        elapsedSeconds: timerSecondsRef.current
+      });
+      modalScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const selectedNavSubject = navigationHierarchy.subjects.find(
+    (s) => s.name.toLowerCase() === (navSelectedSubjectName || activeSubject?.name || "").toLowerCase()
+  ) || activeSubject || navigationHierarchy.subjects[0];
+
+  const selectedNavSection = selectedNavSubject?.sections.find(
+    (sec) => sec.id === (navSelectedSectionId || activeSection?.id)
+  ) || selectedNavSubject?.sections[0];
+
+  const paletteQuestionIndices: number[] = useMemo(() => {
+    if (!questions || questions.length === 0) return [];
+    if (selectedNavSection && selectedNavSubject?.hasMultipleSections) {
+      return selectedNavSection.questionIndices;
+    }
+    if (selectedNavSubject) {
+      return selectedNavSubject.questionIndices;
+    }
+    return questions.map((_, i) => i);
+  }, [questions, selectedNavSection, selectedNavSubject]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/80 backdrop-blur-sm animate-fadeIn overflow-hidden">
       <div className="relative w-full max-w-3xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[92vh] sm:max-h-[90vh] overflow-hidden">
@@ -896,6 +939,20 @@ export default function StudentPracticeTestModal({
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {testStage === "active" && (
+              <button
+                type="button"
+                onClick={openNavMenu}
+                className="h-7 sm:h-8 px-2 sm:px-2.5 bg-white/20 hover:bg-white/30 active:scale-95 text-white font-bold text-xs rounded-xl border border-white/30 flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+                title="Open Exam Navigation Menu & Question Palette"
+              >
+                <Menu className="w-4 h-4" />
+                <span className="hidden sm:inline text-[11px]">Exam Menu</span>
+                <span className="bg-white/25 text-[10px] px-1.5 py-0.5 rounded-full font-black">
+                  {totalAnsweredCount}/{totalQuestionsCount}
+                </span>
+              </button>
+            )}
             <TestTimerDisplay
               isActive={testStage === "active"}
               initialSeconds={initialElapsedSeconds}
@@ -1020,120 +1077,108 @@ export default function StudentPracticeTestModal({
           {/* ACTIVE TEST STAGE */}
           {testStage === "active" && currentQuestion && (
             <div className="space-y-4">
-
-              {/* 1. Subjects Navigation Control (Priority: Multiple Subjects) */}
-              {navigationHierarchy.hasMultipleSubjects && (
-                <div className="p-2 sm:p-2.5 rounded-xl bg-slate-50/90 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-1.5">
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-[10px] sm:text-[11px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                      Subjects
+              
+              {/* Compact Question Navigation Header */}
+              <div className="space-y-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2">
+                  <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                    <span className="text-[11px] sm:text-xs font-extrabold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/80 border border-blue-100 dark:border-blue-900/50 px-2.5 py-1 rounded-lg">
+                      Question {currentQuestionIdx + 1} of {questions.length}
                     </span>
-                    <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">
-                      Tap to switch subjects
-                    </span>
+                    {(activeSection ? activeSection.displayLabel : currentQuestion.sectionTitle) && (
+                      <span className="text-[11px] sm:text-xs font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/80 border border-teal-200 dark:border-teal-800 px-2.5 py-1 rounded-lg">
+                        {activeSection ? activeSection.displayLabel : currentQuestion.sectionTitle}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={openNavMenu}
+                      className="text-[11px] sm:text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800 px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition cursor-pointer"
+                      title="Open Exam Navigation & Question Palette"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>Exam Menu</span>
+                    </button>
                   </div>
-                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
+
+                  <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                    <span className="text-[11px] sm:text-xs font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
+                      {getAssessmentQuestionTypeLabel(currentQuestion.type, false)}
+                    </span>
+                    <span className="text-[11px] sm:text-xs font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 border border-indigo-200 dark:border-indigo-800 px-2.5 py-1 rounded-lg">
+                      {currentQuestion.marks ?? 1} {((currentQuestion.marks ?? 1) === 1) ? "Mark" : "Marks"}
+                    </span>
+                    <div className="text-[11px] sm:text-xs font-extrabold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-2xs">
+                      <span>Answered: <strong className="text-emerald-600 dark:text-emerald-400">{totalAnsweredCount}</strong></span>
+                      <span className="text-slate-300 dark:text-slate-600">|</span>
+                      <span>Not Attempted: <strong className="text-amber-600 dark:text-amber-400">{totalNotAttemptedCount}</strong></span>
+                      <span className="text-slate-300 dark:text-slate-600">|</span>
+                      <span>Total: <strong className="text-blue-600 dark:text-blue-400">{totalQuestionsCount}</strong></span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Priority Navigation: Multiple Subjects */}
+                {navigationHierarchy.hasMultipleSubjects && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto pt-1 pb-0.5 scrollbar-none">
                     {navigationHierarchy.subjects.map((subj) => {
-                      const isActive = activeSubject?.name.toLowerCase() === subj.name.toLowerCase();
-                      const isComplete = subj.isFullyAnswered;
-
-                      let btnStyle = "";
-                      if (isActive) {
-                        btnStyle = isComplete
-                          ? "bg-emerald-600 text-white border-emerald-600 shadow-sm ring-2 ring-emerald-500/30"
-                          : "bg-blue-600 text-white border-blue-600 shadow-sm ring-2 ring-blue-500/30";
-                      } else {
-                        btnStyle = isComplete
-                          ? "bg-emerald-50 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
-                          : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800";
-                      }
-
+                      const isCurrent = activeSubject?.name.toLowerCase() === subj.name.toLowerCase();
                       return (
                         <button
                           key={subj.name}
                           type="button"
                           onClick={() => handleJumpToSubject(subj)}
-                          className={`text-xs sm:text-sm font-bold py-1.5 px-3 rounded-xl border transition-all cursor-pointer flex items-center gap-1.5 ${btnStyle}`}
-                          title={`${subj.name} — ${subj.answeredCount}/${subj.totalCount} answered`}
+                          className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                            isCurrent
+                              ? "bg-blue-600 text-white shadow-xs"
+                              : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
+                          }`}
                         >
-                          {isComplete && (
-                            <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${isActive ? "text-white" : "text-emerald-600 dark:text-emerald-400"}`} />
+                          <span>{subj.name}</span>
+                          <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-semibold ${
+                            isCurrent ? "bg-white/20 text-white" : "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                          }`}>
+                            {subj.answeredCount}/{subj.totalCount}
+                          </span>
+                          {subj.isFullyAnswered && (
+                            <CheckCircle2 className={`w-3 h-3 ${isCurrent ? "text-emerald-300" : "text-emerald-600 dark:text-emerald-400"}`} />
                           )}
-                          <span>{subj.name} — {subj.answeredCount}/{subj.totalCount} answered</span>
                         </button>
                       );
                     })}
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* 2. Section Navigation Control (Priority: Multiple Subjects + Sections OR Single Subject + Multiple Sections) */}
-              {showSectionNavigation && activeSubject?.sections && (
-                <div className="p-2 sm:p-2.5 rounded-xl bg-slate-50/70 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-700/70 space-y-1.5">
-                  {navigationHierarchy.hasMultipleSubjects && (
-                    <div className="flex items-center justify-between px-1">
-                      <span className="text-[10px] sm:text-[11px] font-black uppercase tracking-wider text-teal-700 dark:text-teal-300">
-                        {activeSubject.name} Sections
-                      </span>
-                      <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">
-                        Sections within {activeSubject.name}
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                {/* Priority Navigation: Single Subject + Multiple Sections */}
+                {navigationHierarchy.singleSubjectHasMultipleSections && activeSubject && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto pt-1 pb-0.5 scrollbar-none">
                     {activeSubject.sections.map((sec) => {
-                      const isActive = activeSection?.id === sec.id;
-                      const isComplete = sec.isFullyAnswered;
-
-                      let btnStyle = "";
-                      if (isActive) {
-                        btnStyle = isComplete
-                          ? "bg-teal-600 text-white border-teal-600 shadow-sm ring-2 ring-teal-500/30"
-                          : "bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 border-slate-900 dark:border-slate-100 shadow-sm ring-2 ring-slate-400/30";
-                      } else {
-                        btnStyle = isComplete
-                          ? "bg-teal-50/80 dark:bg-teal-950/40 border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/40"
-                          : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800";
-                      }
-
+                      const isCurrent = activeSection?.id === sec.id;
                       return (
                         <button
                           key={sec.id}
                           type="button"
                           onClick={() => handleJumpToSection(sec)}
-                          className={`text-[11px] sm:text-xs font-bold py-1.5 px-2.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1.5 ${btnStyle}`}
-                          title={`${sec.displayLabel} — ${sec.answeredCount}/${sec.totalCount} answered`}
+                          className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                            isCurrent
+                              ? "bg-teal-600 text-white shadow-xs"
+                              : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
+                          }`}
                         >
-                          {isComplete && (
-                            <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${isActive ? "text-white dark:text-slate-900" : "text-teal-600 dark:text-teal-400"}`} />
+                          <span>{sec.displayLabel}</span>
+                          <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-semibold ${
+                            isCurrent ? "bg-white/20 text-white" : "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                          }`}>
+                            {sec.answeredCount}/{sec.totalCount}
+                          </span>
+                          {sec.isFullyAnswered && (
+                            <CheckCircle2 className={`w-3 h-3 ${isCurrent ? "text-emerald-300" : "text-emerald-600 dark:text-emerald-400"}`} />
                           )}
-                          <span>{sec.displayLabel} — {sec.answeredCount}/{sec.totalCount} answered</span>
                         </button>
                       );
                     })}
                   </div>
-                </div>
-              )}
-              
-              {/* Question Navigation Header - Wrapped to prevent overflow */}
-              <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
-                <span className="text-[11px] sm:text-xs font-extrabold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/80 border border-blue-100 dark:border-blue-900/50 px-2.5 py-1 rounded-lg">
-                  Question {currentQuestionIdx + 1} of {questions.length}
-                </span>
-                {(activeSection ? activeSection.displayLabel : currentQuestion.sectionTitle) && (
-                  <span className="text-[11px] sm:text-xs font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/80 border border-teal-200 dark:border-teal-800 px-2.5 py-1 rounded-lg">
-                    {activeSection ? activeSection.displayLabel : currentQuestion.sectionTitle}
-                  </span>
                 )}
-                <span className="text-[11px] sm:text-xs font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
-                  {getAssessmentQuestionTypeLabel(currentQuestion.type, false)}
-                </span>
-                <span className="text-[11px] sm:text-xs font-black text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/80 border border-indigo-200 dark:border-indigo-800 px-2.5 py-1 rounded-lg">
-                  {currentQuestion.marks ?? 1} {((currentQuestion.marks ?? 1) === 1) ? "Mark" : "Marks"}
-                </span>
-                <span className="text-[11px] sm:text-xs font-extrabold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-lg">
-                  Answered: {totalAnsweredCount} | Not Attempted: {totalNotAttemptedCount} | Total: {totalQuestionsCount}
-                </span>
               </div>
 
               {restoredFromDraft && (
@@ -1529,7 +1574,8 @@ export default function StudentPracticeTestModal({
                   </button>
                 ) : (
                   <button
-                    onClick={() => handleSubmitTest(false)}
+                    type="button"
+                    onClick={() => setIsSubmitConfirmOpen(true)}
                     className="h-11 sm:h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl shadow-md shadow-emerald-900/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   >
                     <Send className="w-4 h-4" />
@@ -1804,6 +1850,435 @@ export default function StudentPracticeTestModal({
           )}
 
         </div>
+
+        {/* EXAM NAVIGATION DRAWER / PANEL */}
+        {isNavOpen && testStage === "active" && (
+          <div className="absolute inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex justify-end animate-fadeIn">
+            {/* Backdrop click to dismiss */}
+            <div
+              className="flex-1 cursor-pointer"
+              onClick={() => setIsNavOpen(false)}
+              aria-label="Close navigation overlay"
+            />
+            {/* Slide-over panel */}
+            <div className="w-full sm:w-[380px] max-w-full bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 flex flex-col h-full shadow-2xl z-10 animate-in slide-in-from-right duration-200 overflow-hidden">
+              {/* Drawer Header */}
+              <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800 shrink-0">
+                <div className="flex items-center gap-2">
+                  <LayoutGrid className="w-4 h-4 text-blue-400 shrink-0" />
+                  <div>
+                    <h3 className="text-xs sm:text-sm font-bold leading-tight">Exam Navigation</h3>
+                    <p className="text-[10px] text-slate-400">
+                      {totalAnsweredCount} of {totalQuestionsCount} Answered
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsNavOpen(false)}
+                  className="w-7 h-7 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition cursor-pointer"
+                  title="Close Exam Menu"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Status Summary Banner */}
+              <div className="px-3.5 py-2 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between text-[11px] font-bold shrink-0">
+                <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                  Answered: {totalAnsweredCount}
+                </span>
+                <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-600 inline-block"></span>
+                  Not Attempted: {totalNotAttemptedCount}
+                </span>
+                <span className="text-blue-700 dark:text-blue-400">
+                  Total: {totalQuestionsCount}
+                </span>
+              </div>
+
+              {/* Drawer Content */}
+              <div className="flex-1 overflow-y-auto p-3.5 sm:p-4 space-y-4 scrollbar-thin">
+                
+                {/* 1. Multiple Subjects: Primary Navigation Level */}
+                {navigationHierarchy.hasMultipleSubjects && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between px-0.5">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                        Subjects
+                      </span>
+                      <span className="text-[10px] font-semibold text-slate-400">
+                        Select subject
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {navigationHierarchy.subjects.map((subj) => {
+                        const isSelected = selectedNavSubject?.name.toLowerCase() === subj.name.toLowerCase();
+                        const isCurrentActive = activeSubject?.name.toLowerCase() === subj.name.toLowerCase();
+
+                        return (
+                          <button
+                            key={subj.name}
+                            type="button"
+                            onClick={() => {
+                              setNavSelectedSubjectName(subj.name);
+                              if (subj.sections.length > 0) {
+                                setNavSelectedSectionId(subj.sections[0].id);
+                              }
+                            }}
+                            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                              isSelected
+                                ? "bg-blue-50 dark:bg-blue-950/80 border-blue-500 text-blue-900 dark:text-blue-100 ring-2 ring-blue-500/20 shadow-xs"
+                                : "bg-white dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-slate-300"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-1 w-full">
+                              <span className="text-xs font-black uppercase tracking-wide truncate">{subj.name}</span>
+                              {subj.isFullyAnswered ? (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                              ) : isCurrentActive ? (
+                                <span className="text-[8px] font-black uppercase px-1 py-0.2 rounded bg-blue-100 dark:bg-blue-900/80 text-blue-700 dark:text-blue-300">
+                                  Current
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mt-1">
+                              {subj.answeredCount}/{subj.totalCount} answered
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Subject + Section Hierarchy and Question Grids */}
+                <div className="space-y-3 pt-0.5">
+                  {/* Subject Overview Card */}
+                  <div className="p-3 bg-gradient-to-r from-slate-100 to-slate-50 dark:from-slate-800 dark:to-slate-850 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-900 dark:text-slate-100">
+                          {selectedNavSubject.name}
+                        </span>
+                        {selectedNavSubject.isFullyAnswered && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
+                            <CheckCircle2 className="w-3 h-3" /> Completed
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs font-bold text-slate-600 dark:text-slate-300 mt-0.5">
+                        {selectedNavSubject.answeredCount}/{selectedNavSubject.totalCount} answered
+                      </p>
+                    </div>
+                    {navigationHierarchy.hasMultipleSubjects && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleJumpToSubject(selectedNavSubject);
+                          setIsNavOpen(false);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold transition cursor-pointer shadow-xs"
+                      >
+                        Jump to Subject
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Sections List with direct Question-Number Navigation */}
+                  {selectedNavSubject.hasMultipleSections ? (
+                    <div className="space-y-3">
+                      {selectedNavSubject.sections.map((sec) => (
+                        <div key={sec.id} className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
+                                {sec.displayLabel}
+                              </span>
+                              {sec.isFullyAnswered && (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                              )}
+                            </div>
+                            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 shrink-0">
+                              {sec.answeredCount}/{sec.totalCount} answered
+                            </span>
+                          </div>
+
+                          {/* Question Number Palette for this section */}
+                          <div className="grid grid-cols-5 gap-2">
+                            {sec.questionIndices.map((qIdx) => {
+                              const q = questions[qIdx];
+                              if (!q) return null;
+                              const isAnswered = isQuestionAnswered(q.id);
+                              const isCurrent = qIdx === currentQuestionIdx;
+
+                              let btnClass = "";
+                              if (isCurrent) {
+                                btnClass = isAnswered
+                                  ? "bg-emerald-600 text-white font-black ring-2 ring-blue-500 ring-offset-1 border-emerald-600 scale-105 shadow-md"
+                                  : "bg-blue-600 text-white font-black ring-2 ring-blue-400 ring-offset-1 border-blue-600 scale-105 shadow-md";
+                              } else if (isAnswered) {
+                                btnClass = "bg-emerald-500 dark:bg-emerald-600 text-white font-bold border-emerald-600 hover:bg-emerald-600 shadow-2xs";
+                              } else {
+                                btnClass = "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold border-slate-300 dark:border-slate-600 hover:border-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/60";
+                              }
+
+                              return (
+                                <button
+                                  key={q.id || qIdx}
+                                  type="button"
+                                  onClick={() => {
+                                    handleJumpToQuestion(qIdx);
+                                    setIsNavOpen(false);
+                                  }}
+                                  className={`h-9 rounded-lg border text-xs flex items-center justify-center transition-all cursor-pointer ${btnClass}`}
+                                  title={`Question ${qIdx + 1}${isAnswered ? " (Answered)" : " (Not Attempted)"}${isCurrent ? " - Current" : ""}`}
+                                >
+                                  {qIdx + 1}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                          Question Palette
+                        </span>
+                        <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                          {selectedNavSubject.answeredCount}/{selectedNavSubject.totalCount} answered
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-5 gap-2">
+                        {selectedNavSubject.questionIndices.map((qIdx) => {
+                          const q = questions[qIdx];
+                          if (!q) return null;
+                          const isAnswered = isQuestionAnswered(q.id);
+                          const isCurrent = qIdx === currentQuestionIdx;
+
+                          let btnClass = "";
+                          if (isCurrent) {
+                            btnClass = isAnswered
+                              ? "bg-emerald-600 text-white font-black ring-2 ring-blue-500 ring-offset-1 border-emerald-600 scale-105 shadow-md"
+                              : "bg-blue-600 text-white font-black ring-2 ring-blue-400 ring-offset-1 border-blue-600 scale-105 shadow-md";
+                          } else if (isAnswered) {
+                            btnClass = "bg-emerald-500 dark:bg-emerald-600 text-white font-bold border-emerald-600 hover:bg-emerald-600 shadow-2xs";
+                          } else {
+                            btnClass = "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold border-slate-300 dark:border-slate-600 hover:border-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/60";
+                          }
+
+                          return (
+                            <button
+                              key={q.id || qIdx}
+                              type="button"
+                              onClick={() => {
+                                handleJumpToQuestion(qIdx);
+                                setIsNavOpen(false);
+                              }}
+                              className={`h-9 rounded-lg border text-xs flex items-center justify-center transition-all cursor-pointer ${btnClass}`}
+                              title={`Question ${qIdx + 1}${isAnswered ? " (Answered)" : " (Not Attempted)"}${isCurrent ? " - Current" : ""}`}
+                            >
+                              {qIdx + 1}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Palette Visual Legend */}
+                  <div className="pt-2.5 pb-1 border-t border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-[10px] font-semibold text-slate-600 dark:text-slate-400">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded bg-emerald-500 inline-block shrink-0"></span>
+                      Answered
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 inline-block shrink-0"></span>
+                      Not Attempted
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded bg-blue-600 ring-2 ring-blue-400 inline-block shrink-0"></span>
+                      Current Question
+                    </span>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Drawer Footer */}
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsNavOpen(false);
+                    setIsSubmitConfirmOpen(true);
+                  }}
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-xs"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Submit Test</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsNavOpen(false)}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                >
+                  Close Menu
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* SUBMISSION STATUS CONFIRMATION MODAL */}
+        {isSubmitConfirmOpen && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+            <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[90vh] overflow-hidden">
+              {/* Header */}
+              <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-700 text-white flex items-center justify-between shrink-0 shadow-md">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center border border-white/20">
+                    <Send className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-bold text-white">Exam Submission Status</h3>
+                    <p className="text-[11px] text-blue-100">Review your progress before final submission</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsSubmitConfirmOpen(false)}
+                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
+                {/* Global Stats 3-column cards */}
+                <div className="grid grid-cols-3 gap-2 sm:gap-3 text-center">
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/80 rounded-xl">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Answered</p>
+                    <p className="text-xl sm:text-2xl font-black text-emerald-700 dark:text-emerald-300 mt-0.5">{totalAnsweredCount}</p>
+                  </div>
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 rounded-xl">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">Not Attempted</p>
+                    <p className="text-xl sm:text-2xl font-black text-amber-700 dark:text-amber-300 mt-0.5">{totalNotAttemptedCount}</p>
+                  </div>
+                  <div className="p-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/80 rounded-xl">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400">Total</p>
+                    <p className="text-xl sm:text-2xl font-black text-blue-700 dark:text-blue-300 mt-0.5">{totalQuestionsCount}</p>
+                  </div>
+                </div>
+
+                {/* Notice / Warning Message */}
+                {totalNotAttemptedCount > 0 ? (
+                  <div className="p-3.5 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 rounded-xl text-amber-900 dark:text-amber-200 text-xs flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <div className="leading-relaxed">
+                      <span className="font-bold">You have {totalNotAttemptedCount} unattempted question{totalNotAttemptedCount > 1 ? "s" : ""}. </span>
+                      Unattempted questions receive 0 marks. You can return to review your questions or proceed to submit.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-700 rounded-xl text-emerald-900 dark:text-emerald-200 text-xs flex items-center gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <div className="font-semibold leading-relaxed">
+                      All {totalQuestionsCount} questions have been answered. You are ready to complete your submission!
+                    </div>
+                  </div>
+                )}
+
+                {/* Detailed breakdown if multiple subjects or sections exist */}
+                {navigationHierarchy.hasMultipleSubjects ? (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                      Subject-Wise Progress
+                    </h4>
+                    <div className="space-y-1.5">
+                      {navigationHierarchy.subjects.map((subj) => {
+                        const unattempted = subj.totalCount - subj.answeredCount;
+                        return (
+                          <div
+                            key={subj.name}
+                            className="p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs"
+                          >
+                            <span className="font-bold text-slate-800 dark:text-slate-200 uppercase">{subj.name}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{subj.answeredCount} answered</span>
+                              <span className="text-slate-400">•</span>
+                              <span className="text-amber-600 dark:text-amber-400 font-semibold">{unattempted} not attempted</span>
+                              {subj.isFullyAnswered ? (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 ml-1" />
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : navigationHierarchy.singleSubjectHasMultipleSections && activeSubject ? (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                      Section-Wise Progress
+                    </h4>
+                    <div className="space-y-1.5">
+                      {activeSubject.sections.map((sec) => {
+                        const unattempted = sec.totalCount - sec.answeredCount;
+                        return (
+                          <div
+                            key={sec.id}
+                            className="p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs"
+                          >
+                            <span className="font-bold text-slate-800 dark:text-slate-200 truncate pr-2">{sec.displayLabel}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{sec.answeredCount} answered</span>
+                              <span className="text-slate-400">•</span>
+                              <span className="text-amber-600 dark:text-amber-400 font-semibold">{unattempted} not attempted</span>
+                              {sec.isFullyAnswered ? (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 ml-1" />
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Footer Buttons */}
+              <div className="p-3.5 sm:p-4 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsSubmitConfirmOpen(false)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 text-xs font-bold hover:bg-slate-50 dark:hover:bg-slate-800 transition cursor-pointer"
+                >
+                  Review Questions
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSubmitConfirmOpen(false);
+                    handleSubmitTest(false);
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider shadow-md shadow-emerald-900/20 transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Confirm & Submit Test</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
 
