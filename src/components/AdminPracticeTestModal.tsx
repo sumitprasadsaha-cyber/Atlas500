@@ -78,6 +78,7 @@ interface AdminPracticeTestModalProps {
   topicNoteId?: string;
   testType?: AssessmentTestType;
   onPracticeTestChanged?: () => void;
+  onSaveSuccess?: (savedTest: TopicPracticeTest) => void;
 }
 
 const SAMPLE_TEST_TEXT = SAMPLE_QUESTION_PAPER;
@@ -99,12 +100,22 @@ export default function AdminPracticeTestModal({
   noteId,
   topicNoteId,
   testType,
-  onPracticeTestChanged
+  onPracticeTestChanged,
+  onSaveSuccess
 }: AdminPracticeTestModalProps) {
   const effectiveTestType: AssessmentTestType = testType || "TOPIC";
   const effectiveChapterNo = chapterNo || 0;
   const effectiveChapterName = chapterName || "";
   const effectiveTopicName = topicName || (effectiveTestType === "SUBJECT" ? `${subject} Subject Test` : `${effectiveChapterName} Chapter Test`);
+
+  const [currentTestId, setCurrentTestId] = useState<string | undefined>(testId);
+  const [isNew, setIsNew] = useState<boolean>(!!isNewTest);
+  const isSavingRef = useRef(false);
+
+  useEffect(() => {
+    setCurrentTestId(testId);
+    setIsNew(!!isNewTest);
+  }, [testId, isNewTest]);
 
   const [activeTab, setActiveTab] = useState<"editor" | "preview" | "attempts">("editor");
   const [rawText, setRawText] = useState("");
@@ -126,17 +137,17 @@ export default function AdminPracticeTestModal({
   const [deleteToast, setDeleteToast] = useState<string | null>(null);
 
   const autoTestNumber = useMemo(() => {
-    if (savedTest && typeof savedTest.testNumber === "number" && savedTest.testNumber > 0 && !isNewTest) {
+    if (savedTest && typeof savedTest.testNumber === "number" && savedTest.testNumber > 0 && !isNew) {
       return savedTest.testNumber;
     }
     if (effectiveTestType === "CHAPTER") {
-      return getNextChapterTestNumber(classGrade, subject, effectiveChapterNo, isNewTest ? undefined : (testId || savedTest?.id));
+      return getNextChapterTestNumber(classGrade, subject, effectiveChapterNo, isNew ? undefined : (currentTestId || testId || savedTest?.id));
     }
     if (effectiveTestType === "SUBJECT") {
-      return getNextSubjectTestNumber(classGrade, subject, isNewTest ? undefined : (testId || savedTest?.id));
+      return getNextSubjectTestNumber(classGrade, subject, isNew ? undefined : (currentTestId || testId || savedTest?.id));
     }
     return 1;
-  }, [savedTest, isNewTest, effectiveTestType, classGrade, subject, effectiveChapterNo, testId]);
+  }, [savedTest, isNew, effectiveTestType, classGrade, subject, effectiveChapterNo, currentTestId, testId]);
 
   const defaultTitle = useMemo(() => {
     if (effectiveTestType === "SUBJECT") return generateDefaultSubjectTestTitle(subject, autoTestNumber);
@@ -174,7 +185,8 @@ export default function AdminPracticeTestModal({
 
     const loadData = async () => {
       try {
-        if (isNewTest) {
+        const effectiveId = currentTestId || testId;
+        if (isNew && !effectiveId && !savedTest) {
           if (isMounted) {
             setSavedTest(null);
             setRawText("");
@@ -196,9 +208,9 @@ export default function AdminPracticeTestModal({
           effectiveTopicName,
           effectiveTestType,
           { forceFresh: true },
-          testId
+          effectiveId
         );
-        if (isMounted && testFromDb) {
+        if (isMounted && testFromDb && Array.isArray(testFromDb.questions) && testFromDb.questions.length > 0) {
           setSavedTest(testFromDb);
           setRawText(testFromDb.rawText || "");
           setTestTitle(testFromDb.title || "");
@@ -208,7 +220,20 @@ export default function AdminPracticeTestModal({
           setInstructions(testFromDb.instructions ?? "");
           setMaxAttempts(testFromDb.maxAttempts ?? "");
           setValidationSuccess(`Practice Test loaded: ${testFromDb.questions.length} questions available.`);
-        } else if (isMounted) {
+        } else if (isMounted && effectiveId) {
+          const syncTest = getPracticeTestByIdSync(effectiveId);
+          if (syncTest && Array.isArray(syncTest.questions) && syncTest.questions.length > 0) {
+            setSavedTest(syncTest);
+            setRawText(syncTest.rawText || "");
+            setTestTitle(syncTest.title || "");
+            setDurationMinutes(syncTest.durationMinutes ?? syncTest.duration_minutes ?? "");
+            setTotalMarks(syncTest.totalMarks ?? "");
+            setPassingMarks(syncTest.passingMarks ?? "");
+            setInstructions(syncTest.instructions ?? "");
+            setMaxAttempts(syncTest.maxAttempts ?? "");
+            setValidationSuccess(`Practice Test loaded: ${syncTest.questions.length} questions available.`);
+          }
+        } else if (isMounted && !savedTest) {
           setSavedTest(null);
           setRawText("");
           setTestTitle("");
@@ -277,7 +302,7 @@ export default function AdminPracticeTestModal({
       isMounted = false;
       unsubscribeAttempts();
     };
-  }, [isOpen, testId, isNewTest, classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType]);
+  }, [isOpen, testId, currentTestId, isNew, isNewTest, classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType]);
 
   const selectedTopicAttempts = useMemo(() => {
     const targetIds = new Set<string>();
@@ -392,8 +417,64 @@ export default function AdminPracticeTestModal({
     setValidationSuccess(null);
   };
 
+  const handleParseAndPreview = () => {
+    setValidationErrorMsg([]);
+    setValidationSuccess(null);
+
+    if (!rawText.trim()) {
+      setValidationErrorMsg(["Please paste or enter question paper text to parse."]);
+      return;
+    }
+
+    const parseRes = parseAssessmentText(rawText, {
+      classGrade,
+      subject,
+      chapterNo: effectiveChapterNo,
+      chapterName: effectiveChapterName,
+      topicName: effectiveTopicName
+    });
+
+    if (!parseRes.success || parseRes.questions.length === 0) {
+      setValidationErrorMsg(
+        parseRes.errors.length > 0
+          ? parseRes.errors
+          : ["Failed to parse any valid questions from text."]
+      );
+      return;
+    }
+
+    const previewDoc: TopicPracticeTest = {
+      id: currentTestId || (testId || savedTest?.id) || buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType),
+      testId: currentTestId || (testId || savedTest?.id),
+      classGrade,
+      subject,
+      chapterNo: effectiveChapterNo,
+      chapterName: effectiveChapterName,
+      topicName: effectiveTopicName,
+      testType: effectiveTestType,
+      title: testTitle.trim() || defaultTitle,
+      durationMinutes: durationMinutes !== "" ? Number(durationMinutes) : undefined,
+      totalMarks: totalMarks !== "" ? Number(totalMarks) : undefined,
+      passingMarks: passingMarks !== "" ? Number(passingMarks) : undefined,
+      instructions: instructions.trim() || undefined,
+      maxAttempts: maxAttempts !== "" ? Number(maxAttempts) : undefined,
+      rawText,
+      questions: parseRes.questions,
+      passages: parseRes.passages,
+      cases: (parseRes as any).cases,
+      groups: (parseRes as any).groups,
+      sections: (parseRes as any).sections,
+      createdAt: savedTest?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      uploadedBy: "Admin"
+    };
+
+    setSavedTest(previewDoc);
+    setActiveTab("preview");
+  };
+
   const handleValidateAndSave = async () => {
-    if (isSaving) return; // Prevent duplicate submissions
+    if (isSavingRef.current || isSaving) return; // Prevent duplicate submissions
 
     setValidationErrorMsg([]);
     setValidationSuccess(null);
@@ -416,8 +497,9 @@ export default function AdminPracticeTestModal({
     }
 
     try {
+      isSavingRef.current = true;
       setIsSaving(true);
-      const targetId = isNewTest ? undefined : (testId || savedTest?.id);
+      const targetId = isNew ? undefined : (currentTestId || testId || savedTest?.id);
       const res = await saveTopicPracticeTest(
         {
           id: targetId,
@@ -448,39 +530,74 @@ export default function AdminPracticeTestModal({
 
       if (res.success) {
         const resultingTestId = (res as any).testId || targetId;
-        const freshTest = (resultingTestId ? getPracticeTestByIdSync(resultingTestId) : null) || {
-          id: resultingTestId || buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType),
-          classGrade,
-          subject,
-          chapterNo: effectiveChapterNo,
-          chapterName: effectiveChapterName,
-          topicName: effectiveTopicName,
-          testType: effectiveTestType,
-          title: testTitle.trim() || defaultTitle,
-          durationMinutes: durationMinutes !== "" ? Number(durationMinutes) : undefined,
-          totalMarks: totalMarks !== "" ? Number(totalMarks) : undefined,
-          passingMarks: passingMarks !== "" ? Number(passingMarks) : undefined,
-          instructions: instructions.trim() || undefined,
-          maxAttempts: maxAttempts !== "" ? Number(maxAttempts) : undefined,
-          rawText,
-          questions: parseRes.questions,
-          passages: parseRes.passages,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          uploadedBy: "Admin"
-        };
-        setSavedTest(freshTest);
+        if (resultingTestId) {
+          setCurrentTestId(resultingTestId);
+          setIsNew(false);
+        }
+
+        // Sequence: Database persistence confirmed -> Stored Questions populated from persisted data -> Saving state cleared
+        let persistedTest = resultingTestId
+          ? await getAssessmentPracticeTest(
+              classGrade,
+              subject,
+              effectiveChapterNo,
+              effectiveTopicName,
+              effectiveTestType,
+              { forceFresh: true },
+              resultingTestId
+            )
+          : null;
+
+        if (!persistedTest || !Array.isArray(persistedTest.questions) || persistedTest.questions.length === 0) {
+          persistedTest = resultingTestId ? getPracticeTestByIdSync(resultingTestId) : null;
+        }
+
+        const finalSavedTest: TopicPracticeTest = (persistedTest && Array.isArray(persistedTest.questions) && persistedTest.questions.length > 0)
+          ? persistedTest
+          : {
+              id: resultingTestId || buildAssessmentTestId(classGrade, subject, effectiveChapterNo, effectiveTopicName, effectiveTestType),
+              testId: resultingTestId,
+              classGrade,
+              subject,
+              chapterNo: effectiveChapterNo,
+              chapterName: effectiveChapterName,
+              topicName: effectiveTopicName,
+              testType: effectiveTestType,
+              title: testTitle.trim() || defaultTitle,
+              durationMinutes: durationMinutes !== "" ? Number(durationMinutes) : undefined,
+              totalMarks: totalMarks !== "" ? Number(totalMarks) : undefined,
+              passingMarks: passingMarks !== "" ? Number(passingMarks) : undefined,
+              instructions: instructions.trim() || undefined,
+              maxAttempts: maxAttempts !== "" ? Number(maxAttempts) : undefined,
+              rawText,
+              questions: parseRes.questions,
+              passages: parseRes.passages,
+              cases: (parseRes as any).cases,
+              groups: (parseRes as any).groups,
+              sections: (parseRes as any).sections,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              uploadedBy: "Admin"
+            };
+
+        setSavedTest(finalSavedTest);
 
         const typeCounts: Record<string, number> = {};
-        freshTest.questions.forEach((q) => {
+        (finalSavedTest.questions || []).forEach((q) => {
           const label = getQuestionTypeDisplayName(q.type, !!(q.passageId || q.caseId));
           typeCounts[label] = (typeCounts[label] || 0) + 1;
         });
         const breakdownParts = Object.entries(typeCounts).map(([label, cnt]) => `${cnt} ${label}`);
 
         setValidationSuccess(
-          `Assessment saved successfully. Total ${freshTest.questions.length} Questions (${breakdownParts.join(", ")}).`
+          `Assessment saved successfully. Total ${finalSavedTest.questions?.length || 0} Questions (${breakdownParts.join(", ")}).`
         );
+
+        if (onSaveSuccess) {
+          try {
+            onSaveSuccess(finalSavedTest);
+          } catch {}
+        }
 
         notifyPracticeTestChanged();
       } else {
@@ -497,6 +614,7 @@ export default function AdminPracticeTestModal({
         err.message || "An unexpected error occurred. Please try again."
       ]);
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   };

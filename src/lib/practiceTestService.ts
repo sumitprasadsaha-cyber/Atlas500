@@ -23,6 +23,7 @@ import {
 import { isPracticeTestActive } from "./testSessionManager";
 
 const TESTS_CACHE_KEY = "tuition_topic_practice_tests_bank";
+const FULL_TEST_STORAGE_PREFIX = "tuition_practice_test_full__";
 const SYNC_QUEUE_KEY = "tuition_practice_tests_sync_queue";
 const PRACTICE_TESTS_BUCKET = "academy-connect-files";
 const PRACTICE_TESTS_FILE_PATH = "practice_tests/test_bank.json";
@@ -34,7 +35,39 @@ const IDB_SYNC_QUEUE_STORE = "syncQueue";
 const MAX_SYNC_RETRIES = 3;
 const MAX_LOCAL_STORAGE_ITEM_BYTES = 50 * 1024;
 
-let memoryTestBank: Record<string, TopicPracticeTest> = {};
+export function loadFullTestsFromLocalStorage(): Record<string, TopicPracticeTest> {
+  if (typeof window === "undefined" || !window.localStorage) return {};
+  const bank: Record<string, TopicPracticeTest> = {};
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key && key.startsWith(FULL_TEST_STORAGE_PREFIX)) {
+        try {
+          const raw = window.localStorage.getItem(key);
+          if (raw) {
+            const test = JSON.parse(raw) as TopicPracticeTest;
+            if (test && (test.id || (test as any).testId)) {
+              const testId = test.id || (test as any).testId;
+              if (!test.isDeleted && !(test as any).deleted) {
+                bank[testId] = test;
+                if ((test as any).testId && (test as any).testId !== testId) {
+                  bank[(test as any).testId] = test;
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignore individual item parse error
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[PracticeTestService] Error loading full tests from localStorage:", err);
+  }
+  return bank;
+}
+
+let memoryTestBank: Record<string, TopicPracticeTest> = typeof window !== "undefined" ? loadFullTestsFromLocalStorage() : {};
 let memoryQuestionsCache: Map<string, ParsedAssessmentQuestion[]> = new Map();
 let inFlightTestFetches: Map<string, Promise<TopicPracticeTest | null>> = new Map();
 let inFlightSubjectPreloads: Set<string> = new Set();
@@ -1202,6 +1235,22 @@ export function saveLocalTestBank(bank: Record<string, TopicPracticeTest>, optio
     }
 
     safeLocalStorageSetItem(TESTS_CACHE_KEY, JSON.stringify(trimmedMap));
+
+    // Also persist full test documents containing stored questions
+    for (const key of Object.keys(bank)) {
+      const test = bank[key];
+      if (!test || test.isDeleted || (test as any).deleted) continue;
+      if (Array.isArray(test.questions) && test.questions.length > 0) {
+        try {
+          safeLocalStorageSetItem(`${FULL_TEST_STORAGE_PREFIX}${test.id}`, JSON.stringify(test));
+          if ((test as any).testId && (test as any).testId !== test.id) {
+            safeLocalStorageSetItem(`${FULL_TEST_STORAGE_PREFIX}${(test as any).testId}`, JSON.stringify(test));
+          }
+        } catch {
+          // Ignore storage quota warnings
+        }
+      }
+    }
   } catch (err: any) {
     console.warn("[PracticeTestService] Error saving metadata:", err);
   } finally {
@@ -1213,12 +1262,26 @@ export function saveLocalTestBank(bank: Record<string, TopicPracticeTest>, optio
 
 export function updateLocalTopicCache(test: TopicPracticeTest): void {
   memoryTestBank[test.id] = test;
+  if ((test as any).testId) {
+    memoryTestBank[(test as any).testId] = test;
+  }
+  if (Array.isArray(test.questions) && test.questions.length > 0 && typeof window !== "undefined") {
+    try {
+      safeLocalStorageSetItem(`${FULL_TEST_STORAGE_PREFIX}${test.id}`, JSON.stringify(test));
+      if ((test as any).testId && (test as any).testId !== test.id) {
+        safeLocalStorageSetItem(`${FULL_TEST_STORAGE_PREFIX}${(test as any).testId}`, JSON.stringify(test));
+      }
+    } catch {}
+  }
   saveLocalTestBank(memoryTestBank);
   syncTestBankToStorage(memoryTestBank).catch(() => {});
 }
 
 export function removeLocalTopicCache(testId: string): void {
   delete memoryTestBank[testId];
+  if (typeof window !== "undefined") {
+    safeLocalStorageRemoveItem(`${FULL_TEST_STORAGE_PREFIX}${testId}`);
+  }
 
   const parts = testId.split("__");
   if (parts.length >= 4) {
@@ -1237,6 +1300,9 @@ export function removeLocalTopicCache(testId: string): void {
         (t.topicName || "").toLowerCase().replace(/[^a-z0-9]/g, "_") === normTopic
       ) {
         delete memoryTestBank[key];
+        if (typeof window !== "undefined") {
+          safeLocalStorageRemoveItem(`${FULL_TEST_STORAGE_PREFIX}${key}`);
+        }
       }
     });
   }
@@ -1569,8 +1635,17 @@ export async function fetchAllPracticeTests(options?: { forceFresh?: boolean }):
         } catch {}
 
         if (Object.keys(firestoreBank).length > 0) {
-          // Authoritative Firestore data replaces memory bank (preventing zombie deleted tests)
-          memoryTestBank = { ...firestoreBank };
+          // Merge authoritative Firestore data with memory bank to preserve any local stored questions
+          const mergedBank: Record<string, TopicPracticeTest> = { ...memoryTestBank };
+          for (const [id, fTest] of Object.entries(firestoreBank)) {
+            const existing = mergedBank[id];
+            if (existing && Array.isArray(existing.questions) && existing.questions.length > 0 && (!Array.isArray(fTest.questions) || fTest.questions.length === 0)) {
+              mergedBank[id] = { ...fTest, questions: existing.questions };
+            } else {
+              mergedBank[id] = fTest;
+            }
+          }
+          memoryTestBank = mergedBank;
           saveLocalTestBank(memoryTestBank, { silent: true });
           notifyTestBankSubscribers();
           
@@ -1578,10 +1653,12 @@ export async function fetchAllPracticeTests(options?: { forceFresh?: boolean }):
           syncTestBankToStorage(memoryTestBank).catch(() => {});
           return memoryTestBank;
         } else if (snap.empty) {
-          // If Firestore collection returned 0 docs, empty the memory bank
-          memoryTestBank = {};
-          saveLocalTestBank(memoryTestBank, { silent: true });
-          notifyTestBankSubscribers();
+          // If Firestore is empty, do NOT wipe local test bank if we have persisted tests locally
+          if (Object.keys(memoryTestBank).length === 0) {
+            memoryTestBank = {};
+            saveLocalTestBank(memoryTestBank, { silent: true });
+            notifyTestBankSubscribers();
+          }
           return memoryTestBank;
         }
       }
@@ -1827,6 +1904,19 @@ export async function getPracticeTestById(
     }
   } catch (err) {
     console.warn("[PracticeTestService] Error fetching test by ID:", err);
+  }
+
+  if (typeof window !== "undefined") {
+    try {
+      const raw = safeLocalStorageGetItem(`${FULL_TEST_STORAGE_PREFIX}${testId}`);
+      if (raw) {
+        const test = JSON.parse(raw) as TopicPracticeTest;
+        if (test && Array.isArray(test.questions) && test.questions.length > 0) {
+          memoryTestBank[testId] = test;
+          return test;
+        }
+      }
+    } catch {}
   }
 
   await fetchAllPracticeTests();
@@ -2599,11 +2689,13 @@ export async function saveTopicPracticeTest(
     const testDocRef = doc(db, "topic_practice_tests", assessmentTestId);
     const aliasDocRef = doc(db, "practice_tests", assessmentTestId);
 
-    // Write to topic_practice_tests and mirror to practice_tests in parallel
-    await Promise.all([
+    // Write to topic_practice_tests and mirror to practice_tests in parallel with safe 5s timeout guard so saving never hangs
+    const writePromise = Promise.all([
       setDoc(testDocRef, sanitizedTopicTest, { merge: true }),
       setDoc(aliasDocRef, sanitizedTopicTest, { merge: true }).catch(() => {})
     ]);
+    const writeTimeoutPromise = new Promise((resolve) => setTimeout(resolve, 5000));
+    await Promise.race([writePromise, writeTimeoutPromise]);
 
     // Fast verification with safe timeout guard so save never hangs
     try {
