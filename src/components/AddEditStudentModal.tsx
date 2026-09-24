@@ -5,7 +5,7 @@ import { Student } from "../types";
 interface AddEditStudentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (studentData: Omit<Student, "id" | "notes" | "attendance" | "feeMonths">) => void;
+  onSave: (studentData: Omit<Student, "id" | "notes" | "attendance" | "feeMonths">) => Promise<void> | void;
   studentToEdit?: Student | null;
 }
 
@@ -93,6 +93,15 @@ export default function AddEditStudentModal({
   const [parentPhoneError, setParentPhoneError] = useState(false);
   const [emailVal, setEmailVal] = useState("");
   const [passwordVal, setPasswordVal] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setIsSubmitting(false);
+      isSubmittingRef.current = false;
+    }
+  }, [isOpen]);
 
   const cleanTo10Digits = (val: string) => {
     if (!val) return "";
@@ -158,7 +167,7 @@ export default function AddEditStudentModal({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setPhoneError(false);
@@ -201,19 +210,32 @@ export default function AddEditStudentModal({
       return;
     }
 
-    onSave({
-      name: name.trim(),
-      classGrade: selectedClass,
-      phone: `+91${phoneVal}`,
-      parentPhone: hasParentPhone ? `+91${parentPhoneVal}` : "",
-      monthlyFee: Number(monthlyFee) || 0,
-      feePaidThisMonth,
-      registrationDate,
-      enrolledSubjects,
-      email: emailVal.trim().toLowerCase(),
-      password: passwordVal
-    });
-    onClose();
+    if (isSubmittingRef.current) {
+      return;
+    }
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+
+    try {
+      await onSave({
+        name: name.trim(),
+        classGrade: selectedClass,
+        phone: `+91${phoneVal}`,
+        parentPhone: hasParentPhone ? `+91${parentPhoneVal}` : "",
+        monthlyFee: Number(monthlyFee) || 0,
+        feePaidThisMonth,
+        registrationDate,
+        enrolledSubjects,
+        email: emailVal.trim().toLowerCase(),
+        password: passwordVal
+      });
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || "Failed to register student.");
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   const handleFormKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
@@ -632,7 +654,8 @@ export default function AddEditStudentModal({
           </button>
           <button
             type="submit"
-            className="px-5 py-2.5 text-xs font-extrabold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md shadow-blue-500/10 flex items-center gap-1.5 transition-all cursor-pointer"
+            disabled={isSubmitting}
+            className="px-5 py-2.5 text-xs font-extrabold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md shadow-blue-500/10 flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Save className="w-3.5 h-3.5" />
             <span>{studentToEdit ? "Save Details" : "Register Student"}</span>

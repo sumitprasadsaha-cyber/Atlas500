@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { LayoutDashboard, Users, Settings as SettingsIcon, BookOpen, RefreshCw, Sparkles, Timer, Clock, FolderKanban, Radio, Loader2, AlertCircle, LogOut, ShieldAlert, Trophy } from "lucide-react";
 import { Student, StudentServiceStatus, ChapterNote, ClassNote } from "./types";
 import { INITIAL_STUDENTS } from "./data";
@@ -936,6 +936,9 @@ export default function App() {
     }
   };
 
+  // Guard against duplicate registrations triggered in rapid succession
+  const pendingRegistrationsRef = useRef<Set<string>>(new Set());
+
   // Add or update student details
   const handleSaveStudent = async (
     studentData: Omit<Student, "id" | "notes" | "attendance" | "feeMonths"> & { email?: string; password?: string }
@@ -956,42 +959,84 @@ export default function App() {
       setStudentToEdit(null);
     } else {
       // Add mode
-      const studentId = `student-${Date.now()}`;
-      const regDate = studentData.registrationDate ? new Date(studentData.registrationDate) : new Date();
-      const regMonth = regDate.getMonth(); // 0-11
-      const allMonths = [
-        "January 2026", "February 2026", "March 2026", "April 2026", "May 2026", "June 2026",
-        "July 2026", "August 2026", "September 2026", "October 2026", "November 2026", "December 2026"
-      ];
-      
-      const feeMonths: Record<string, "paid" | "unpaid" | "na"> = {};
-      allMonths.forEach((m, idx) => {
-        if (idx < regMonth) {
-          feeMonths[m] = "na";
-        }
+      // Deduplication guard against rapid multi-submissions
+      const phoneDigits = (studentData.phone || "").replace(/[^0-9]/g, "");
+      const emailTrimmed = (studentData.email || "").trim().toLowerCase();
+      const nameClassKey = `${studentData.name.trim().toLowerCase()}_${studentData.classGrade.trim().toLowerCase()}`;
+      const dedupKey = emailTrimmed || phoneDigits || nameClassKey;
+
+      if (pendingRegistrationsRef.current.has(dedupKey)) {
+        console.warn("[Registration] Duplicate registration action in flight ignored:", dedupKey);
+        return;
+      }
+
+      // Check if student with this phone or email already exists in students list
+      const existingStudent = students.find((s) => {
+        if (emailTrimmed && s.email && s.email.trim().toLowerCase() === emailTrimmed) return true;
+        if (phoneDigits && s.phone && s.phone.replace(/[^0-9]/g, "") === phoneDigits) return true;
+        return false;
       });
 
-      const newStudent: Student = {
-        ...studentData,
-        id: studentId,
-        avatarColor: getRandomAvatarColor(),
-        feeMonths,
-        notes: studentData.enrolledSubjects.reduce((acc, subj) => {
-          acc[subj] = [];
-          return acc;
-        }, {} as Record<string, ChapterNote[]>),
-        attendance: {},
-      };
+      if (existingStudent) {
+        console.warn("[Registration] Student already registered with this phone/email:", existingStudent.id);
+        setStudentFilter("All");
+        return;
+      }
+
+      pendingRegistrationsRef.current.add(dedupKey);
 
       try {
-        // Atomic account generation across Auth, /users, and /students
-        const created = await createStudentAccountAtomic(newStudent, studentData.password || "123456");
-        setStudents((prev) => [created, ...prev.filter(s => s.id !== created.id)]);
-      } catch (atomicErr: any) {
-        console.error("Atomic student creation failed:", atomicErr);
-        // Fallback local save if offline
-        setStudents((prev) => [newStudent, ...prev]);
-        await saveStudentDoc(newStudent);
+        const studentId = `student-${Date.now()}`;
+        const regDate = studentData.registrationDate ? new Date(studentData.registrationDate) : new Date();
+        const regMonth = isNaN(regDate.getTime()) ? new Date().getMonth() : regDate.getMonth(); // 0-11
+        const allMonths = [
+          "January 2026", "February 2026", "March 2026", "April 2026", "May 2026", "June 2026",
+          "July 2026", "August 2026", "September 2026", "October 2026", "November 2026", "December 2026"
+        ];
+        
+        const feeMonths: Record<string, "paid" | "unpaid" | "na"> = {};
+        allMonths.forEach((m, idx) => {
+          if (idx < regMonth) {
+            feeMonths[m] = "na";
+          }
+        });
+        if (studentData.feePaidThisMonth) {
+          const currentMonthName = allMonths[new Date().getMonth()];
+          if (currentMonthName) {
+            feeMonths[currentMonthName] = "paid";
+          }
+        }
+
+        const newStudent: Student = {
+          ...studentData,
+          id: studentId,
+          avatarColor: getRandomAvatarColor(),
+          feeMonths,
+          notes: (studentData.enrolledSubjects || []).reduce((acc, subj) => {
+            acc[subj] = [];
+            return acc;
+          }, {} as Record<string, ChapterNote[]>),
+          attendance: {},
+          serviceStatus: "active",
+          service_status: "active",
+        };
+
+        // 1. Synchronously update local state & reset filter to All so Student Directory updates IMMEDIATELY
+        setStudents((prev) => [newStudent, ...prev.filter(s => s.id !== newStudent.id)]);
+        setStudentFilter("All");
+
+        // 2. Persist to student data source (localStorage + Firestore)
+        try {
+          const created = await createStudentAccountAtomic(newStudent, studentData.password || "123456");
+          setStudents((prev) => [created, ...prev.filter(s => s.id !== created.id)]);
+        } catch (atomicErr: any) {
+          console.warn("Atomic student creation fallback:", atomicErr);
+          await saveStudentDoc(newStudent);
+        }
+      } finally {
+        setTimeout(() => {
+          pendingRegistrationsRef.current.delete(dedupKey);
+        }, 2000);
       }
     }
   };

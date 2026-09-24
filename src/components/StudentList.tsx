@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Search, Edit2, Trash2, Plus, AlertCircle, Phone, Calendar, ShieldCheck, CheckCircle2, PauseCircle, XCircle, X, Loader2 } from "lucide-react";
 import { Student, StudentServiceStatus } from "../types";
 import { getMonthsUpToCurrent } from "../utils/monthHelper";
@@ -149,6 +149,25 @@ export default function StudentList({
       setActiveTab(filter);
     }
   }, [filter]);
+
+  // Ensure newly registered students immediately appear in Student Directory without manual reload
+  const prevStudentsLengthRef = useRef(students?.length || 0);
+  useEffect(() => {
+    const currentLength = students?.length || 0;
+    if (currentLength > prevStudentsLengthRef.current) {
+      const newestStudent = students[0];
+      if (newestStudent) {
+        if (activeTab !== "All" && newestStudent.classGrade !== activeTab) {
+          setActiveTab("All");
+          if (onFilterChange) {
+            onFilterChange("All");
+          }
+        }
+        setSearchTerm("");
+      }
+    }
+    prevStudentsLengthRef.current = currentLength;
+  }, [students, activeTab, onFilterChange]);
 
   // Compute dynamic class tabs based on current registered student body
   const tabsList = useMemo(() => {

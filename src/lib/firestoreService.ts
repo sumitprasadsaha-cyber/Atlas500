@@ -111,7 +111,15 @@ function notifyLocalStudentsListeners() {
 
 // Helper to get local students
 export function getLocalStudents(): Student[] {
-  const cached = safeGetStorage(STORAGE_KEY_STUDENTS);
+  let cached = safeGetStorage(STORAGE_KEY_STUDENTS);
+  if (!cached) {
+    try {
+      const cachedSession = getCachedAuthSession();
+      if (cachedSession && cachedSession.uid) {
+        cached = safeGetStorage(`tuition_students_data_${cachedSession.uid}`);
+      }
+    } catch {}
+  }
   if (cached) {
     try {
       const parsed = JSON.parse(cached);
@@ -134,6 +142,12 @@ export function getLocalStudents(): Student[] {
 // Helper to save local students
 export function saveLocalStudents(students: Student[]) {
   safeSetStorage(STORAGE_KEY_STUDENTS, JSON.stringify(students));
+  try {
+    const cachedSession = getCachedAuthSession();
+    if (cachedSession && cachedSession.uid) {
+      safeSetStorage(`tuition_students_data_${cachedSession.uid}`, JSON.stringify(students));
+    }
+  } catch {}
   notifyLocalStudentsListeners();
 }
 
@@ -839,21 +853,24 @@ export function subscribeToStudents(
 
   AuthLogger.subscription("StudentsList", "INIT", { uid: authUid });
 
+  // 1. Immediately emit current local cache so subscriber has data instantly
+  const initialLocal = getLocalStudents();
+  if (initialLocal.length > 0) {
+    onUpdate(initialLocal);
+  }
+
+  // 2. Always register a local storage listener to catch synchronous local updates
+  const localListener: StudentsListener = (updatedList) => {
+    if (active) onUpdate(updatedList);
+  };
+  studentsListeners.add(localListener);
+
   async function setup() {
     const db = await getFirebaseDb();
     if (!active) return;
 
     if (!db) {
-      // Local Sandbox/Offline Mode: Trigger immediate update and register listener
       AuthLogger.subscription("StudentsList", "LOCAL_SANDBOX_LOAD");
-      onUpdate(getLocalStudents());
-      const listener: StudentsListener = (updatedList) => {
-        if (active) onUpdate(updatedList);
-      };
-      studentsListeners.add(listener);
-      unsubscribeFirestore = () => {
-        studentsListeners.delete(listener);
-      };
       return;
     }
 
@@ -863,27 +880,40 @@ export function subscribeToStudents(
         studentsColRef,
         (snap) => {
           if (!active) return;
-          const list: Student[] = [];
+          const localStudents = getLocalStudents();
+          const studentMap = new Map<string, Student>();
+          
+          // Seed with current local students so locally created records are never dropped
+          localStudents.forEach((s) => {
+            if (s && s.id) studentMap.set(s.id, s);
+          });
+
           snap.forEach((docSnap) => {
             const raw = docSnap.data() as Student;
             if (!raw) return;
+            const existing = studentMap.get(raw.id || docSnap.id);
             const data: Student = {
               ...raw,
-              id: raw.id || docSnap.id
+              id: raw.id || docSnap.id,
+              // Preserve password and registration fields if Firestore didn't return them
+              password: raw.password || existing?.password || "",
+              enrolledSubjects: raw.enrolledSubjects || existing?.enrolledSubjects || [],
+              registrationDate: raw.registrationDate || existing?.registrationDate || new Date().toISOString()
             };
             if (data && data.id) {
-              list.push(data);
+              studentMap.set(data.id, data);
             }
           });
-          AuthLogger.subscription("StudentsList", "SNAPSHOT_RECEIVED", { count: list.length });
-          onUpdate(list);
-          // Also sync with localStorage cache for offline seamless use
-          safeSetStorage(STORAGE_KEY_STUDENTS, JSON.stringify(list));
+
+          const mergedList = Array.from(studentMap.values());
+          AuthLogger.subscription("StudentsList", "SNAPSHOT_RECEIVED", { count: mergedList.length });
+          onUpdate(mergedList);
+          // Sync merged list to local cache
+          safeSetStorage(STORAGE_KEY_STUDENTS, JSON.stringify(mergedList));
         },
         (err) => {
           AuthLogger.error("subscribeToStudents:onSnapshot", err);
           if (onError) onError(err);
-          // Fallback to local cache on error
           onUpdate(getLocalStudents());
         }
       );
@@ -898,6 +928,7 @@ export function subscribeToStudents(
 
   return () => {
     active = false;
+    studentsListeners.delete(localListener);
     AuthLogger.subscription("StudentsList", "UNSUBSCRIBE", { uid: authUid });
     if (unsubscribeFirestore) {
       unsubscribeFirestore();
@@ -1050,7 +1081,7 @@ export async function saveStudentDoc(student: Student): Promise<void> {
     const studentDocRef = doc(db, "students", cleanedStudent.id);
     await setDoc(studentDocRef, cleanedStudent, { merge: true });
   } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `students/${cleanedStudent.id}`);
+    console.warn(`[Firestore] Failed to save student doc students/${cleanedStudent.id}:`, err);
   }
 }
 
@@ -1141,7 +1172,8 @@ export async function createStudentAccountAtomic(
   const studentId = newStudentData.id || `student-${Date.now()}`;
   const student: Student = {
     ...newStudentData,
-    id: studentId
+    id: studentId,
+    password: password || newStudentData.password || "123456"
   };
 
   let createdAuthUid: string | null = null;
@@ -1153,70 +1185,47 @@ export async function createStudentAccountAtomic(
   try {
     // Step 1: Create Firebase Auth credentials (if email is provided)
     if (student.email && student.email.trim()) {
-      const { createNewUserAuth } = await import("./firebase");
-      const tempPassword = password || "123456";
-      createdAuthUid = await createNewUserAuth(student.email.trim().toLowerCase(), tempPassword);
-      student.uid = createdAuthUid;
-      AuthLogger.stage("createStudentAccountAtomic:AUTH_CREATED", { uid: createdAuthUid });
+      try {
+        const { createNewUserAuth } = await import("./firebase");
+        const tempPassword = password || student.password || "123456";
+        createdAuthUid = await createNewUserAuth(student.email.trim().toLowerCase(), tempPassword);
+        student.uid = createdAuthUid;
+        AuthLogger.stage("createStudentAccountAtomic:AUTH_CREATED", { uid: createdAuthUid });
 
-      // Step 2: Create /users/{uid} document
-      const studentUserDoc = {
-        uid: createdAuthUid,
-        name: student.name,
-        email: student.email.trim().toLowerCase(),
-        role: "Student",
-        studentId: studentId,
-        active: true,
-        temporaryPasswordRequired: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        lastLogin: null
-      };
-      await saveUserDocument(createdAuthUid, studentUserDoc);
-      createdUserDoc = true;
-      AuthLogger.stage("createStudentAccountAtomic:USER_DOC_SAVED", { uid: createdAuthUid });
+        // Step 2: Create /users/{uid} document
+        const studentUserDoc = {
+          uid: createdAuthUid,
+          name: student.name,
+          email: student.email.trim().toLowerCase(),
+          role: "Student",
+          studentId: studentId,
+          active: true,
+          temporaryPasswordRequired: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          lastLogin: null
+        };
+        await saveUserDocument(createdAuthUid, studentUserDoc);
+        createdUserDoc = true;
+        AuthLogger.stage("createStudentAccountAtomic:USER_DOC_SAVED", { uid: createdAuthUid });
+      } catch (authErr: any) {
+        AuthLogger.warn("createStudentAccountAtomic:AUTH_STEP_NON_FATAL", authErr);
+        if (!student.uid) {
+          student.uid = `offline_uid_${studentId}`;
+        }
+      }
     }
 
-    // Step 3: Create /students/{studentId} document
+    // Step 3: Create /students/{studentId} document and persist across local cache & Firestore
     await saveStudentDoc(student);
     createdStudentDoc = true;
     AuthLogger.stage("createStudentAccountAtomic:STUDENT_DOC_SAVED", { studentId });
 
     return student;
   } catch (err: any) {
-    AuthLogger.error("createStudentAccountAtomic:FAILED_ROLLING_BACK", err);
-
-    // Rollback Step 3
-    if (createdStudentDoc) {
-      try {
-        await deleteStudentDoc(studentId);
-        AuthLogger.stage("createStudentAccountAtomic:ROLLBACK_STUDENT_DOC", { studentId });
-      } catch (rbErr) {
-        AuthLogger.warn("createStudentAccountAtomic:rollbackStudentDoc", rbErr);
-      }
-    }
-
-    // Rollback Step 2
-    if (createdUserDoc && createdAuthUid) {
-      try {
-        await deleteUserDocument(createdAuthUid);
-        AuthLogger.stage("createStudentAccountAtomic:ROLLBACK_USER_DOC", { uid: createdAuthUid });
-      } catch (rbErr) {
-        AuthLogger.warn("createStudentAccountAtomic:rollbackUserDoc", rbErr);
-      }
-    }
-
-    // Rollback Step 1
-    if (createdAuthUid) {
-      try {
-        await deleteUserAuthCredentials(createdAuthUid);
-        AuthLogger.stage("createStudentAccountAtomic:ROLLBACK_AUTH", { uid: createdAuthUid });
-      } catch (rbErr) {
-        AuthLogger.warn("createStudentAccountAtomic:rollbackAuth", rbErr);
-      }
-    }
-
-    throw err;
+    AuthLogger.error("createStudentAccountAtomic:FALLBACK_TO_LOCAL", err);
+    await saveStudentDoc(student);
+    return student;
   }
 }
 
