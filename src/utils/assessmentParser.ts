@@ -748,7 +748,7 @@ export function parseAssessmentText(
     // 4. Check if line starts a new numbered question
     const qHeader = matchQuestionHeader(trimmed);
     if (qHeader) {
-      const activeHasAnswer = activeBlock && activeBlock.lines.some((l) => /^(?:Correct\s*)?Ans(?:wer)?\s*[\:\-]/i.test(l));
+      const activeHasAnswer = activeBlock && activeBlock.lines.some((l) => /^(?:Correct\s*)?Ans(?:wer)?\s*[:\-—–।=]|^(?:सही\s*उत्तर|उत्तर\s*कुंजी|उत्तरमाला|मॉडल\s*उत्तर|समाधान|हल|उत्तर|उ०|उ\.)\s*[:\-—–।=]?/i.test(l));
       const isListItemInsideAnswer =
         activeBlock &&
         activeHasAnswer &&
@@ -882,7 +882,9 @@ export function parseAssessmentText(
       const trimmed = l.trim();
       if ((trimmed && isIgnoredMarkerOrDivider(trimmed)) || extractMetadataLine(trimmed, metadata)) return;
 
-      const caMatch = trimmed.match(/^(?:Correct\s*)?Ans(?:wer)?\s*[:\-]\s*(.*)$/i);
+      const caMatch =
+        trimmed.match(/^(?:Correct\s*)?Ans(?:wer)?\s*[:\-—–।=]\s*(.*)$/i) ||
+        trimmed.match(/^(?:सही\s*उत्तर|उत्तर\s*कुंजी|उत्तरमाला|मॉडल\s*उत्तर|अपेक्षित\s*उत्तर|समाधान|हल|उत्तर|उ०|उ\.)\s*[:\-—–।=]?\s*(.*)$/i);
       if (caMatch) {
         isReadingMultiLineAnswer = true;
         const inlineAns = caMatch[1].trim();
@@ -962,49 +964,63 @@ export function parseAssessmentText(
     const hasOptions = optionIndices.length >= 2;
 
     const isExplicitTF = block.section === "true_false";
+    const lowerTF = explicitCorrectAnswer.toLowerCase().trim();
+    const isTrueHindi = lowerTF === "सही" || lowerTF === "सत्य" || lowerTF === "ठीक" || lowerTF.startsWith("सही") || lowerTF.startsWith("सत्य") || lowerTF.startsWith("ठीक");
+    const isFalseHindi = lowerTF === "गलत" || lowerTF === "असत्य" || lowerTF === "बेठीक" || lowerTF.startsWith("गलत") || lowerTF.startsWith("असत्य") || lowerTF.startsWith("बेठीक");
+
     const hasTFAnswer =
-      (explicitCorrectAnswer.toLowerCase() === "true" ||
-        explicitCorrectAnswer.toLowerCase() === "false" ||
-        explicitCorrectAnswer.toLowerCase() === "t" ||
-        explicitCorrectAnswer.toLowerCase() === "f");
+      (lowerTF === "true" ||
+        lowerTF === "false" ||
+        lowerTF === "t" ||
+        lowerTF === "f" ||
+        isTrueHindi ||
+        isFalseHindi);
     const isTFQuestion = isExplicitTF || (!hasOptions && hasTFAnswer);
 
     const isAssertion =
       block.section === "assertion_reasoning" ||
       block.section === "assertion_reason" ||
       /Assertion\s*\([A-Za-z]\)/i.test(fullBlockText) ||
-      /Reason\s*\([A-Za-z]\)/i.test(fullBlockText);
+      /Reason\s*\([A-Za-z]\)/i.test(fullBlockText) ||
+      /(?:अभिकथन|कथन)\s*(?:\([A-Za-zक-ङ]\)|:|\-)/i.test(fullBlockText) ||
+      /(?:तर्क|कारण)\s*(?:\([A-Za-zक-ङ]\)|:|\-)/i.test(fullBlockText);
 
     const isMultipleSelect =
       block.section === "multiple_select" ||
-      (/^[A-E]\s*,\s*[A-E]/i.test(explicitCorrectAnswer) || /^[A-E]\s*,\s*[A-E]\s*(?:and|&)\s*[A-E]/i.test(explicitCorrectAnswer));
+      (/^[A-Ea-eक-ङ]\s*,\s*[A-Ea-eक-ङ]/i.test(explicitCorrectAnswer) || /^[A-Ea-eक-ङ]\s*,\s*[A-Ea-eक-ङ]\s*(?:and|&|और|तथा)\s*[A-Ea-eक-ङ]/i.test(explicitCorrectAnswer));
 
     // Handle True / False
     if (isTFQuestion) {
       const statementLines = linesAfterImage.filter(
         (l) =>
-          !/^(?:True|False)\s*[✅❌]?$/i.test(l) &&
-          !/^[A-B][\.\)]\s*(?:True|False)/i.test(l) &&
+          !/^(?:True|False|सही|गलत|सत्य|असत्य|ठीक|बेठीक)\s*[✅❌]?$/i.test(l) &&
+          !/^[A-Bक-ख][\.\)]\s*(?:True|False|सही|गलत|सत्य|असत्य|ठीक|बेठीक)/i.test(l) &&
           !/^(?:Option\s+[A-B]|[A-B][\.\)\:\-])$/i.test(l) &&
-          !/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False)[\:\.]?$/i.test(l)
+          !/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False|सही\s*(?:या|\/|अथवा|वा)\s*गलत|सत्य\s*(?:या|\/|अथवा|वा)\s*असत्य)[\:\.]?$/i.test(l)
       );
 
       let cleanQuestion = stripMarksFromQuestionText(statementLines
         .join(" ")
-        .replace(/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False)[\:\.\-\s]*/gi, "")
-        .replace(/—\s*(True|False)\s*[✅❌]?/gi, "")
-        .replace(/-\s*(True|False)\s*[✅❌]?/gi, "")
-        .replace(/\b(True|False)\s*[✅❌]?$/gi, "")
+        .replace(/^(?:True\s*[\/\\]\s*False|True[\/\\]False|T\/F|True\s+or\s+False|सही\s*(?:या|\/|अथवा|वा)\s*गलत|सत्य\s*(?:या|\/|अथवा|वा)\s*असत्य)[\:\.\-\s]*/gi, "")
+        .replace(/—\s*(True|False|सही|गलत|सत्य|असत्य)\s*[✅❌]?/gi, "")
+        .replace(/-\s*(True|False|सही|गलत|सत्य|असत्य)\s*[✅❌]?/gi, "")
+        .replace(/\b(True|False|सही|गलत|सत्य|असत्य)\s*[✅❌]?$/gi, "")
         .replace(/[✅❌]/g, "")
         .trim());
 
       let resolvedAnswer = "";
       if (hasTFAnswer) {
-        const ca = explicitCorrectAnswer.toLowerCase();
-        resolvedAnswer = ca.startsWith("true") || ca === "t" ? "True" : "False";
-      } else if (fullBlockText.includes("True ✅") || fullBlockText.includes("— True") || fullBlockText.includes("- True")) {
+        if (isTrueHindi) {
+          resolvedAnswer = "True";
+        } else if (isFalseHindi) {
+          resolvedAnswer = "False";
+        } else {
+          const ca = explicitCorrectAnswer.toLowerCase();
+          resolvedAnswer = ca.startsWith("true") || ca === "t" ? "True" : "False";
+        }
+      } else if (fullBlockText.includes("True ✅") || fullBlockText.includes("— True") || fullBlockText.includes("- True") || fullBlockText.includes("सही ✅") || fullBlockText.includes("— सही") || fullBlockText.includes("- सही")) {
         resolvedAnswer = "True";
-      } else if (fullBlockText.includes("False ❌") || fullBlockText.includes("False ✅") || fullBlockText.includes("— False") || fullBlockText.includes("- False")) {
+      } else if (fullBlockText.includes("False ❌") || fullBlockText.includes("False ✅") || fullBlockText.includes("— False") || fullBlockText.includes("- False") || fullBlockText.includes("गलत ❌") || fullBlockText.includes("— गलत") || fullBlockText.includes("- गलत")) {
         resolvedAnswer = "False";
       }
 
@@ -1235,14 +1251,21 @@ export function parseAssessmentText(
         resolvedAnswer = Array.from(new Set(markedCheckmarkLetters)).sort().join(", ");
       } else {
         if (explicitCorrectAnswer) {
-          const letterMatch = explicitCorrectAnswer.match(/(?:Option\s*)?([A-Ea-e1-5])/i);
+          const letterMatch = explicitCorrectAnswer.match(
+            /^(?:(?:Option|Opt|Choice|विकल्प)\s*[\(\[]?([A-Ea-e1-5क-ङअ-द१-५])[\)\]]?|[\(\[]([A-Ea-e1-5क-ङअ-द१-५])[\)\]]|([A-Ea-e1-5क-ङअ-द१-५])[\.\)\:\-—–।]\s*|([A-Ea-e1-5क-ङअ-द१-५])$)/i
+          );
           if (letterMatch) {
-            let letter = letterMatch[1].toUpperCase();
-            if (["1", "2", "3", "4", "5"].includes(letter)) {
-              const numMap: Record<string, string> = { "1": "A", "2": "B", "3": "C", "4": "D", "5": "E" };
-              letter = numMap[letter] || "A";
+            const sym = letterMatch[1] || letterMatch[2] || letterMatch[3] || letterMatch[4];
+            resolvedAnswer = mapDevanagariOrAsciiOptionLetter(sym);
+          } else {
+            const cleanExp = explicitCorrectAnswer.trim().toLowerCase();
+            const matchedOpt = parsedOptions.find((opt) => {
+              const optText = opt.substring(2).trim().toLowerCase();
+              return optText && (optText === cleanExp || (cleanExp.length > 1 && optText.includes(cleanExp)));
+            });
+            if (matchedOpt) {
+              resolvedAnswer = matchedOpt.charAt(0);
             }
-            resolvedAnswer = letter;
           }
         }
 
